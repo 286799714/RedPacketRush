@@ -11,14 +11,14 @@ import {
  * Import your Room files
  */
 import { GameRoom } from "./rooms/GameRoom.js";
-import { GameLobbyRoom } from "./rooms/GameLobbyRoom.js";
+import { LiveLobby } from "./rooms/LiveLobby.js";
 
 const server = defineServer({
     /**
      * Define your room handlers:
      */
     rooms: {
-        lobby: defineRoom(GameLobbyRoom),
+        lobby: defineRoom(LiveLobby),
         game: defineRoom(GameRoom).enableRealtimeListing(),
     },
 

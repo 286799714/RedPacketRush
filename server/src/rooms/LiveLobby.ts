@@ -8,7 +8,7 @@ interface LobbyFilter {
   metadata?: Record<string, unknown>;
 }
 
-export class GameLobbyRoom extends LobbyRoom<GameRoomMetadata> {
+export class LiveLobby extends LobbyRoom<GameRoomMetadata> {
   public async onCreate(): Promise<void> {
     this["_listing"].unlisted = true;
 
@@ -24,7 +24,7 @@ export class GameLobbyRoom extends LobbyRoom<GameRoomMetadata> {
   }
 
   protected filterItemForClient(
-    room: GameLobbyRoom["rooms"][number],
+    room: LiveLobby["rooms"][number],
     filter?: LobbyFilter,
   ): boolean {
     const isJoinableGame = (
@@ -40,7 +40,7 @@ export class GameLobbyRoom extends LobbyRoom<GameRoomMetadata> {
 
   private updateListing(
     roomId: string,
-    listing: GameLobbyRoom["rooms"][number] | null,
+    listing: LiveLobby["rooms"][number] | null,
   ): void {
     const roomIndex = this.rooms.findIndex((room) => room.roomId === roomId);
     const previous = roomIndex === -1 ? null : this.rooms[roomIndex];
@@ -76,8 +76,8 @@ export class GameLobbyRoom extends LobbyRoom<GameRoomMetadata> {
   }
 
   private cloneListing(
-    listing: GameLobbyRoom["rooms"][number],
-  ): GameLobbyRoom["rooms"][number] {
+    listing: LiveLobby["rooms"][number],
+  ): LiveLobby["rooms"][number] {
     return {
       ...listing,
       metadata: listing.metadata === undefined
