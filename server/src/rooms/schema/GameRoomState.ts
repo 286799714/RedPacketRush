@@ -1,6 +1,11 @@
 import { ArraySchema, Schema, type } from "@colyseus/schema";
 
-import type { GameRoomMetadata } from "../GameRoom.js";
+import type {
+  ActionDeadlineSeconds,
+  DeckMode,
+  GameRoomMetadata,
+  GameRoomStatus,
+} from "../GameRoom.js";
 
 export const ROOM_SEAT_COUNT = 4;
 
@@ -42,16 +47,16 @@ export class ParticipantSeat extends Schema {
 
 export class GameRoomState extends Schema {
   @type("string")
-  public status = "waiting";
+  public status: GameRoomStatus = "waiting";
 
   @type("string")
   public displayName = "";
 
   @type("string")
-  public deckMode = "one";
+  public deckMode: DeckMode = "one";
 
   @type("uint8")
-  public actionDeadlineSeconds = 30;
+  public actionDeadlineSeconds: ActionDeadlineSeconds = 30;
 
   @type("string")
   public hostParticipantId = "";

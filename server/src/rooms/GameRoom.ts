@@ -27,6 +27,24 @@ export interface GameRoomOptions {
 
 type RecordLike = Record<string, unknown>;
 
+interface RoomError {
+  code: string;
+  message: string;
+}
+
+const ROOM_ERRORS = {
+  alreadyStarted: { code: "already_started", message: "对局已经开始" },
+  configurePhase: { code: "invalid_phase", message: "房间当前不能修改设置" },
+  fillBotsPhase: { code: "invalid_phase", message: "房间当前不能添加机器人" },
+  hostOnly: { code: "host_only", message: "只有房主可以执行此操作" },
+  invalidCommandPayload: { code: "invalid_payload", message: "该命令不接受参数" },
+  invalidReady: { code: "invalid_ready", message: "准备状态必须是布尔值" },
+  invalidSettings: { code: "invalid_settings", message: "房间设置无效" },
+  noSeat: { code: "not_participant", message: "当前连接没有占用座位" },
+  notReady: { code: "not_ready", message: "需要四个已准备座位才能开始" },
+  readyPhase: { code: "invalid_phase", message: "房间当前不能修改准备状态" },
+} as const satisfies Record<string, RoomError>;
+
 function isRecordLike(value: unknown): value is RecordLike {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
@@ -104,6 +122,12 @@ export class GameRoom extends Room<{
   metadata: GameRoomMetadata;
 }> {
   public maxClients = 4;
+  private matchmakingPrivate = false;
+
+  public override async setPrivate(isPrivate = true, persist = true): Promise<void> {
+    this.matchmakingPrivate = isPrivate;
+    await super.setPrivate(isPrivate, persist);
+  }
 
   public onCreate(options: GameRoomOptions): void {
     this.metadata = parseGameRoomOptions(options);
@@ -114,15 +138,18 @@ export class GameRoom extends Room<{
     this.onMessage("configure", async (client, message: unknown) => {
       await this.configureRoom(client, message);
     });
-    this.onMessage("fill_bots", async (client) => {
-      await this.fillBots(client);
+    this.onMessage("fill_bots", async (client, message: unknown) => {
+      await this.fillBots(client, message);
     });
-    this.onMessage("start", async (client) => {
-      await this.startMatch(client);
+    this.onMessage("start", async (client, message: unknown) => {
+      await this.startMatch(client, message);
     });
   }
 
   public async onJoin(client: Client, options: GameRoomOptions): Promise<void> {
+    if (this.matchmakingPrivate) {
+      throw new Error("room is private");
+    }
     if (this.state.status !== "waiting") {
       throw new Error("match has already started");
     }
@@ -170,11 +197,11 @@ export class GameRoom extends Room<{
 
   private setParticipantReady(client: Client, message: unknown): void {
     if (this.state.status !== "waiting") {
-      this.sendRoomError(client, "invalid_phase", "房间当前不能修改准备状态");
+      this.sendRoomError(client, ROOM_ERRORS.readyPhase);
       return;
     }
     if (!isRecordLike(message) || typeof message.ready !== "boolean") {
-      this.sendRoomError(client, "invalid_ready", "准备状态必须是布尔值");
+      this.sendRoomError(client, ROOM_ERRORS.invalidReady);
       return;
     }
 
@@ -182,23 +209,18 @@ export class GameRoom extends Room<{
       (candidate) => candidate.participantId === client.sessionId && !candidate.bot,
     );
     if (!seat) {
-      this.sendRoomError(client, "not_participant", "当前连接没有占用座位");
+      this.sendRoomError(client, ROOM_ERRORS.noSeat);
       return;
     }
     seat.ready = message.ready;
   }
 
   private async configureRoom(client: Client, message: unknown): Promise<void> {
-    if (this.state.status !== "waiting") {
-      this.sendRoomError(client, "invalid_phase", "房间当前不能修改设置");
-      return;
-    }
-    if (this.state.hostParticipantId !== client.sessionId) {
-      this.sendRoomError(client, "host_only", "只有房主可以执行此操作");
+    if (!this.authorizeWaitingHost(client, ROOM_ERRORS.configurePhase)) {
       return;
     }
     if (!isRecordLike(message)) {
-      this.sendRoomError(client, "invalid_settings", "房间设置无效");
+      this.sendRoomError(client, ROOM_ERRORS.invalidSettings);
       return;
     }
     if (
@@ -207,7 +229,7 @@ export class GameRoom extends Room<{
         && message.actionDeadlineSeconds !== 30
         && message.actionDeadlineSeconds !== 60)
     ) {
-      this.sendRoomError(client, "invalid_settings", "房间设置无效");
+      this.sendRoomError(client, ROOM_ERRORS.invalidSettings);
       return;
     }
 
@@ -232,13 +254,12 @@ export class GameRoom extends Room<{
     });
   }
 
-  private async fillBots(client: Client): Promise<void> {
-    if (this.state.status !== "waiting") {
-      this.sendRoomError(client, "invalid_phase", "房间当前不能添加机器人");
+  private async fillBots(client: Client, message: unknown): Promise<void> {
+    if (!this.authorizeWaitingHost(client, ROOM_ERRORS.fillBotsPhase)) {
       return;
     }
-    if (this.state.hostParticipantId !== client.sessionId) {
-      this.sendRoomError(client, "host_only", "只有房主可以执行此操作");
+    if (message !== undefined && message !== null) {
+      this.sendRoomError(client, ROOM_ERRORS.invalidCommandPayload);
       return;
     }
 
@@ -274,20 +295,19 @@ export class GameRoom extends Room<{
     return "";
   }
 
-  private async startMatch(client: Client): Promise<void> {
-    if (this.state.status !== "waiting") {
-      this.sendRoomError(client, "already_started", "对局已经开始");
+  private async startMatch(client: Client, message: unknown): Promise<void> {
+    if (!this.authorizeWaitingHost(client, ROOM_ERRORS.alreadyStarted)) {
       return;
     }
-    if (this.state.hostParticipantId !== client.sessionId) {
-      this.sendRoomError(client, "host_only", "只有房主可以执行此操作");
+    if (message !== undefined && message !== null) {
+      this.sendRoomError(client, ROOM_ERRORS.invalidCommandPayload);
       return;
     }
     const allReady = this.state.seats.every(
       (seat) => seat.participantId !== "" && seat.ready,
     );
     if (!allReady) {
-      this.sendRoomError(client, "not_ready", "需要四个已准备座位才能开始");
+      this.sendRoomError(client, ROOM_ERRORS.notReady);
       return;
     }
 
@@ -299,7 +319,19 @@ export class GameRoom extends Room<{
     });
   }
 
-  private sendRoomError(client: Client, code: string, message: string): void {
-    client.send("room_error", { code, message });
+  private authorizeWaitingHost(client: Client, phaseError: RoomError): boolean {
+    if (this.state.status !== "waiting") {
+      this.sendRoomError(client, phaseError);
+      return false;
+    }
+    if (this.state.hostParticipantId !== client.sessionId) {
+      this.sendRoomError(client, ROOM_ERRORS.hostOnly);
+      return false;
+    }
+    return true;
+  }
+
+  private sendRoomError(client: Client, error: RoomError): void {
+    client.send("room_error", error);
   }
 }

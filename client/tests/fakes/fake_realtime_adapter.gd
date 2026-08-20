@@ -45,10 +45,13 @@ func set_ready(ready: bool) -> void:
 	room_requests.append({"type": "set_ready", "payload": {"ready": ready}})
 
 
-func configure_room(deck_mode: String, deadline_seconds: int) -> void:
+func configure_room(configuration: Object) -> void:
 	room_requests.append({
 		"type": "configure",
-		"payload": {"deckMode": deck_mode, "actionDeadlineSeconds": deadline_seconds},
+		"payload": {
+			"deckMode": configuration.deck_mode,
+			"actionDeadlineSeconds": configuration.action_deadline_seconds,
+		},
 	})
 
 

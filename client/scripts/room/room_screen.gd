@@ -1,6 +1,8 @@
 extends Control
 class_name RoomScreen
 
+const RoomConfigurationScript = preload("res://scripts/domain/room_configuration.gd")
+
 const COLOR_BACKGROUND := Color("#121416")
 const COLOR_SURFACE := Color("#1b1e20")
 const COLOR_SURFACE_RAISED := Color("#222629")
@@ -19,6 +21,7 @@ var _updating_controls := false
 var _room_name_label: Label
 var _room_id_label: Label
 var _status_label: Label
+var _leave_button: Button
 var _seat_panels: Array[PanelContainer] = []
 var _seat_name_labels: Array[Label] = []
 var _seat_detail_labels: Array[Label] = []
@@ -78,30 +81,39 @@ func _build_header() -> Control:
 	var header := HBoxContainer.new()
 	header.custom_minimum_size.y = 50
 	header.add_theme_constant_override("separation", 12)
+	header.clip_contents = true
 
 	var title_group := VBoxContainer.new()
 	title_group.add_theme_constant_override("separation", 0)
+	title_group.custom_minimum_size.x = 0
+	title_group.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	header.add_child(title_group)
 	_room_name_label = _label("正在进入房间", 24, COLOR_TEXT)
+	_room_name_label.custom_minimum_size.x = 0
+	_room_name_label.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	_room_name_label.clip_text = true
+	_room_name_label.text_overrun_behavior = TextServer.OVERRUN_TRIM_ELLIPSIS
 	title_group.add_child(_room_name_label)
 	_room_id_label = _label("", 12, COLOR_MUTED)
+	_room_id_label.custom_minimum_size.x = 0
+	_room_id_label.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	_room_id_label.clip_text = true
+	_room_id_label.text_overrun_behavior = TextServer.OVERRUN_TRIM_ELLIPSIS
 	title_group.add_child(_room_id_label)
 
-	var spacer := Control.new()
-	spacer.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	header.add_child(spacer)
 	_status_label = _label("等待状态", 14, COLOR_GOLD)
 	_status_label.custom_minimum_size = Vector2(110, 34)
+	_status_label.size_flags_horizontal = Control.SIZE_SHRINK_END
 	_status_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	_status_label.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
 	header.add_child(_status_label)
 
-	var leave_button := Button.new()
-	leave_button.text = "离开房间"
-	leave_button.custom_minimum_size = Vector2(108, 36)
-	_style_button(leave_button)
-	leave_button.pressed.connect(_on_leave_pressed)
-	header.add_child(leave_button)
+	_leave_button = Button.new()
+	_leave_button.text = "离开房间"
+	_leave_button.custom_minimum_size = Vector2(108, 36)
+	_style_button(_leave_button)
+	_leave_button.pressed.connect(_on_leave_pressed)
+	header.add_child(_leave_button)
 	return header
 
 
@@ -234,7 +246,13 @@ func _refresh() -> void:
 	_updating_controls = true
 	_room_name_label.text = _store.display_name if not _store.display_name.is_empty() else "正在同步房间"
 	_room_id_label.text = "房间 ID  %s" % _store.room_id if not _store.room_id.is_empty() else "等待服务器状态"
-	_status_label.text = "等待准备" if _store.status == "waiting" else "对局开始"
+	match _store.status:
+		"waiting":
+			_status_label.text = "等待准备"
+		"started":
+			_status_label.text = "对局开始"
+		_:
+			_status_label.text = "同步中"
 	_status_label.add_theme_color_override(
 		"font_color",
 		COLOR_GOLD if _store.status == "waiting" else COLOR_GREEN
@@ -291,10 +309,10 @@ func _refresh_seat(seat_index: int, seat: Dictionary) -> void:
 func _on_setting_selected(_index: int) -> void:
 	if _updating_controls or _store == null or not _store.can_configure():
 		return
-	_store.configure_room(
+	_store.configure_room(RoomConfigurationScript.new(
 		str(_deck_mode_option.get_item_metadata(_deck_mode_option.selected)),
 		int(_deadline_option.get_item_metadata(_deadline_option.selected))
-	)
+	))
 
 
 func _on_ready_toggled(ready: bool) -> void:

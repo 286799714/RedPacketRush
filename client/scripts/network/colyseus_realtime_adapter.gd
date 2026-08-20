@@ -19,6 +19,8 @@ const ROOM_SEAT_COUNT := 4
 var _client: Variant
 var _lobby_room: Variant
 var _game_room: Variant
+var _pending_game_room: Variant
+var _game_room_callbacks: Dictionary = {}
 var _rooms_by_id: Dictionary = {}
 var _connected := false
 
@@ -68,9 +70,13 @@ func leave_game_room() -> void:
 
 func _leave_game_room(announce: bool) -> void:
 	var previous_room: Variant = _game_room
+	var pending_room: Variant = _pending_game_room
 	_game_room = null
+	_pending_game_room = null
+	if pending_room != null and pending_room != previous_room:
+		_dispose_game_room(pending_room, true)
 	if previous_room != null:
-		previous_room.leave()
+		_dispose_game_room(previous_room, true)
 	if announce:
 		game_room_left.emit(1000, "")
 
@@ -80,6 +86,7 @@ func create_game_room(
 	nickname: String
 ) -> void:
 	if not _connected or _client == null:
+		_cancel_pending_game_room()
 		game_room_failed.emit("请先连接服务器")
 		return
 	var options := {
@@ -93,6 +100,7 @@ func create_game_room(
 
 func join_game_room(room_id: String, nickname: String) -> void:
 	if not _connected or _client == null:
+		_cancel_pending_game_room()
 		game_room_failed.emit("请先连接服务器")
 		return
 	_watch_game_room(_client.join_by_id(room_id, {"nickname": nickname}))
@@ -102,10 +110,10 @@ func set_ready(ready: bool) -> void:
 	_send_game_room_message("set_ready", {"ready": ready})
 
 
-func configure_room(deck_mode: String, deadline_seconds: int) -> void:
+func configure_room(configuration: Object) -> void:
 	_send_game_room_message("configure", {
-		"deckMode": deck_mode,
-		"actionDeadlineSeconds": deadline_seconds,
+		"deckMode": configuration.deck_mode,
+		"actionDeadlineSeconds": configuration.action_deadline_seconds,
 	})
 
 
@@ -124,17 +132,82 @@ func _exit_tree() -> void:
 
 func _watch_game_room(room: Variant) -> void:
 	if room == null:
+		_cancel_pending_game_room()
 		game_room_failed.emit("房间请求未能发出")
 		return
-	_game_room = room
+	# Keep the currently joined room authoritative until this candidate completes
+	# its handshake. A stale/full/locked join can therefore never replace it.
+	_cancel_pending_game_room()
+	_pending_game_room = room
 	room.set_state_type(GameSchema.GameRoomState)
-	room.joined.connect(_on_game_room_joined.bind(room))
-	room.state_changed.connect(_on_game_room_state_changed.bind(room))
-	room.message_received.connect(_on_game_room_message.bind(room))
-	room.error.connect(_on_game_room_error.bind(room))
-	room.left.connect(_on_game_room_left.bind(room))
-	room.dropped.connect(_on_game_room_dropped.bind(room))
-	room.reconnected.connect(_on_game_room_reconnected.bind(room))
+	_connect_game_room_callbacks(room)
+
+
+func _cancel_pending_game_room() -> void:
+	var pending_room: Variant = _pending_game_room
+	_pending_game_room = null
+	if pending_room != null:
+		_dispose_game_room(pending_room, true)
+
+
+func _connect_game_room_callbacks(room: Variant) -> void:
+	var joined_callback := _on_game_room_joined.bind(room)
+	var state_callback := _on_game_room_state_changed.bind(room)
+	var message_callback := _on_game_room_message.bind(room)
+	var error_callback := _on_game_room_error.bind(room)
+	var left_callback := _on_game_room_left.bind(room)
+	var dropped_callback := _on_game_room_dropped.bind(room)
+	var reconnected_callback := _on_game_room_reconnected.bind(room)
+	room.joined.connect(joined_callback)
+	room.state_changed.connect(state_callback)
+	room.message_received.connect(message_callback)
+	room.error.connect(error_callback)
+	room.left.connect(left_callback)
+	room.dropped.connect(dropped_callback)
+	room.reconnected.connect(reconnected_callback)
+	_game_room_callbacks[_game_room_key(room)] = [
+		[&"joined", joined_callback],
+		[&"state_changed", state_callback],
+		[&"message_received", message_callback],
+		[&"error", error_callback],
+		[&"left", left_callback],
+		[&"dropped", dropped_callback],
+		[&"reconnected", reconnected_callback],
+	]
+
+
+func _dispose_game_room(room: Variant, leave: bool) -> void:
+	_disconnect_game_room_callbacks(room)
+	if not leave or room == null:
+		return
+	if room is Object and not is_instance_valid(room):
+		return
+	room.leave()
+
+
+func _disconnect_game_room_callbacks(room: Variant) -> void:
+	if room == null:
+		return
+	var key := _game_room_key(room)
+	var callbacks: Variant = _game_room_callbacks.get(key, [])
+	_game_room_callbacks.erase(key)
+	if not callbacks is Array:
+		return
+	if room is Object and not is_instance_valid(room):
+		return
+	for entry: Variant in callbacks:
+		if not entry is Array or entry.size() != 2:
+			continue
+		var signal_name: StringName = entry[0]
+		var callback: Callable = entry[1]
+		if room.has_signal(signal_name) and room.is_connected(signal_name, callback):
+			room.disconnect(signal_name, callback)
+
+
+func _game_room_key(room: Variant) -> int:
+	if room is Object:
+		return room.get_instance_id()
+	return 0
 
 
 func _on_lobby_joined(room: Variant) -> void:
@@ -276,12 +349,23 @@ func _read(source: Dictionary, primary: String, alternate: String, fallback: Var
 
 
 func _on_game_room_joined(room: Variant) -> void:
-	if room == _game_room:
-		game_room_joined.emit(room.get_id())
-		game_room_connection_changed.emit("connected", "")
+	if room != _pending_game_room:
+		return
+	var previous_room: Variant = _game_room
+	_pending_game_room = null
+	if previous_room != null and previous_room != room:
+		_dispose_game_room(previous_room, true)
+	_game_room = room
+	game_room_joined.emit(room.get_id())
+	game_room_connection_changed.emit("connected", "")
 
 
 func _on_game_room_error(_code: int, message: String, room: Variant) -> void:
+	if room == _pending_game_room:
+		_pending_game_room = null
+		_dispose_game_room(room, true)
+		game_room_failed.emit(message)
+		return
 	if room == _game_room:
 		game_room_failed.emit(message)
 
@@ -307,9 +391,15 @@ func _on_game_room_message(type: Variant, data: Variant, room: Variant) -> void:
 
 
 func _on_game_room_left(code: int, reason: String, room: Variant) -> void:
+	if room == _pending_game_room:
+		_pending_game_room = null
+		_dispose_game_room(room, false)
+		game_room_failed.emit(reason if not reason.is_empty() else "房间连接已关闭")
+		return
 	if room != _game_room:
 		return
 	_game_room = null
+	_dispose_game_room(room, false)
 	game_room_connection_changed.emit("disconnected", reason)
 	game_room_left.emit(code, reason)
 
@@ -337,6 +427,8 @@ func _normalize_game_room_state(raw_state: Variant, room: Variant) -> Dictionary
 	if not raw_state is Dictionary:
 		return {}
 
+	# The beta native decoder may repeat an array tail; stable seat indexes keep
+	# the application snapshot at the server's fixed four-seat contract.
 	var seats_by_index: Dictionary = {}
 	var raw_seats: Variant = raw_state.get("seats", [])
 	if raw_seats is Array:

@@ -140,7 +140,7 @@ describe("four-participant room readiness", () => {
     const serverRoom = colyseus.getRoomById<GameRoom>(host.roomId);
     const handled = serverRoom.waitForMessage("fill_bots");
 
-    host.send("fill_bots");
+    host.send("fill_bots", null);
     await handled;
 
     const seats = Array.from(serverRoom.state.seats);
@@ -167,6 +167,35 @@ describe("four-participant room readiness", () => {
       serverRoom.state.seats.toArray().map((seat) => seat.ready),
       [false, true, true, true],
     );
+
+    await host.leave();
+  });
+
+  it("rejects malformed fill-bots payloads without changing the room", async () => {
+    const host = await colyseus.sdk.create("game", {
+      nickname: "甲",
+      displayName: "机器人参数测试",
+      deckMode: "one",
+      actionDeadlineSeconds: 30,
+    });
+    const serverRoom = colyseus.getRoomById<GameRoom>(host.roomId);
+    const beforeState = serverRoom.state.toJSON();
+    const beforeMetadata = { ...serverRoom.metadata };
+    for (const payload of [{ unexpected: true }, "unexpected"]) {
+      const handled = serverRoom.waitForMessage("fill_bots");
+      const rejected = host.waitForMessage("room_error", 1000);
+
+      host.send("fill_bots", payload);
+      await handled;
+
+      assert.deepStrictEqual(await rejected, {
+        code: "invalid_payload",
+        message: "该命令不接受参数",
+      });
+      assert.deepStrictEqual(serverRoom.state.toJSON(), beforeState);
+      assert.deepStrictEqual(serverRoom.metadata, beforeMetadata);
+      assert.strictEqual(serverRoom.locked, false);
+    }
 
     await host.leave();
   });
@@ -226,6 +255,35 @@ describe("four-participant room readiness", () => {
     await host.leave();
   });
 
+  it("rejects malformed start payloads without changing the room", async () => {
+    const host = await colyseus.sdk.create("game", {
+      nickname: "甲",
+      displayName: "开始参数测试",
+      deckMode: "one",
+      actionDeadlineSeconds: 30,
+    });
+    const serverRoom = colyseus.getRoomById<GameRoom>(host.roomId);
+    const beforeState = serverRoom.state.toJSON();
+    const beforeMetadata = { ...serverRoom.metadata };
+    for (const payload of [{ unexpected: true }, "unexpected"]) {
+      const handled = serverRoom.waitForMessage("start");
+      const rejected = host.waitForMessage("room_error", 1000);
+
+      host.send("start", payload);
+      await handled;
+
+      assert.deepStrictEqual(await rejected, {
+        code: "invalid_payload",
+        message: "该命令不接受参数",
+      });
+      assert.deepStrictEqual(serverRoom.state.toJSON(), beforeState);
+      assert.deepStrictEqual(serverRoom.metadata, beforeMetadata);
+      assert.strictEqual(serverRoom.locked, false);
+    }
+
+    await host.leave();
+  });
+
   it("starts a fully ready room exactly once and closes matchmaking", async () => {
     const host = await colyseus.sdk.create("game", {
       nickname: "甲",
@@ -242,7 +300,7 @@ describe("four-participant room readiness", () => {
     await handled;
 
     handled = serverRoom.waitForMessage("start");
-    host.send("start");
+    host.send("start", null);
     await handled;
 
     assert.strictEqual(serverRoom.state.status, "started");
@@ -342,6 +400,26 @@ describe("four-participant room readiness", () => {
     );
 
     await guest.leave();
+    await host.leave();
+  });
+
+  it("rejects a stale join when a waiting room is private but unlocked", async () => {
+    const host = await colyseus.sdk.create("game", {
+      nickname: "甲",
+      displayName: "私有房间测试",
+      deckMode: "one",
+      actionDeadlineSeconds: 30,
+    });
+    const serverRoom = colyseus.getRoomById<GameRoom>(host.roomId);
+    await serverRoom.setPrivate(true);
+
+    assert.strictEqual(serverRoom.locked, false);
+    await assert.rejects(
+      () => colyseus.sdk.joinById(host.roomId, { nickname: "乙" }),
+      /private/,
+    );
+    assert.strictEqual(serverRoom.metadata.participantCount, 1);
+
     await host.leave();
   });
 

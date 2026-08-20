@@ -76,8 +76,8 @@ func set_ready(ready: bool) -> void:
 	_adapter.set_ready(ready)
 
 
-func configure_room(next_deck_mode: String, deadline_seconds: int) -> void:
-	_adapter.configure_room(next_deck_mode, deadline_seconds)
+func configure_room(configuration: Object) -> void:
+	_adapter.configure_room(configuration)
 
 
 func fill_bots() -> void:

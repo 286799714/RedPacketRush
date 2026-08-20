@@ -1,6 +1,7 @@
 extends SceneTree
 
 const FakeRealtimeAdapter = preload("res://tests/fakes/fake_realtime_adapter.gd")
+const RoomConfiguration = preload("res://scripts/domain/room_configuration.gd")
 const RoomStore = preload("res://scripts/room/room_store.gd")
 
 var _failures: Array[String] = []
@@ -76,7 +77,7 @@ func _test_room_intentions_are_forwarded_without_optimistic_state() -> void:
 	})
 
 	room.set_ready(true)
-	room.configure_room("two", 60)
+	room.configure_room(RoomConfiguration.new("two", 60))
 	room.fill_bots()
 	room.start_match()
 	room.leave_room()
