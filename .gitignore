@@ -4,6 +4,11 @@ client/.mono/
 client/bin/
 client/obj/
 
+# The prototype ships only the Windows x86_64 Colyseus native binaries.
+client/addons/colyseus/bin/*
+!client/addons/colyseus/bin/colyseus_godot.windows.x86_64.debug.dll
+!client/addons/colyseus/bin/colyseus_godot.windows.x86_64.release.dll
+
 # Local editor and operating-system files
 .vscode/
 .idea/
@@ -12,3 +17,8 @@ Thumbs.db
 
 # Runtime logs
 *.log
+
+# Local environment files may contain credentials.
+**/.env*
+!**/.env.example
+!**/.env.*.example

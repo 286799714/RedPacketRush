@@ -11,13 +11,25 @@ config_version=5
 [application]
 
 config/name="扑克抢红包"
+run/main_scene="res://scenes/lobby/lobby_screen.tscn"
 config/features=PackedStringArray("4.7", "Mobile")
 config/icon="res://icon.svg"
 
 [display]
 
+window/size/viewport_width=1280
+window/size/viewport_height=720
+window/size/window_width_override=1280
+window/size/window_height_override=720
+window/size/resizable=true
+window/size/min_width=960
+window/size/min_height=540
 window/stretch/mode="canvas_items"
 window/stretch/aspect="expand"
+
+[editor_plugins]
+
+enabled=PackedStringArray("colyseus")
 
 [dotnet]
 
