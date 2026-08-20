@@ -66,16 +66,24 @@ function parseDisplayName(value: unknown): string {
   return displayName;
 }
 
+function isDeckMode(value: unknown): value is DeckMode {
+  return DECK_MODES.some((deckMode) => deckMode === value);
+}
+
 function parseDeckMode(value: unknown): DeckMode {
   if (value === undefined) {
     return "one";
   }
 
-  if (value !== "one" && value !== "two") {
+  if (!isDeckMode(value)) {
     throw new Error("deckMode must be one or two");
   }
 
   return value;
+}
+
+function isActionDeadline(value: unknown): value is ActionDeadlineSeconds {
+  return ACTION_DEADLINES.some((deadline) => deadline === value);
 }
 
 function parseActionDeadline(value: unknown): ActionDeadlineSeconds {
@@ -83,7 +91,7 @@ function parseActionDeadline(value: unknown): ActionDeadlineSeconds {
     return 30;
   }
 
-  if (value !== 15 && value !== 30 && value !== 60) {
+  if (!isActionDeadline(value)) {
     throw new Error("actionDeadlineSeconds must be 15, 30, or 60");
   }
 
@@ -223,12 +231,7 @@ export class GameRoom extends Room<{
       this.sendRoomError(client, ROOM_ERRORS.invalidSettings);
       return;
     }
-    if (
-      (message.deckMode !== "one" && message.deckMode !== "two")
-      || (message.actionDeadlineSeconds !== 15
-        && message.actionDeadlineSeconds !== 30
-        && message.actionDeadlineSeconds !== 60)
-    ) {
+    if (!isDeckMode(message.deckMode) || !isActionDeadline(message.actionDeadlineSeconds)) {
       this.sendRoomError(client, ROOM_ERRORS.invalidSettings);
       return;
     }
