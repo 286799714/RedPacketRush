@@ -11,6 +11,9 @@ var _initial_rooms_observed := false
 var _creation_requested := false
 var _listed_room_id := ""
 var _joined_room_id := ""
+var _room_state_observed := false
+var _readiness_requested := false
+var _readiness_observed := false
 var _failure := ""
 
 
@@ -31,6 +34,8 @@ func _run() -> void:
 	_adapter.lobby_rooms_changed.connect(_on_lobby_rooms_changed)
 	_adapter.game_room_joined.connect(_on_game_room_joined)
 	_adapter.game_room_failed.connect(_on_game_room_failed)
+	_adapter.game_room_state_changed.connect(_on_game_room_state_changed)
+	_adapter.room_action_failed.connect(_on_room_action_failed)
 
 	_deadline_msec = Time.get_ticks_msec() + int(TEST_TIMEOUT_SECONDS * 1000.0)
 	_adapter.connect_lobby(endpoint, "Smoke Participant")
@@ -41,8 +46,15 @@ func _run() -> void:
 	if _failure.is_empty() and not _is_complete():
 		_fail(
 			"timed out waiting for live lobby flow "
-			+ "(connected=%s, initial=%s, listed=%s, joined=%s)"
-			% [_connected, _initial_rooms_observed, _listed_room_id, _joined_room_id]
+			+ "(connected=%s, initial=%s, listed=%s, joined=%s, state=%s, ready=%s)"
+			% [
+				_connected,
+				_initial_rooms_observed,
+				_listed_room_id,
+				_joined_room_id,
+				_room_state_observed,
+				_readiness_observed,
+			]
 		)
 
 	_finish()
@@ -108,6 +120,36 @@ func _on_game_room_failed(message: String) -> void:
 	_fail("game room creation failed: %s" % message)
 
 
+func _on_game_room_state_changed(state: Dictionary) -> void:
+	var seats: Variant = state.get("seats", [])
+	if not seats is Array or seats.size() != 4:
+		_fail("decoded game room state did not contain four seats: %s" % [state])
+		return
+	if state.get("local_participant_id", "") != state.get("host_participant_id", ""):
+		_fail("creator was not decoded as the local host")
+		return
+	if state.get("deck_mode", "") != "two" or state.get("action_deadline_seconds", 0) != 60:
+		_fail("decoded game room state did not preserve settings")
+		return
+
+	_room_state_observed = true
+	var local_participant_id := str(state.get("local_participant_id", ""))
+	for seat: Dictionary in seats:
+		if str(seat.get("participant_id", "")) != local_participant_id:
+			continue
+		if bool(seat.get("is_ready", false)):
+			_readiness_observed = true
+		elif not _readiness_requested:
+			_readiness_requested = true
+			_adapter.set_ready(true)
+		return
+	_fail("decoded game room state did not contain the local seat")
+
+
+func _on_room_action_failed(code: String, message: String) -> void:
+	_fail("room action failed (%s): %s" % [code, message])
+
+
 func _is_complete() -> bool:
 	return (
 		_connected
@@ -115,6 +157,8 @@ func _is_complete() -> bool:
 		and _creation_requested
 		and not _listed_room_id.is_empty()
 		and _listed_room_id == _joined_room_id
+		and _room_state_observed
+		and _readiness_observed
 	)
 
 
@@ -136,8 +180,10 @@ func _finish() -> void:
 
 	if _failure.is_empty():
 		print(
-			"PASS: native SDK connected to the lobby, observed the initial list, "
-			+ "created and listed game room %s" % _joined_room_id
+			(
+				"PASS: native SDK created and listed game room %s, decoded four seats, "
+				+ "and synchronized readiness"
+			) % _joined_room_id
 		)
 		quit(0)
 		return

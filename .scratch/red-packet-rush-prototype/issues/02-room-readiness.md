@@ -4,7 +4,7 @@
 
 **Blocked by:** 01 - Connect to the live lobby.
 
-**Status:** ready-for-agent
+**Status:** in-progress
 
 - [ ] Creating and joining a room establishes one seat per human session and rejects invalid or duplicate occupancy.
 - [ ] All participants see the same four seats, nicknames, bot markers, readiness, host, deck mode, and action deadline.

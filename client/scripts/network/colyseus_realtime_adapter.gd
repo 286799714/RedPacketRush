@@ -5,10 +5,16 @@ signal connection_state_changed(state: String, detail: String)
 signal lobby_rooms_changed(rooms: Array[Dictionary])
 signal game_room_joined(room_id: String)
 signal game_room_failed(message: String)
+signal game_room_state_changed(state: Dictionary)
+signal game_room_left(code: int, reason: String)
+signal game_room_connection_changed(state: String, detail: String)
+signal room_action_failed(code: String, message: String)
 
 const ColyseusSdk = preload("res://addons/colyseus/colyseus.gd")
+const GameSchema = preload("res://schema/schema.gd")
 const LOBBY_ROOM_TYPE := "lobby"
 const GAME_ROOM_TYPE := "game"
+const ROOM_SEAT_COUNT := 4
 
 var _client: Variant
 var _lobby_room: Variant
@@ -53,10 +59,20 @@ func disconnect_lobby(announce := true) -> void:
 
 
 func disconnect_game_room() -> void:
+	_leave_game_room(false)
+
+
+func leave_game_room() -> void:
+	_leave_game_room(true)
+
+
+func _leave_game_room(announce: bool) -> void:
 	var previous_room: Variant = _game_room
 	_game_room = null
 	if previous_room != null:
 		previous_room.leave()
+	if announce:
+		game_room_left.emit(1000, "")
 
 
 func create_game_room(
@@ -82,6 +98,25 @@ func join_game_room(room_id: String, nickname: String) -> void:
 	_watch_game_room(_client.join_by_id(room_id, {"nickname": nickname}))
 
 
+func set_ready(ready: bool) -> void:
+	_send_game_room_message("set_ready", {"ready": ready})
+
+
+func configure_room(deck_mode: String, deadline_seconds: int) -> void:
+	_send_game_room_message("configure", {
+		"deckMode": deck_mode,
+		"actionDeadlineSeconds": deadline_seconds,
+	})
+
+
+func fill_bots() -> void:
+	_send_game_room_message("fill_bots")
+
+
+func start_match() -> void:
+	_send_game_room_message("start")
+
+
 func _exit_tree() -> void:
 	disconnect_game_room()
 	disconnect_lobby(false)
@@ -92,8 +127,14 @@ func _watch_game_room(room: Variant) -> void:
 		game_room_failed.emit("房间请求未能发出")
 		return
 	_game_room = room
+	room.set_state_type(GameSchema.GameRoomState)
 	room.joined.connect(_on_game_room_joined.bind(room))
+	room.state_changed.connect(_on_game_room_state_changed.bind(room))
+	room.message_received.connect(_on_game_room_message.bind(room))
 	room.error.connect(_on_game_room_error.bind(room))
+	room.left.connect(_on_game_room_left.bind(room))
+	room.dropped.connect(_on_game_room_dropped.bind(room))
+	room.reconnected.connect(_on_game_room_reconnected.bind(room))
 
 
 func _on_lobby_joined(room: Variant) -> void:
@@ -181,7 +222,6 @@ func _upsert_room(raw_room: Variant) -> void:
 
 func _normalize_joinable_room(raw_room: Dictionary) -> Dictionary:
 	var room_id := str(_read(raw_room, "roomId", "room_id", ""))
-	var participant_count := int(_read(raw_room, "clients", "clients", 0))
 	var seat_capacity := int(_read(raw_room, "maxClients", "max_clients", 4))
 	var locked := bool(_read(raw_room, "locked", "locked", false))
 	var is_private := bool(_read(raw_room, "private", "private", false))
@@ -190,6 +230,12 @@ func _normalize_joinable_room(raw_room: Dictionary) -> Dictionary:
 		metadata = JSON.parse_string(metadata)
 	if not metadata is Dictionary:
 		metadata = {}
+	var participant_count := int(_read(
+		metadata,
+		"participantCount",
+		"participant_count",
+		_read(raw_room, "clients", "clients", 0)
+	))
 	var status := str(_read(metadata, "status", "status", "waiting"))
 
 	if room_id.is_empty() or locked or is_private or participant_count >= seat_capacity or status != "waiting":
@@ -232,8 +278,99 @@ func _read(source: Dictionary, primary: String, alternate: String, fallback: Var
 func _on_game_room_joined(room: Variant) -> void:
 	if room == _game_room:
 		game_room_joined.emit(room.get_id())
+		game_room_connection_changed.emit("connected", "")
 
 
 func _on_game_room_error(_code: int, message: String, room: Variant) -> void:
 	if room == _game_room:
 		game_room_failed.emit(message)
+
+
+func _on_game_room_state_changed(room: Variant) -> void:
+	if room != _game_room:
+		return
+	var snapshot := _normalize_game_room_state(room.get_state(), room)
+	if not snapshot.is_empty():
+		game_room_state_changed.emit(snapshot)
+
+
+func _on_game_room_message(type: Variant, data: Variant, room: Variant) -> void:
+	if room != _game_room or str(type) != "room_error":
+		return
+	if not data is Dictionary:
+		room_action_failed.emit("unknown", str(data))
+		return
+	room_action_failed.emit(
+		str(data.get("code", "unknown")),
+		str(data.get("message", "房间操作失败"))
+	)
+
+
+func _on_game_room_left(code: int, reason: String, room: Variant) -> void:
+	if room != _game_room:
+		return
+	_game_room = null
+	game_room_connection_changed.emit("disconnected", reason)
+	game_room_left.emit(code, reason)
+
+
+func _on_game_room_dropped(_code: int, reason: String, room: Variant) -> void:
+	if room == _game_room:
+		game_room_connection_changed.emit("reconnecting", reason)
+
+
+func _on_game_room_reconnected(room: Variant) -> void:
+	if room == _game_room:
+		game_room_connection_changed.emit("connected", "")
+
+
+func _send_game_room_message(type: String, payload: Variant = null) -> void:
+	if _game_room == null:
+		room_action_failed.emit("not_joined", "尚未加入房间")
+		return
+	_game_room.send_message(type, payload)
+
+
+func _normalize_game_room_state(raw_state: Variant, room: Variant) -> Dictionary:
+	if raw_state is Object and raw_state.has_method("to_dictionary"):
+		raw_state = raw_state.to_dictionary()
+	if not raw_state is Dictionary:
+		return {}
+
+	var seats_by_index: Dictionary = {}
+	var raw_seats: Variant = raw_state.get("seats", [])
+	if raw_seats is Array:
+		for raw_seat: Variant in raw_seats:
+			if raw_seat is Object and raw_seat.has_method("to_dictionary"):
+				raw_seat = raw_seat.to_dictionary()
+			if raw_seat is Dictionary:
+				var seat_index := int(raw_seat.get("seatIndex", -1))
+				if seat_index < 0 or seat_index >= ROOM_SEAT_COUNT:
+					continue
+				seats_by_index[seat_index] = {
+					"seat_index": seat_index,
+					"participant_id": str(raw_seat.get("participantId", "")),
+					"nickname": str(raw_seat.get("nickname", "")),
+					"is_bot": bool(raw_seat.get("bot", false)),
+					"is_ready": bool(raw_seat.get("ready", false)),
+				}
+	var seats: Array[Dictionary] = []
+	for seat_index in range(ROOM_SEAT_COUNT):
+		seats.append(seats_by_index.get(seat_index, {
+			"seat_index": seat_index,
+			"participant_id": "",
+			"nickname": "",
+			"is_bot": false,
+			"is_ready": false,
+		}))
+
+	return {
+		"room_id": room.get_id(),
+		"local_participant_id": room.get_session_id(),
+		"status": str(raw_state.get("status", "")),
+		"display_name": str(raw_state.get("displayName", "")),
+		"deck_mode": str(raw_state.get("deckMode", "one")),
+		"action_deadline_seconds": int(raw_state.get("actionDeadlineSeconds", 30)),
+		"host_participant_id": str(raw_state.get("hostParticipantId", "")),
+		"seats": seats,
+	}

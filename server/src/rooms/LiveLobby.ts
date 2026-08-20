@@ -23,15 +23,24 @@ export class LiveLobby extends LobbyRoom<GameRoomMetadata> {
     this.rooms = initialRooms.map((room) => this.cloneListing(room));
   }
 
+  protected filterItemsForClient(
+    options: { filter?: LobbyFilter },
+  ): LiveLobby["rooms"] {
+    return this.rooms.filter((room) => (
+      this.filterItemForClient(room, options.filter)
+    ));
+  }
+
   protected filterItemForClient(
     room: LiveLobby["rooms"][number],
     filter?: LobbyFilter,
   ): boolean {
+    const participantCount = room.metadata?.participantCount ?? room.clients;
     const isJoinableGame = (
       room.name === "game"
       && room.locked === false
       && room.private === false
-      && room.clients < room.maxClients
+      && participantCount < room.maxClients
       && room.metadata?.status === "waiting"
     );
 

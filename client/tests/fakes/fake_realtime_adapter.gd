@@ -2,8 +2,15 @@ extends RefCounted
 
 signal connection_state_changed(state: String, detail: String)
 signal lobby_rooms_changed(rooms: Array[Dictionary])
+signal game_room_joined(room_id: String)
+signal game_room_failed(message: String)
+signal game_room_state_changed(state: Dictionary)
+signal room_action_failed(code: String, message: String)
+signal game_room_left(code: int, reason: String)
 
 var connection_requests: Array[Dictionary] = []
+var room_requests: Array[Dictionary] = []
+var leave_game_room_requests := 0
 
 
 func connect_lobby(endpoint: String, nickname: String) -> void:
@@ -16,3 +23,42 @@ func publish_connection_state(state: String, detail: String = "") -> void:
 
 func publish_rooms(rooms: Array[Dictionary]) -> void:
 	lobby_rooms_changed.emit(rooms)
+
+
+func publish_game_room_state(state: Dictionary) -> void:
+	game_room_state_changed.emit(state)
+
+
+func publish_game_room_joined(room_id: String) -> void:
+	game_room_joined.emit(room_id)
+
+
+func publish_room_error(code: String, message: String) -> void:
+	room_action_failed.emit(code, message)
+
+
+func publish_game_room_left(code: int = 1000, reason: String = "") -> void:
+	game_room_left.emit(code, reason)
+
+
+func set_ready(ready: bool) -> void:
+	room_requests.append({"type": "set_ready", "payload": {"ready": ready}})
+
+
+func configure_room(deck_mode: String, deadline_seconds: int) -> void:
+	room_requests.append({
+		"type": "configure",
+		"payload": {"deckMode": deck_mode, "actionDeadlineSeconds": deadline_seconds},
+	})
+
+
+func fill_bots() -> void:
+	room_requests.append({"type": "fill_bots", "payload": null})
+
+
+func start_match() -> void:
+	room_requests.append({"type": "start", "payload": null})
+
+
+func leave_game_room() -> void:
+	leave_game_room_requests += 1

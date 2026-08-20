@@ -32,6 +32,7 @@ describe("live lobby room listing", () => {
       displayName: "Test table",
       deckMode: "one",
       actionDeadlineSeconds: 30,
+      participantCount: 0,
       status: "waiting",
     });
 
@@ -44,6 +45,20 @@ describe("live lobby room listing", () => {
       /locked/,
     );
 
+    await lobby.leave();
+  });
+
+  it("omits already locked rooms from a new lobby connection", async () => {
+    const game = await colyseus.createRoom("game", {
+      displayName: "Stale table",
+      deckMode: "one",
+      actionDeadlineSeconds: 30,
+    });
+    await game.lock();
+
+    const lobby = await colyseus.sdk.joinOrCreate("lobby");
+
+    assert.deepStrictEqual(await lobby.waitForMessage("rooms"), []);
     await lobby.leave();
   });
 });
