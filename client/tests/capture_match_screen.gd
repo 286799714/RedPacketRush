@@ -13,10 +13,10 @@ class VisualMatchStore extends RefCounted:
 	var draw_pile_count := 17
 	var room_id := "visual-room"
 	var local_participant_id := "human-a"
+	var deck_mode := "one"
 	var turn_number := 1
 	var played_category := ""
 	var played_score := 0
-	var claim_commit_count := 0
 	var claim_committed := false
 	var claim_card_id: Variant = null
 	var participants: Array[Dictionary] = []
@@ -24,9 +24,6 @@ class VisualMatchStore extends RefCounted:
 	var played_cards: Array[Dictionary] = []
 	var play_events: Array[Dictionary] = []
 	var claim_events: Array[Dictionary] = []
-	var revealed_claims: Array[Dictionary] = []
-	var claim_awards: Array[Dictionary] = []
-	var discarded_cards: Array[Dictionary] = []
 	var local_hand: Array[Dictionary] = []
 
 	func get_participants() -> Array[Dictionary]:
@@ -43,15 +40,6 @@ class VisualMatchStore extends RefCounted:
 
 	func get_claim_events() -> Array[Dictionary]:
 		return claim_events
-
-	func get_revealed_claims() -> Array[Dictionary]:
-		return revealed_claims
-
-	func get_claim_awards() -> Array[Dictionary]:
-		return claim_awards
-
-	func get_discarded_cards() -> Array[Dictionary]:
-		return discarded_cards
 
 	func get_local_hand() -> Array[Dictionary]:
 		return local_hand
@@ -200,15 +188,14 @@ func _make_store(phase: String) -> VisualMatchStore:
 		var queen: Dictionary = store.played_cards[0]
 		var king: Dictionary = store.played_cards[1]
 		var ace: Dictionary = store.played_cards[2]
-		store.claim_commit_count = 3
 		store.claim_committed = true
 		store.claim_card_id = "played-a"
-		store.revealed_claims = [
+		var revealed_claims: Array[Dictionary] = [
 			{"seat_index": 0, "card_id": "played-a"},
 			{"seat_index": 2, "card_id": "played-q"},
 			{"seat_index": 3, "card_id": "played-q"},
 		]
-		store.claim_awards = [
+		var claim_awards: Array[Dictionary] = [
 			{"seat_index": 0, "card": ace, "source": "unique"},
 			{"seat_index": 2, "card": king, "source": "collision"},
 			{"seat_index": 3, "card": queen, "source": "collision"},
@@ -226,8 +213,8 @@ func _make_store(phase: String) -> VisualMatchStore:
 			},
 			{
 				"turn_number": 2,
-				"claims": store.revealed_claims.duplicate(true),
-				"awards": store.claim_awards.duplicate(true),
+				"claims": revealed_claims.duplicate(true),
+				"awards": claim_awards.duplicate(true),
 				"discarded_cards": [],
 			},
 		]

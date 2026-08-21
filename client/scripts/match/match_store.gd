@@ -11,13 +11,13 @@ signal connection_changed(state: String, detail: String)
 var room_id := ""
 var local_participant_id := ""
 var status := ""
+var deck_mode := "one"
 var phase := ""
 var actor_seat_index := -1
 var draw_pile_count := 0
 var turn_number := 0
 var played_category := ""
 var played_score := 0
-var claim_commit_count := 0
 var claim_committed := false
 var claim_card_id: Variant = null
 
@@ -27,9 +27,6 @@ var _contest_rounds: Array[Dictionary] = []
 var _played_cards: Array[Dictionary] = []
 var _play_events: Array[Dictionary] = []
 var _claim_events: Array[Dictionary] = []
-var _revealed_claims: Array[Dictionary] = []
-var _claim_awards: Array[Dictionary] = []
-var _discarded_cards: Array[Dictionary] = []
 var _local_hand: Array[Dictionary] = []
 var _activated := false
 
@@ -46,65 +43,33 @@ func _init(adapter: Object) -> void:
 
 
 func get_participants() -> Array[Dictionary]:
-	var result: Array[Dictionary] = []
-	for participant in _participants:
-		result.append(participant.duplicate(true))
-	return result
+	return _duplicate_dictionary_array(_participants)
 
 
 func get_contest_rounds() -> Array[Dictionary]:
-	var result: Array[Dictionary] = []
-	for contest_round in _contest_rounds:
-		result.append(contest_round.duplicate(true))
-	return result
+	return _duplicate_dictionary_array(_contest_rounds)
 
 
 func get_played_cards() -> Array[Dictionary]:
-	var result: Array[Dictionary] = []
-	for card in _played_cards:
-		result.append(card.duplicate(true))
-	return result
+	return _duplicate_dictionary_array(_played_cards)
 
 
 func get_play_events() -> Array[Dictionary]:
-	var result: Array[Dictionary] = []
-	for play_event in _play_events:
-		result.append(play_event.duplicate(true))
-	return result
+	return _duplicate_dictionary_array(_play_events)
 
 
 func get_claim_events() -> Array[Dictionary]:
-	var result: Array[Dictionary] = []
-	for claim_event in _claim_events:
-		result.append(claim_event.duplicate(true))
-	return result
-
-
-func get_revealed_claims() -> Array[Dictionary]:
-	var result: Array[Dictionary] = []
-	for claim in _revealed_claims:
-		result.append(claim.duplicate(true))
-	return result
-
-
-func get_claim_awards() -> Array[Dictionary]:
-	var result: Array[Dictionary] = []
-	for award in _claim_awards:
-		result.append(award.duplicate(true))
-	return result
-
-
-func get_discarded_cards() -> Array[Dictionary]:
-	var result: Array[Dictionary] = []
-	for card in _discarded_cards:
-		result.append(card.duplicate(true))
-	return result
+	return _duplicate_dictionary_array(_claim_events)
 
 
 func get_local_hand() -> Array[Dictionary]:
+	return _duplicate_dictionary_array(_local_hand)
+
+
+func _duplicate_dictionary_array(source: Array[Dictionary]) -> Array[Dictionary]:
 	var result: Array[Dictionary] = []
-	for card in _local_hand:
-		result.append(card.duplicate(true))
+	for item in source:
+		result.append(item.duplicate(true))
 	return result
 
 
@@ -120,13 +85,13 @@ func _on_game_room_state_changed(snapshot: Dictionary) -> void:
 	room_id = str(snapshot.get("room_id", ""))
 	local_participant_id = str(snapshot.get("local_participant_id", ""))
 	status = str(snapshot.get("status", ""))
+	deck_mode = str(snapshot.get("deck_mode", "one"))
 	phase = str(snapshot.get("phase", ""))
 	actor_seat_index = int(snapshot.get("actor_seat_index", -1))
 	draw_pile_count = int(snapshot.get("draw_pile_count", 0))
 	turn_number = int(snapshot.get("turn_number", 0))
 	played_category = str(snapshot.get("played_category", ""))
 	played_score = int(snapshot.get("played_score", 0))
-	claim_commit_count = clampi(int(snapshot.get("claim_commit_count", 0)), 0, 3)
 
 	_participants.clear()
 	var raw_seats: Variant = snapshot.get("seats", [])
@@ -171,27 +136,6 @@ func _on_game_room_state_changed(snapshot: Dictionary) -> void:
 			if raw_event is Dictionary:
 				_claim_events.append(raw_event.duplicate(true))
 
-	_revealed_claims.clear()
-	var raw_revealed_claims: Variant = snapshot.get("revealed_claims", [])
-	if raw_revealed_claims is Array:
-		for raw_claim: Variant in raw_revealed_claims:
-			if raw_claim is Dictionary:
-				_revealed_claims.append(raw_claim.duplicate(true))
-
-	_claim_awards.clear()
-	var raw_claim_awards: Variant = snapshot.get("claim_awards", [])
-	if raw_claim_awards is Array:
-		for raw_award: Variant in raw_claim_awards:
-			if raw_award is Dictionary:
-				_claim_awards.append(raw_award.duplicate(true))
-
-	_discarded_cards.clear()
-	var raw_discarded_cards: Variant = snapshot.get("discarded_cards", [])
-	if raw_discarded_cards is Array:
-		for raw_card: Variant in raw_discarded_cards:
-			if raw_card is Dictionary:
-				_discarded_cards.append(raw_card.duplicate(true))
-
 	state_changed.emit()
 	if status == "started" and not _activated:
 		_activated = true
@@ -228,13 +172,13 @@ func _on_game_room_left(code: int, reason: String) -> void:
 	room_id = ""
 	local_participant_id = ""
 	status = ""
+	deck_mode = "one"
 	phase = ""
 	actor_seat_index = -1
 	draw_pile_count = 0
 	turn_number = 0
 	played_category = ""
 	played_score = 0
-	claim_commit_count = 0
 	claim_committed = false
 	claim_card_id = null
 	_participants.clear()
@@ -242,9 +186,6 @@ func _on_game_room_left(code: int, reason: String) -> void:
 	_played_cards.clear()
 	_play_events.clear()
 	_claim_events.clear()
-	_revealed_claims.clear()
-	_claim_awards.clear()
-	_discarded_cards.clear()
 	_local_hand.clear()
 	_activated = false
 	state_changed.emit()

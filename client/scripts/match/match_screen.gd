@@ -1106,11 +1106,11 @@ func _refresh_action_prompt(phase: String, actor_seat_index: int, local_seat_ind
 			_action_prompt_label.text = "等待 %s 出牌" % _participant_name(actor_seat_index)
 	elif phase == "claim_commit":
 		if actor_seat_index == local_seat_index:
-			_action_prompt_label.text = "本轮由你出牌：等待其他参与者抢牌（%d/3）" % int(_store.claim_commit_count)
+			_action_prompt_label.text = "本轮由你出牌：等待其他参与者抢牌"
 		elif _claim_submission_pending:
 			_action_prompt_label.text = "抢牌选择提交中：等待服务器确认"
 		elif bool(_store.claim_committed):
-			_action_prompt_label.text = "抢牌选择已提交：等待其他参与者（%d/3）" % int(_store.claim_commit_count)
+			_action_prompt_label.text = "抢牌选择已提交：等待其他参与者"
 		else:
 			_action_prompt_label.text = "选择一张牌抢牌，或选择不抢"
 	elif phase == "claim_reveal":
@@ -1217,7 +1217,14 @@ func _format_card(raw_card: Variant) -> String:
 	if not raw_card is Dictionary:
 		return "--"
 	var card: Dictionary = raw_card
-	return "%s %s" % [_rank_text(int(card.get("rank", 0))), _suit_text(card.get("suit", ""))]
+	var copy_marker := ""
+	if _store != null and str(_store.deck_mode) == "two":
+		copy_marker = " #%d" % (int(card.get("copy_index", 0)) + 1)
+	return "%s %s%s" % [
+		_rank_text(int(card.get("rank", 0))),
+		_suit_text(card.get("suit", "")),
+		copy_marker,
+	]
 
 
 func _rank_text(rank: int) -> String:

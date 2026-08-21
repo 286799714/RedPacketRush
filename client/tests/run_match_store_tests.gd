@@ -12,9 +12,10 @@ func _init() -> void:
 
 func _run() -> void:
 	_test_started_snapshot_activates_match_once()
+	_test_deck_mode_follows_room_snapshot_and_resets_on_leave()
 	_test_public_collections_are_sanitized_deep_copies()
 	_test_public_play_state_is_retained_deep_copied_and_cleared()
-	_test_public_claim_state_is_retained_deep_copied_and_cleared()
+	_test_public_claim_progress_is_not_retained()
 	_test_public_claim_event_history_is_retained_deep_copied_and_cleared()
 	_test_play_cards_intention_is_forwarded_without_optimistic_state()
 	_test_claim_intention_is_forwarded_without_optimistic_state()
@@ -58,6 +59,27 @@ func _test_started_snapshot_activates_match_once() -> void:
 	_expect_equal(match_store.draw_pile_count, 19, "后续公共状态更新")
 	_expect_equal(observed["activation_count"], 1, "同一房间不重复激活")
 	_expect_equal(observed["state_change_count"], 2, "每个公共快照均通知")
+
+
+func _test_deck_mode_follows_room_snapshot_and_resets_on_leave() -> void:
+	var adapter := FakeRealtimeAdapter.new()
+	var match_store := MatchStore.new(adapter)
+	var snapshot := _started_snapshot("room-a", "human-a", 72)
+	snapshot["deck_mode"] = "two"
+	adapter.publish_game_room_state(snapshot)
+
+	var has_deck_mode := false
+	for property in match_store.get_property_list():
+		if str(property.get("name", "")) == "deck_mode":
+			has_deck_mode = true
+			break
+	if not has_deck_mode:
+		_failures.append("MatchStore 应公开当前牌组模式")
+		return
+	_expect_equal(match_store.get("deck_mode"), "two", "保存两副牌模式")
+
+	adapter.publish_game_room_left(4000, "主动离开")
+	_expect_equal(match_store.get("deck_mode"), "one", "离房重置为一副牌模式")
 
 
 func _test_public_collections_are_sanitized_deep_copies() -> void:
@@ -140,53 +162,18 @@ func _test_public_play_state_is_retained_deep_copied_and_cleared() -> void:
 	_expect_equal(match_store.played_score, 0, "新回合快照清空旧得分")
 
 
-func _test_public_claim_state_is_retained_deep_copied_and_cleared() -> void:
+func _test_public_claim_progress_is_not_retained() -> void:
 	var adapter := FakeRealtimeAdapter.new()
 	var match_store := MatchStore.new(adapter)
-	if (
-		not match_store.has_method("get_revealed_claims")
-		or not match_store.has_method("get_claim_awards")
-		or not match_store.has_method("get_discarded_cards")
-	):
-		_failures.append("MatchStore 应公开抢牌揭晓结果的只读副本")
-		return
-	var commit_snapshot := _started_snapshot("room-a", "human-a", 17)
-	commit_snapshot["phase"] = "claim_commit"
-	commit_snapshot["claim_commit_count"] = 2
-	adapter.publish_game_room_state(commit_snapshot)
-	_expect_equal(match_store.get("claim_commit_count"), 2, "保存公开抢牌提交数量")
-	_expect_equal(match_store.get_revealed_claims(), [], "提交阶段不提前揭晓选择")
+	var snapshot := _started_snapshot("room-a", "human-a", 17)
+	snapshot["phase"] = "claim_commit"
+	snapshot["claim_commit_count"] = 2
+	adapter.publish_game_room_state(snapshot)
 
-	var reveal_snapshot := commit_snapshot.duplicate(true)
-	reveal_snapshot["phase"] = "claim_reveal"
-	reveal_snapshot["claim_commit_count"] = 3
-	reveal_snapshot["revealed_claims"] = [
-		{"seat_index": 1, "card_id": "played-ace"},
-		{"seat_index": 2, "card_id": "played-queen"},
-		{"seat_index": 3, "card_id": null},
-	]
-	reveal_snapshot["claim_awards"] = [
-		{"seat_index": 1, "card": _card("played-ace", 14, "hearts", 0), "source": "unique"},
-		{"seat_index": 2, "card": _card("played-queen", 12, "hearts", 0), "source": "collision"},
-	]
-	reveal_snapshot["discarded_cards"] = [_card("played-king", 13, "hearts", 0)]
-	adapter.publish_game_room_state(reveal_snapshot)
-
-	var revealed_claims: Array[Dictionary] = match_store.get_revealed_claims()
-	revealed_claims[0]["card_id"] = "tampered"
-	var claim_awards: Array[Dictionary] = match_store.get_claim_awards()
-	claim_awards[0]["card"]["rank"] = 2
-	var discarded_cards: Array[Dictionary] = match_store.get_discarded_cards()
-	discarded_cards.clear()
-	_expect_equal(match_store.get_revealed_claims(), reveal_snapshot["revealed_claims"], "揭晓选择深拷贝")
-	_expect_equal(match_store.get_claim_awards(), reveal_snapshot["claim_awards"], "抢牌结果嵌套深拷贝")
-	_expect_equal(match_store.get_discarded_cards(), reveal_snapshot["discarded_cards"], "公共弃牌深拷贝")
-
-	adapter.publish_game_room_state(_started_snapshot("room-a", "human-a", 17))
-	_expect_equal(match_store.get("claim_commit_count"), 0, "新回合清空抢牌提交数量")
-	_expect_equal(match_store.get_revealed_claims(), [], "新回合清空揭晓选择")
-	_expect_equal(match_store.get_claim_awards(), [], "新回合清空抢牌结果")
-	_expect_equal(match_store.get_discarded_cards(), [], "新回合清空公共弃牌")
+	for property in match_store.get_property_list():
+		if str(property.get("name", "")) == "claim_commit_count":
+			_failures.append("MatchStore 不应公开抢牌提交进度")
+			return
 
 
 func _test_public_claim_event_history_is_retained_deep_copied_and_cleared() -> void:

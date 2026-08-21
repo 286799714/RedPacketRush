@@ -494,7 +494,6 @@ func _normalize_game_room_state(raw_state: Variant, room: Variant) -> Dictionary
 		"played_category": _normalize_combination_category(raw_state.get("playedCategory", "")),
 		"played_score": maxi(0, int(raw_state.get("playedScore", 0))),
 		"play_events": _normalize_play_events(raw_state.get("playEvents", [])),
-		"claim_commit_count": clampi(int(raw_state.get("claimCommitCount", 0)), 0, 3),
 		"revealed_claims": _normalize_revealed_claims(raw_state.get("revealedClaims", [])),
 		"claim_awards": _normalize_claim_awards(raw_state.get("claimAwards", [])),
 		"discarded_cards": _normalize_public_cards(raw_state.get("discardedCards", []), MAX_DECK_CARD_COUNT),

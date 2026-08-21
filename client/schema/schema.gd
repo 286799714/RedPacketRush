@@ -117,7 +117,6 @@ class GameRoomState extends Colyseus.Schema:
 			Colyseus.Schema.Field.new("playedCards", Colyseus.Schema.ARRAY, PublicCardState),
 			Colyseus.Schema.Field.new("playedCategory", Colyseus.Schema.STRING),
 			Colyseus.Schema.Field.new("playedScore", Colyseus.Schema.UINT8),
-			Colyseus.Schema.Field.new("claimCommitCount", Colyseus.Schema.UINT8),
 			Colyseus.Schema.Field.new("revealedClaims", Colyseus.Schema.ARRAY, RevealedClaimState),
 			Colyseus.Schema.Field.new("claimAwards", Colyseus.Schema.ARRAY, ClaimAwardState),
 			Colyseus.Schema.Field.new("discardedCards", Colyseus.Schema.ARRAY, PublicCardState),
@@ -128,4 +127,4 @@ class GameRoomState extends Colyseus.Schema:
 		]
 
 	func _to_string() -> String:
-		return "GameRoomState(__ref_id: %s, status: %s, displayName: %s, deckMode: %s, actionDeadlineSeconds: %s, hostParticipantId: %s, phase: %s, actorSeatIndex: %s, firstActorSeatIndex: %s, drawPileCount: %s, turnNumber: %s, playedCards: %s, playedCategory: %s, playedScore: %s, claimCommitCount: %s, revealedClaims: %s, claimAwards: %s, discardedCards: %s, seats: %s, contestRounds: %s, playEvents: %s, claimEvents: %s)" % [self.__ref_id, self.status, self.displayName, self.deckMode, self.actionDeadlineSeconds, self.hostParticipantId, self.phase, self.actorSeatIndex, self.firstActorSeatIndex, self.drawPileCount, self.turnNumber, self.playedCards, self.playedCategory, self.playedScore, self.claimCommitCount, self.revealedClaims, self.claimAwards, self.discardedCards, self.seats, self.contestRounds, self.playEvents, self.claimEvents]
+		return "GameRoomState(__ref_id: %s, status: %s, displayName: %s, deckMode: %s, actionDeadlineSeconds: %s, hostParticipantId: %s, phase: %s, actorSeatIndex: %s, firstActorSeatIndex: %s, drawPileCount: %s, turnNumber: %s, playedCards: %s, playedCategory: %s, playedScore: %s, revealedClaims: %s, claimAwards: %s, discardedCards: %s, seats: %s, contestRounds: %s, playEvents: %s, claimEvents: %s)" % [self.__ref_id, self.status, self.displayName, self.deckMode, self.actionDeadlineSeconds, self.hostParticipantId, self.phase, self.actorSeatIndex, self.firstActorSeatIndex, self.drawPileCount, self.turnNumber, self.playedCards, self.playedCategory, self.playedScore, self.revealedClaims, self.claimAwards, self.discardedCards, self.seats, self.contestRounds, self.playEvents, self.claimEvents]

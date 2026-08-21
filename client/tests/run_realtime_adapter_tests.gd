@@ -438,7 +438,7 @@ func _test_public_claim_reveal_is_normalized_from_whitelisted_fields() -> void:
 	})
 
 	var snapshot: Dictionary = observed["snapshot"]
-	_expect_equal(snapshot.get("claim_commit_count"), 3, "公开提交计数规范化")
+	_expect_equal(snapshot.has("claim_commit_count"), false, "公开快照忽略抢牌提交计数")
 	_expect_equal(snapshot.get("revealed_claims"), [
 		{"seat_index": 1, "card_id": "played-ace"},
 		{"seat_index": 2, "card_id": "played-queen"},

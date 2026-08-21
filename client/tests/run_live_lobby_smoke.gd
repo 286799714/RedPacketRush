@@ -402,9 +402,6 @@ func _try_request_claims() -> void:
 
 
 func _observe_claim_reveal(state: Dictionary, participant_index: int) -> void:
-	if int(state.get("claim_commit_count", -1)) != 3:
-		_fail("participant %d decoded claim_reveal without three commits" % participant_index)
-		return
 	var revealed_claims: Variant = state.get("revealed_claims", [])
 	if not revealed_claims is Array or revealed_claims.size() != 3:
 		_fail("participant %d decoded an incomplete public claim reveal" % participant_index)
