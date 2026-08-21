@@ -77,9 +77,26 @@ function Get-GitOutput {
     return @($output)
 }
 
+function Test-GitDiff {
+    param([string[]]$ArgumentList)
+
+    & $gitCommand -C $repositoryDirectory @ArgumentList
+    $exitCode = $LASTEXITCODE
+    if ($exitCode -eq 0) {
+        return $false
+    }
+    if ($exitCode -eq 1) {
+        return $true
+    }
+    throw "Git diff check failed: git -C $repositoryDirectory $($ArgumentList -join ' ')"
+}
+
 function Assert-CleanTree {
-    $status = @(Get-GitOutput @("status", "--porcelain", "--untracked-files=all"))
-    if ($status.Count -gt 0) {
+    $hasUnstagedChanges = Test-GitDiff @("diff", "--quiet", "--ignore-submodules", "--")
+    $hasStagedChanges = Test-GitDiff @("diff", "--cached", "--quiet", "--ignore-submodules", "HEAD", "--")
+    $untrackedFiles = @(Get-GitOutput @("ls-files", "--others", "--exclude-standard"))
+    if ($hasUnstagedChanges -or $hasStagedChanges -or $untrackedFiles.Count -gt 0) {
+        $status = @(Get-GitOutput @("status", "--porcelain", "--untracked-files=all"))
         throw "The Git worktree is not clean:`n$($status -join [Environment]::NewLine)"
     }
 }
