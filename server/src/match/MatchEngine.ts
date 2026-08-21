@@ -16,7 +16,9 @@ export type MatchPhase =
   | "point_contest"
   | "actor_play"
   | "claim_commit"
-  | "claim_reveal";
+  | "claim_reveal"
+  | "award_discard"
+  | "final_commit";
 export type MatchCommandErrorCode =
   | "invalid_phase"
   | "not_actor"
@@ -25,7 +27,10 @@ export type MatchCommandErrorCode =
   | "draw_pile_exhausted"
   | "actor_cannot_claim"
   | "invalid_claim"
-  | "claim_already_committed";
+  | "claim_already_committed"
+  | "invalid_discard"
+  | "discard_not_required"
+  | "awarded_card_protected";
 
 export class MatchCommandError extends Error {
   public constructor(
@@ -95,10 +100,18 @@ export interface ClaimsResolvedEvent {
   readonly discardedCards: readonly PhysicalCard[];
 }
 
+export interface CardDiscardedEvent {
+  readonly type: "card_discarded";
+  readonly turnNumber: number;
+  readonly seatIndex: number;
+  readonly card: PhysicalCard;
+}
+
 export type PublicMatchEvent =
   | PointContestRoundEvent
   | CardsPlayedEvent
-  | ClaimsResolvedEvent;
+  | ClaimsResolvedEvent
+  | CardDiscardedEvent;
 
 export interface PublicMatchState {
   readonly phase: MatchPhase;
@@ -112,6 +125,9 @@ export interface PublicMatchState {
   readonly revealedClaims: readonly RevealedClaim[];
   readonly claimAwards: readonly ClaimAward[];
   readonly discardedCards: readonly PhysicalCard[];
+  readonly sealedCards: readonly PhysicalCard[];
+  readonly pendingDiscardSeatIndexes: readonly number[];
+  readonly discardEvents: readonly CardDiscardedEvent[];
   readonly participants: readonly PublicMatchParticipant[];
   readonly events: readonly PublicMatchEvent[];
 }
@@ -153,6 +169,11 @@ export class MatchEngine {
   private revealedClaims: RevealedClaim[] = [];
   private claimAwards: ClaimAward[] = [];
   private discardedCards: PhysicalCard[] = [];
+  private sealedCards: PhysicalCard[] = [];
+  private pendingDiscardSeatIndexes = new Set<number>();
+  private protectedAwardCardIds = new Map<number, string>();
+  private discardEvents: CardDiscardedEvent[] = [];
+  private configuredCardCount = 0;
 
   public constructor(random: RandomSource) {
     if (!random || typeof random.nextInt !== "function") {
@@ -180,6 +201,7 @@ export class MatchEngine {
 
     this.participants = participantStates;
     this.drawPile = drawPile;
+    this.configuredCardCount = allCards.length;
     this.events = contest.events;
     this.firstActorSeatIndex = contest.winnerSeatIndex;
     this.actorSeatIndex = contest.winnerSeatIndex;
@@ -295,6 +317,67 @@ export class MatchEngine {
     this.resolveClaims();
   }
 
+  public completeClaimReveal(): void {
+    if (this.participants === null || this.phase !== "claim_reveal") {
+      throw new MatchCommandError("invalid_phase", "claim reveal is not active");
+    }
+    if (this.pendingDiscardSeatIndexes.size > 0) {
+      this.phase = "award_discard";
+      return;
+    }
+    this.openNextTurn();
+  }
+
+  public discardCard(seatIndex: number, cardId: string): void {
+    if (this.participants === null || this.phase !== "award_discard") {
+      throw new MatchCommandError("invalid_phase", "award discard is not active");
+    }
+    if (!this.pendingDiscardSeatIndexes.has(seatIndex)) {
+      throw new MatchCommandError(
+        "discard_not_required",
+        "seat does not have a pending award discard",
+      );
+    }
+    if (typeof cardId !== "string" || cardId.length === 0) {
+      throw new MatchCommandError("invalid_discard", "discard requires a card identifier");
+    }
+    const participant = this.participantAt(seatIndex);
+    const card = participant.hand.find((candidate) => candidate.id === cardId);
+    if (!card) {
+      throw new MatchCommandError("card_not_owned", "card is not owned by the participant");
+    }
+    if (this.protectedAwardCardIds.get(seatIndex) === card.id) {
+      throw new MatchCommandError(
+        "awarded_card_protected",
+        "the card awarded this turn cannot be discarded",
+      );
+    }
+
+    this.recordDiscard(participant, card);
+    if (this.pendingDiscardSeatIndexes.size === 0) {
+      this.openNextTurn();
+    }
+  }
+
+  public resolveDiscardAtDeadline(): void {
+    if (this.participants === null || this.phase !== "award_discard") {
+      throw new MatchCommandError("invalid_phase", "award discard is not active");
+    }
+    const plannedDiscards = [...this.pendingDiscardSeatIndexes].map((seatIndex) => {
+      const participant = this.participantAt(seatIndex);
+      const protectedCardId = this.protectedAwardCardIds.get(seatIndex);
+      const card = participant.hand.find((candidate) => candidate.id !== protectedCardId);
+      if (!card) {
+        throw new Error("award recipient has no legal card to discard");
+      }
+      return { participant, card };
+    });
+    for (const { participant, card } of plannedDiscards) {
+      this.recordDiscard(participant, card);
+    }
+    this.openNextTurn();
+  }
+
   public view(seatIndex: number): MatchView {
     if (
       this.participants === null
@@ -331,6 +414,9 @@ export class MatchEngine {
       revealedClaims: Object.freeze([...this.revealedClaims]),
       claimAwards: Object.freeze([...this.claimAwards]),
       discardedCards: Object.freeze([...this.discardedCards]),
+      sealedCards: Object.freeze([...this.sealedCards]),
+      pendingDiscardSeatIndexes: Object.freeze([...this.pendingDiscardSeatIndexes]),
+      discardEvents: Object.freeze([...this.discardEvents]),
       participants: Object.freeze(publicParticipants),
       events: Object.freeze([...this.events]),
     });
@@ -467,6 +553,13 @@ export class MatchEngine {
 
     this.revealedClaims = claims;
     this.claimAwards = awards;
+    this.pendingDiscardSeatIndexes = new Set(
+      awards.map((award) => award.seatIndex).sort((left, right) => left - right),
+    );
+    this.protectedAwardCardIds = new Map(awards.map((award) => [
+      award.seatIndex,
+      award.card.id,
+    ]));
     this.discardedCards.push(...discardedCards);
     this.playedCards = [];
     this.phase = "claim_reveal";
@@ -477,6 +570,81 @@ export class MatchEngine {
       awards: Object.freeze([...awards]),
       discardedCards: Object.freeze([...discardedCards]),
     }));
+  }
+
+  private participantAt(seatIndex: number): ParticipantState {
+    const participant = this.participants?.find((candidate) => (
+      candidate.seatIndex === seatIndex
+    ));
+    if (!participant) {
+      throw new MatchCommandError("discard_not_required", "seat does not participate in this match");
+    }
+    return participant;
+  }
+
+  private recordDiscard(participant: ParticipantState, card: PhysicalCard): void {
+    participant.hand = participant.hand.filter((candidate) => candidate.id !== card.id);
+    this.pendingDiscardSeatIndexes.delete(participant.seatIndex);
+    this.protectedAwardCardIds.delete(participant.seatIndex);
+    this.discardedCards.push(card);
+    const event: CardDiscardedEvent = Object.freeze({
+      type: "card_discarded",
+      turnNumber: this.turnNumber,
+      seatIndex: participant.seatIndex,
+      card,
+    });
+    this.discardEvents.push(event);
+    this.events.push(event);
+  }
+
+  private openNextTurn(): void {
+    if (this.participants === null || this.actorSeatIndex === null) {
+      throw new Error("cannot open a turn before the match starts");
+    }
+    if (this.pendingDiscardSeatIndexes.size !== 0) {
+      throw new Error("cannot open a turn while award discards are pending");
+    }
+    if (this.claimAwards.length > 0) {
+      this.actorSeatIndex = selectNextActor(this.claimAwards, this.actorSeatIndex);
+    }
+    for (const participant of this.participants) {
+      if (participant.hand.length !== 8) {
+        throw new Error("every hand must contain eight cards at a turn boundary");
+      }
+    }
+
+    this.claimChoices.clear();
+    this.revealedClaims = [];
+    this.claimAwards = [];
+    this.protectedAwardCardIds.clear();
+    this.playedCards = [];
+    this.playedCategory = null;
+    this.playedScore = 0;
+    if (this.drawPile.length < 3) {
+      this.sealedCards.push(...this.drawPile.splice(0));
+      this.phase = "final_commit";
+    } else {
+      this.phase = "actor_play";
+    }
+    this.assertPhysicalCardZones();
+  }
+
+  private assertPhysicalCardZones(): void {
+    if (this.participants === null) {
+      throw new Error("cannot verify card zones before the match starts");
+    }
+    const cardIds = [
+      ...this.participants.flatMap((participant) => participant.hand.map((card) => card.id)),
+      ...this.drawPile.map((card) => card.id),
+      ...this.discardedCards.map((card) => card.id),
+      ...this.sealedCards.map((card) => card.id),
+    ];
+    if (
+      cardIds.length !== this.configuredCardCount
+      || new Set(cardIds).size !== this.configuredCardCount
+    ) {
+      throw new Error("physical cards must occupy exactly one live match zone");
+    }
   }
 
   private drawRandomCard(cards: PhysicalCard[]): PhysicalCard {
@@ -560,6 +728,34 @@ function compareCardStrength(left: PhysicalCard, right: PhysicalCard): number {
     return left.rank - right.rank;
   }
   return (SUIT_STRENGTH.get(left.suit) ?? -1) - (SUIT_STRENGTH.get(right.suit) ?? -1);
+}
+
+function selectNextActor(
+  awards: readonly ClaimAward[],
+  currentActorSeatIndex: number,
+): number {
+  if (awards.length === 0) {
+    return currentActorSeatIndex;
+  }
+  let strongestCard = awards[0].card;
+  for (const award of awards.slice(1)) {
+    if (compareCardStrength(award.card, strongestCard) > 0) {
+      strongestCard = award.card;
+    }
+  }
+  const strongestAwards = awards.filter((award) => (
+    compareCardStrength(award.card, strongestCard) === 0
+  ));
+  return [...strongestAwards].sort((left, right) => (
+    clockwiseDistance(currentActorSeatIndex, left.seatIndex)
+    - clockwiseDistance(currentActorSeatIndex, right.seatIndex)
+  ))[0].seatIndex;
+}
+
+function clockwiseDistance(fromSeatIndex: number, toSeatIndex: number): number {
+  const distance = (toSeatIndex - fromSeatIndex + REQUIRED_SEAT_INDICES.length)
+    % REQUIRED_SEAT_INDICES.length;
+  return distance === 0 ? REQUIRED_SEAT_INDICES.length : distance;
 }
 
 function dealOpeningHands(

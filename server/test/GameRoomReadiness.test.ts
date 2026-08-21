@@ -41,6 +41,8 @@ describe("four-participant room readiness", () => {
       revealedClaims: [],
       claimAwards: [],
       discardedCards: [],
+      sealedCards: [],
+      pendingDiscardSeatIndexes: [],
       seats: [
         {
           seatIndex: 0,
@@ -82,6 +84,7 @@ describe("four-participant room readiness", () => {
       contestRounds: [],
       playEvents: [],
       claimEvents: [],
+      discardEvents: [],
     });
 
     await host.leave();

@@ -129,6 +129,9 @@ describe("match opening", () => {
       revealedClaims: [],
       claimAwards: [],
       discardedCards: [],
+      sealedCards: [],
+      pendingDiscardSeatIndexes: [],
+      discardEvents: [],
       participants: [
         { ...PARTICIPANTS[0], score: 0, handCount: 8 },
         { ...PARTICIPANTS[1], score: 0, handCount: 8 },
@@ -335,6 +338,9 @@ describe("match opening", () => {
       "revealedClaims",
       "claimAwards",
       "discardedCards",
+      "sealedCards",
+      "pendingDiscardSeatIndexes",
+      "discardEvents",
       "participants",
       "events",
     ]);

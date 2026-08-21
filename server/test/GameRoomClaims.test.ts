@@ -250,10 +250,12 @@ describe("game room secret claims", () => {
       assert.strictEqual(privateStates[seatIndex].claimCommitted, false);
       assert.strictEqual(privateStates[seatIndex].claimCardId, null);
     }
-    const resolvedState = serverRoom.state.toJSON();
-
+    tickClock(serverRoom, 900);
+    assert.strictEqual(serverRoom.state.phase, "actor_play");
+    assert.strictEqual(serverRoom.state.claimEvents.length, 1);
+    const advancedState = serverRoom.state.toJSON();
     tickClock(serverRoom, 15_000);
-    assert.deepStrictEqual(serverRoom.state.toJSON(), resolvedState);
+    assert.deepStrictEqual(serverRoom.state.toJSON(), advancedState);
 
     await Promise.all(participants.map((participant) => participant.leave()));
   });

@@ -3,6 +3,7 @@ import { ArraySchema, Schema, type } from "@colyseus/schema";
 import type { DeckMode, PhysicalCard } from "../../match/cards.js";
 import type {
   ActionDeadlineSeconds,
+  CardDiscardedEvent,
   CardsPlayedEvent,
   ClaimAward,
   ClaimsResolvedEvent,
@@ -182,6 +183,26 @@ export class ClaimsResolvedEventState extends Schema {
   }
 }
 
+export class CardDiscardedEventState extends Schema {
+  @type("uint16")
+  public turnNumber = 0;
+
+  @type("uint8")
+  public seatIndex = 0;
+
+  @type(PublicCardState)
+  public card = new PublicCardState();
+
+  public constructor(event?: CardDiscardedEvent) {
+    super();
+    if (event) {
+      this.turnNumber = event.turnNumber;
+      this.seatIndex = event.seatIndex;
+      this.card = new PublicCardState(event.card);
+    }
+  }
+}
+
 export class ParticipantSeat extends Schema {
   @type("uint8")
   public seatIndex = 0;
@@ -277,6 +298,12 @@ export class GameRoomState extends Schema {
   @type([PublicCardState])
   public discardedCards = new ArraySchema<PublicCardState>();
 
+  @type([PublicCardState])
+  public sealedCards = new ArraySchema<PublicCardState>();
+
+  @type(["uint8"])
+  public pendingDiscardSeatIndexes = new ArraySchema<number>();
+
   @type([ParticipantSeat])
   public seats = new ArraySchema<ParticipantSeat>();
 
@@ -288,6 +315,9 @@ export class GameRoomState extends Schema {
 
   @type([ClaimsResolvedEventState])
   public claimEvents = new ArraySchema<ClaimsResolvedEventState>();
+
+  @type([CardDiscardedEventState])
+  public discardEvents = new ArraySchema<CardDiscardedEventState>();
 
   public constructor(metadata?: GameRoomMetadata) {
     super();
