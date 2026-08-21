@@ -13,6 +13,15 @@ client/addons/colyseus/bin/*
 
 # Local export artifacts
 /build/
+*.apk
+*.aab
+
+# Signing keys and certificate material
+*.keystore
+*.jks
+*.p12
+*.pfx
+*.pem
 
 # Local editor and operating-system files
 .vscode/
