@@ -156,6 +156,7 @@ describe("game room secret claims", () => {
     const claimantSeatIndex = (actorSeatIndex + 1) % participants.length;
     const claimant = participants[claimantSeatIndex];
     const claimedCardId = serverRoom.state.playedCards[0].id;
+    const beforePublicState = serverRoom.state.toJSON();
     const privateMessages = participants.map((): PrivateMatchState[] => []);
     participants.forEach((participant, seatIndex) => {
       onRoomMessage(participant, "match_private_state", (payload) => {
@@ -169,11 +170,8 @@ describe("game room secret claims", () => {
     const [, privateState] = await Promise.all([handled, acknowledged]);
 
     const publicState = serverRoom.state.toJSON();
-    assert.strictEqual(publicState.phase, "claim_commit");
-    assert.strictEqual(publicState.claimCommitCount, 1);
-    assert.deepStrictEqual(publicState.revealedClaims, []);
-    assert.deepStrictEqual(publicState.claimAwards, []);
-    assert.deepStrictEqual(publicState.discardedCards, []);
+    assert.deepStrictEqual(publicState, beforePublicState);
+    assert.ok(!Object.hasOwn(publicState, "claimCommitCount"));
     assert.ok(!Object.hasOwn(publicState, "claimCardId"));
     assert.ok(publicState.seats.every((seat: object) => !Object.hasOwn(seat, "claimCardId")));
     assert.strictEqual(privateState.seatIndex, claimantSeatIndex);
@@ -205,7 +203,6 @@ describe("game room secret claims", () => {
 
     const publicState = serverRoom.state.toJSON();
     assert.strictEqual(publicState.phase, "claim_reveal");
-    assert.strictEqual(publicState.claimCommitCount, 3);
     assert.deepStrictEqual(publicState.playedCards, []);
     assert.deepStrictEqual(publicState.revealedClaims, claimantSeatIndexes.map((seatIndex) => ({
       seatIndex,
@@ -247,7 +244,6 @@ describe("game room secret claims", () => {
     tickClock(serverRoom, 1_000);
     const privateStates = await Promise.all(deadlineSnapshots);
     assert.strictEqual(serverRoom.state.phase, "claim_reveal");
-    assert.strictEqual(serverRoom.state.claimCommitCount, 0);
     assert.strictEqual(serverRoom.state.claimEvents.length, 1);
     for (let seatIndex = 0; seatIndex < privateStates.length; seatIndex += 1) {
       assert.strictEqual(privateStates[seatIndex].participantId, participants[seatIndex].sessionId);

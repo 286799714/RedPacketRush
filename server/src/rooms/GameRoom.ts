@@ -517,7 +517,6 @@ export class GameRoom extends Room<{
     }
     this.state.playedCategory = publicState.playedCategory ?? "";
     this.state.playedScore = publicState.playedScore;
-    this.state.claimCommitCount = publicState.claimCommitCount;
     this.state.revealedClaims.clear();
     for (const claim of publicState.revealedClaims) {
       this.state.revealedClaims.push(new RevealedClaimState(claim));

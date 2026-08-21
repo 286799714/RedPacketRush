@@ -82,10 +82,8 @@ describe("match secret claims", () => {
     const afterViews = PARTICIPANTS.map(({ seatIndex }) => engine.view(seatIndex));
     const publicState = afterViews[0].publicState;
     assert.strictEqual(publicState.phase, "claim_commit");
-    assert.strictEqual(publicState.claimCommitCount, 1);
-    assert.deepStrictEqual(publicState.revealedClaims, []);
-    assert.deepStrictEqual(publicState.claimAwards, []);
-    assert.deepStrictEqual(publicState.discardedCards, []);
+    assert.deepStrictEqual(publicState, beforeViews[0].publicState);
+    assert.ok(!Object.hasOwn(publicState, "claimCommitCount"));
     assert.deepStrictEqual(
       afterViews.map((view) => view.publicState),
       afterViews.map(() => publicState),
@@ -192,7 +190,6 @@ describe("match secret claims", () => {
       { seatIndex: 3, cardId: null },
     ];
     assert.strictEqual(publicState.phase, "claim_reveal");
-    assert.strictEqual(publicState.claimCommitCount, 3);
     assert.deepStrictEqual(publicState.revealedClaims, revealedPasses);
     assert.deepStrictEqual(publicState.claimAwards, []);
     assert.deepStrictEqual(publicState.discardedCards, playedCards);
@@ -364,7 +361,6 @@ describe("match secret claims", () => {
     const afterViews = PARTICIPANTS.map(({ seatIndex }) => engine.view(seatIndex));
     const publicState = afterViews[0].publicState;
     assert.strictEqual(publicState.phase, "claim_reveal");
-    assert.strictEqual(publicState.claimCommitCount, 1);
     assert.deepStrictEqual(publicState.revealedClaims, [
       { seatIndex: 1, cardId: claimedCardId },
       { seatIndex: 2, cardId: null },

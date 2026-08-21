@@ -268,9 +268,6 @@ export class GameRoomState extends Schema {
   @type("uint8")
   public playedScore = 0;
 
-  @type("uint8")
-  public claimCommitCount = 0;
-
   @type([RevealedClaimState])
   public revealedClaims = new ArraySchema<RevealedClaimState>();
 

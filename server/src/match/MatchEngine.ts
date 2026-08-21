@@ -109,7 +109,6 @@ export interface PublicMatchState {
   readonly playedCategory: CombinationCategory | null;
   readonly playedScore: number;
   readonly turnNumber: number;
-  readonly claimCommitCount: number;
   readonly revealedClaims: readonly RevealedClaim[];
   readonly claimAwards: readonly ClaimAward[];
   readonly discardedCards: readonly PhysicalCard[];
@@ -329,7 +328,6 @@ export class MatchEngine {
       playedCategory: this.playedCategory,
       playedScore: this.playedScore,
       turnNumber: this.turnNumber,
-      claimCommitCount: this.claimChoices.size,
       revealedClaims: Object.freeze([...this.revealedClaims]),
       claimAwards: Object.freeze([...this.claimAwards]),
       discardedCards: Object.freeze([...this.discardedCards]),
