@@ -41,7 +41,7 @@ func _run() -> void:
 	_adapter.game_room_joined.connect(_on_game_room_joined)
 	_adapter.game_room_failed.connect(_on_game_room_failed)
 	_adapter.game_room_state_changed.connect(_on_game_room_state_changed)
-	_adapter.game_room_private_state_changed.connect(_on_game_room_private_state_changed)
+	_adapter.match_private_state_changed.connect(_on_match_private_state_changed)
 	_adapter.room_action_failed.connect(_on_room_action_failed)
 
 	_deadline_msec = Time.get_ticks_msec() + int(TEST_TIMEOUT_SECONDS * 1000.0)
@@ -199,7 +199,7 @@ func _on_game_room_state_changed(state: Dictionary) -> void:
 	_fail("decoded game room state did not contain the local seat")
 
 
-func _on_game_room_private_state_changed(state: Dictionary) -> void:
+func _on_match_private_state_changed(state: Dictionary) -> void:
 	var hand: Variant = state.get("hand", [])
 	if state.get("participant_id", "") != "" and hand is Array and hand.size() == 8:
 		_private_hand_observed = true

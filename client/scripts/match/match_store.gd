@@ -25,8 +25,8 @@ var _activated := false
 func _init(adapter: Object) -> void:
 	_adapter = adapter
 	_adapter.game_room_state_changed.connect(_on_game_room_state_changed)
-	if _adapter.has_signal("game_room_private_state_changed"):
-		_adapter.game_room_private_state_changed.connect(_on_game_room_private_state_changed)
+	if _adapter.has_signal("match_private_state_changed"):
+		_adapter.match_private_state_changed.connect(_on_match_private_state_changed)
 	_adapter.room_action_failed.connect(_on_room_action_failed)
 	_adapter.game_room_left.connect(_on_game_room_left)
 	if _adapter.has_signal("game_room_connection_changed"):
@@ -90,7 +90,7 @@ func _on_game_room_state_changed(snapshot: Dictionary) -> void:
 		match_activated.emit()
 
 
-func _on_game_room_private_state_changed(snapshot: Dictionary) -> void:
+func _on_match_private_state_changed(snapshot: Dictionary) -> void:
 	if local_participant_id.is_empty():
 		return
 	if str(snapshot.get("participant_id", "")) != local_participant_id:

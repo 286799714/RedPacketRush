@@ -6,7 +6,7 @@ signal lobby_rooms_changed(rooms: Array[Dictionary])
 signal game_room_joined(room_id: String)
 signal game_room_failed(message: String)
 signal game_room_state_changed(state: Dictionary)
-signal game_room_private_state_changed(state: Dictionary)
+signal match_private_state_changed(state: Dictionary)
 signal game_room_left(code: int, reason: String)
 signal game_room_connection_changed(state: String, detail: String)
 signal room_action_failed(code: String, message: String)
@@ -394,7 +394,7 @@ func _on_game_room_message(type: Variant, data: Variant, room: Variant) -> void:
 		"match_private_state":
 			var snapshot := _normalize_match_private_state(data, room)
 			if not snapshot.is_empty():
-				game_room_private_state_changed.emit(snapshot)
+				match_private_state_changed.emit(snapshot)
 
 
 func _on_game_room_left(code: int, reason: String, room: Variant) -> void:

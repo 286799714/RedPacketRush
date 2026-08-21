@@ -66,8 +66,6 @@ func _run() -> void:
 			"winner_seat_index": 0,
 		},
 	]
-	for rank in [2, 5, 8, 11, 12, 13, 14, 10]:
-		store._local_hand.append(_card("local-%s" % rank, rank, "hearts" if rank >= 11 else "clubs", 0))
 	var screen := MatchScreen.new()
 	screen.name = "MatchScreenTestSubject"
 	screen.set_anchors_and_offsets_preset(Control.PRESET_TOP_LEFT)
@@ -79,6 +77,12 @@ func _run() -> void:
 
 	_test_four_seats_are_visible(screen)
 	_test_public_header_and_contest_history_are_visible(screen)
+	_expect_equal(screen._hand_cards.size(), 0, "拼点展示期间尚未收到私有手牌")
+	for rank in [2, 5, 8, 11, 12, 13, 14, 10]:
+		store._local_hand.append(_card("local-%s" % rank, rank, "hearts" if rank >= 11 else "clubs", 0))
+	store.private_state_changed.emit()
+	await process_frame
+	await process_frame
 	_test_local_hand_is_readable_and_private(screen)
 	_test_key_regions_do_not_overlap(screen)
 	screen.set_match_store(null)

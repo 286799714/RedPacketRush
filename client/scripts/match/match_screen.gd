@@ -364,7 +364,7 @@ func _refresh() -> void:
 		_clear_hand()
 		return
 
-	var participants: Array[Dictionary] = _copy_participants(_store.get_participants())
+	var participants: Array[Dictionary] = _store.get_participants()
 	_participant_by_seat.clear()
 	for participant in participants:
 		var seat_index := int(participant.get("seat_index", -1))
@@ -379,23 +379,9 @@ func _refresh() -> void:
 	_deck_label.text = "牌堆：%d" % int(_store.draw_pile_count)
 	_connection_label.text = "公开状态"
 	_refresh_seats(local_seat_index, actor_seat_index)
-	_refresh_history(_copy_rounds(_store.get_contest_rounds()))
+	_refresh_history(_store.get_contest_rounds())
 	_refresh_hand()
 	_refresh_action_prompt(phase, actor_seat_index, local_seat_index)
-
-
-func _copy_participants(raw: Array[Dictionary]) -> Array[Dictionary]:
-	var result: Array[Dictionary] = []
-	for participant in raw:
-		result.append(participant.duplicate(true))
-	return result
-
-
-func _copy_rounds(raw: Array[Dictionary]) -> Array[Dictionary]:
-	var result: Array[Dictionary] = []
-	for round_data in raw:
-		result.append(round_data.duplicate(true))
-	return result
 
 
 func _find_local_seat_index() -> int:
@@ -515,12 +501,7 @@ func _refresh_latest_contest(round_data: Dictionary) -> void:
 
 func _refresh_hand() -> void:
 	_clear_hand()
-	var hand: Array[Dictionary] = []
-	var raw_hand: Variant = _store.get_local_hand()
-	if raw_hand is Array:
-		for raw_card: Variant in raw_hand:
-			if raw_card is Dictionary:
-				hand.append(raw_card.duplicate(true))
+	var hand: Array[Dictionary] = _store.get_local_hand()
 	_hand_title_label.text = "我的手牌（%d）" % hand.size()
 	for index in range(hand.size()):
 		var card := _build_hand_card(hand[index], index)
@@ -530,6 +511,7 @@ func _refresh_hand() -> void:
 		var empty := _label("等待私有手牌", 12, COLOR_MUTED)
 		empty.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
 		_hand_row.add_child(empty)
+	call_deferred("_on_resized")
 
 
 func _clear_hand() -> void:

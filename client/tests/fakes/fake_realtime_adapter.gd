@@ -5,7 +5,7 @@ signal lobby_rooms_changed(rooms: Array[Dictionary])
 signal game_room_joined(room_id: String)
 signal game_room_failed(message: String)
 signal game_room_state_changed(state: Dictionary)
-signal game_room_private_state_changed(state: Dictionary)
+signal match_private_state_changed(state: Dictionary)
 signal room_action_failed(code: String, message: String)
 signal game_room_left(code: int, reason: String)
 signal game_room_connection_changed(state: String, detail: String)
@@ -31,8 +31,8 @@ func publish_game_room_state(state: Dictionary) -> void:
 	game_room_state_changed.emit(state)
 
 
-func publish_game_room_private_state(state: Dictionary) -> void:
-	game_room_private_state_changed.emit(state)
+func publish_match_private_state(state: Dictionary) -> void:
+	match_private_state_changed.emit(state)
 
 
 func publish_game_room_joined(room_id: String) -> void:

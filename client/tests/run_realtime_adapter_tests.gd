@@ -204,14 +204,14 @@ func _test_match_public_state_is_normalized_without_private_fields() -> void:
 
 func _test_only_local_match_private_state_is_normalized() -> void:
 	var adapter := _new_adapter()
-	if not adapter.has_signal("game_room_private_state_changed"):
+	if not adapter.has_signal("match_private_state_changed"):
 		_failures.append("Adapter 应公开比赛私有状态信号")
 		adapter.queue_free()
 		return
 	var client := FakeColyseusClient.new()
 	adapter._client = client
 	var observed: Array[Dictionary] = []
-	adapter.game_room_private_state_changed.connect(
+	adapter.match_private_state_changed.connect(
 		func(snapshot: Dictionary): observed.append(snapshot)
 	)
 	var room := client.queue_join_room("private-room")

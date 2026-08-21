@@ -100,7 +100,7 @@ func _test_only_targeted_private_hand_is_retained() -> void:
 	adapter.publish_game_room_state(public_snapshot)
 
 	_expect_equal(match_store.get_local_hand(), [], "公共快照不能写入私有手牌")
-	adapter.publish_game_room_private_state({
+	adapter.publish_match_private_state({
 		"participant_id": "human-b",
 		"hand": [_card("other-card", 12, "spades", 0)],
 	})
@@ -108,7 +108,7 @@ func _test_only_targeted_private_hand_is_retained() -> void:
 	_expect_equal(observed["private_change_count"], 0, "忽略私信不通知")
 
 	var local_card := _card("local-card", 11, "clubs", 0)
-	adapter.publish_game_room_private_state({
+	adapter.publish_match_private_state({
 		"participant_id": "human-a",
 		"hand": [local_card],
 	})
@@ -166,7 +166,7 @@ func _test_leave_clears_match_and_allows_next_room_activation() -> void:
 		observed["left"] = {"code": code, "reason": reason}
 	)
 	adapter.publish_game_room_state(_started_snapshot("room-a", "human-a", 20))
-	adapter.publish_game_room_private_state({
+	adapter.publish_match_private_state({
 		"participant_id": "human-a",
 		"hand": [_card("local-card", 11, "clubs", 0)],
 	})
