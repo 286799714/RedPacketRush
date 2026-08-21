@@ -4,7 +4,7 @@
 
 **Blocked by:** 06 - Discard awards and rotate the actor.
 
-**Status:** ready-for-agent
+**Status:** claimed
 
 - [ ] A new actor-play phase never opens with fewer than three draw cards; any remainder is sealed and shown publicly.
 - [ ] One-deck mode reaches final settlement after six complete turns with the expected two-card remainder under normal consumption.
