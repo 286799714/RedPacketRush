@@ -4,7 +4,7 @@
 
 **Blocked by:** 03 - Start a match and deal private hands.
 
-**Status:** ready-for-agent
+**Status:** in-progress
 
 - [ ] The classifier scores high card 0, pair 2, flush 4, straight 5, three of a kind 8, and straight flush 10 without double counting.
 - [ ] A-2-3 and Q-K-A are straights; K-A-2 is not; two-deck duplicate edge cases score correctly.
