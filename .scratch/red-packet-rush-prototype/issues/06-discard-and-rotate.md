@@ -4,13 +4,19 @@
 
 **Blocked by:** 05 - Resolve secret claims and collisions.
 
-**Status:** claimed
+**Status:** done
 
-- [ ] Each recipient has nine private cards until submitting one discard and non-recipients remain at eight.
-- [ ] The card awarded this turn cannot be discarded; stale, duplicate, or unowned discard commands do not mutate state.
-- [ ] All required discards are public events and no next turn opens until every recipient is complete.
-- [ ] The next actor is the recipient with the greatest awarded rank then suit.
-- [ ] Exact duplicate rank-and-suit ties choose the nearest tied seat clockwise after the current actor; deck-copy identity is never a strength.
-- [ ] If all participants passed and no card was awarded, the same actor continues.
-- [ ] At every turn boundary all hands contain eight cards and every physical card exists in exactly one valid zone.
-- [ ] The Godot client forces eligible recipients into discard mode and then updates actor and controls without layout shift.
+- [x] Each recipient has nine private cards until submitting one discard and non-recipients remain at eight.
+- [x] The card awarded this turn cannot be discarded; stale, duplicate, or unowned discard commands do not mutate state.
+- [x] All required discards are public events and no next turn opens until every recipient is complete.
+- [x] The next actor is the recipient with the greatest awarded rank then suit.
+- [x] Exact duplicate rank-and-suit ties choose the nearest tied seat clockwise after the current actor; deck-copy identity is never a strength.
+- [x] If all participants passed and no card was awarded, the same actor continues.
+- [x] At every turn boundary all hands contain eight cards and every physical card exists in exactly one valid zone.
+- [x] The Godot client forces eligible recipients into discard mode and then updates actor and controls without layout shift.
+
+## Review
+
+- Standards: 0 findings after repair (`51e1e88...ec9edcc`).
+- Spec: 0 findings after repair (`51e1e88...ec9edcc`).
+- Verification: server 84 tests, TypeScript build, seven Godot runners, and Native four-client smoke all passed. Existing Godot ObjectDB/resource exit warnings remain non-fatal.
