@@ -477,20 +477,24 @@ export class GameRoom extends Room<{
     this.startInProgress = true;
     const waitingMetadata = { ...this.metadata };
     const waitingPrivate = this.matchmakingPrivate;
+    const startingHostParticipantId = this.state.hostParticipantId;
+    const startingDeckMode = this.state.deckMode;
+    const startingActionDeadlineSeconds = this.state.actionDeadlineSeconds;
+    const startingSeats = this.state.seats.map((seat) => ({
+      seatIndex: seat.seatIndex,
+      participantId: seat.participantId,
+      nickname: seat.nickname,
+      bot: seat.bot,
+    }));
     try {
       const matchEngine = new MatchEngine(new SeededRandomSource(
         randomInt(1, 0x1_0000_0000),
       ));
       matchEngine.start(
-        this.state.seats.map((seat) => ({
-          seatIndex: seat.seatIndex,
-          participantId: seat.participantId,
-          nickname: seat.nickname,
-          bot: seat.bot,
-        })),
+        startingSeats,
         {
-          deckMode: this.state.deckMode,
-          actionDeadlineSeconds: this.state.actionDeadlineSeconds,
+          deckMode: startingDeckMode,
+          actionDeadlineSeconds: startingActionDeadlineSeconds,
         },
       );
       const publicMatchState = matchEngine.view(0).publicState;
@@ -505,6 +509,42 @@ export class GameRoom extends Room<{
         await this.setMetadata(waitingMetadata, false);
         await this.setPrivate(waitingPrivate, false);
         this.sendRoomError(client, ROOM_ERRORS.startFailed);
+        return;
+      }
+
+      const startContextIsCurrent = (
+        this.state.status === "waiting"
+        && this.state.hostParticipantId === startingHostParticipantId
+        && this.state.deckMode === startingDeckMode
+        && this.state.actionDeadlineSeconds === startingActionDeadlineSeconds
+        && this.state.seats.length === startingSeats.length
+        && this.state.seats.every((seat, index) => {
+          const startingSeat = startingSeats[index];
+          return (
+            seat.ready
+            && seat.seatIndex === startingSeat.seatIndex
+            && seat.participantId === startingSeat.participantId
+            && seat.nickname === startingSeat.nickname
+            && seat.bot === startingSeat.bot
+          );
+        })
+      );
+      if (!startContextIsCurrent) {
+        const participantCount = this.state.seats.reduce(
+          (count, seat) => count + (seat.participantId === "" ? 0 : 1),
+          0,
+        );
+        await this.setMatchmaking({
+          metadata: {
+            displayName: this.state.displayName,
+            deckMode: this.state.deckMode,
+            actionDeadlineSeconds: this.state.actionDeadlineSeconds,
+            participantCount,
+            status: "waiting",
+          },
+          private: waitingPrivate,
+          locked: participantCount >= this.maxClients,
+        });
         return;
       }
 

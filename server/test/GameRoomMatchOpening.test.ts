@@ -1,5 +1,6 @@
 import assert from "assert";
 import { ColyseusTestServer } from "@colyseus/testing";
+import { matchMaker } from "colyseus";
 
 import appConfig from "../src/app.config.js";
 import { GameRoom } from "../src/rooms/GameRoom.js";
@@ -226,5 +227,60 @@ describe("game room match opening", () => {
     assert.strictEqual(serverRoom.state.status, "started");
 
     await host.leave();
+  });
+
+  it("cancels a start when a waiting participant leaves during the matchmaking commit", async () => {
+    const host = await colyseus.sdk.create("game", {
+      nickname: "甲",
+      displayName: "离开竞态测试",
+      deckMode: "one",
+      actionDeadlineSeconds: 30,
+    });
+    const guest = await colyseus.sdk.joinById(host.roomId, { nickname: "乙" });
+    const serverRoom = colyseus.getRoomById<GameRoom>(host.roomId);
+
+    let handled = serverRoom.waitForMessage("fill_bots");
+    host.send("fill_bots", null);
+    await handled;
+    handled = serverRoom.waitForMessage("set_ready");
+    host.send("set_ready", { ready: true });
+    await handled;
+    handled = serverRoom.waitForMessage("set_ready");
+    guest.send("set_ready", { ready: true });
+    await handled;
+
+    const commitMatchmaking = serverRoom.setMatchmaking.bind(serverRoom);
+    let releaseCommit = (): void => {};
+    const commitGate = new Promise<void>((resolve) => {
+      releaseCommit = resolve;
+    });
+    let markCommitEntered = (): void => {};
+    const commitEntered = new Promise<void>((resolve) => {
+      markCommitEntered = resolve;
+    });
+    serverRoom.setMatchmaking = async (updates): Promise<void> => {
+      markCommitEntered();
+      await commitGate;
+      await commitMatchmaking(updates);
+    };
+
+    handled = serverRoom.waitForMessage("start");
+    host.send("start", null);
+    await commitEntered;
+    await host.leave();
+    releaseCommit();
+    await handled;
+
+    assert.strictEqual(serverRoom.state.status, "waiting");
+    assert.strictEqual(serverRoom.state.phase, "");
+    assert.strictEqual(serverRoom.state.hostParticipantId, guest.sessionId);
+    assert.strictEqual(serverRoom.state.seats[0].participantId, "");
+    assert.strictEqual(serverRoom.metadata.status, "waiting");
+    assert.strictEqual(serverRoom.metadata.participantCount, 3);
+    const [listing] = await matchMaker.query({ roomId: serverRoom.roomId });
+    assert.strictEqual(listing.private, false);
+    assert.strictEqual(listing.locked, false);
+
+    await guest.leave();
   });
 });
