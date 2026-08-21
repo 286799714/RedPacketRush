@@ -84,9 +84,12 @@ var _final_group_ids: Array = [[], []]
 var _animated_collision_turns: Dictionary = {}
 var _match_identity := ""
 var _last_phase := ""
+var _last_action_id := -1
 
 var _participant_by_seat: Dictionary = {}
 var _local_seat_index := -1
+var _time_source := func() -> float:
+	return Time.get_unix_time_from_system() * 1000.0
 
 
 func set_match_store(store: Object) -> void:
@@ -98,6 +101,12 @@ func set_match_store(store: Object) -> void:
 		_refresh()
 
 
+func set_time_source(source: Callable) -> void:
+	if source.is_valid():
+		_time_source = source
+	_refresh_connection_label()
+
+
 func _ready() -> void:
 	_build_ui()
 	_store = _store_override
@@ -105,6 +114,10 @@ func _ready() -> void:
 	_refresh()
 	_table_area.resized.connect(_on_resized)
 	call_deferred("_on_resized")
+
+
+func _process(_delta: float) -> void:
+	_refresh_connection_label()
 
 
 func _exit_tree() -> void:
@@ -119,6 +132,8 @@ func _bind_store() -> void:
 		_store.state_changed.connect(_on_store_changed)
 	if _store.has_signal("private_state_changed"):
 		_store.private_state_changed.connect(_on_store_changed)
+	if _store.has_signal("connection_changed"):
+		_store.connection_changed.connect(_on_store_changed)
 	if _store.has_signal("action_failed"):
 		_store.action_failed.connect(_on_action_failed)
 
@@ -131,6 +146,8 @@ func _unbind_store() -> void:
 		_bound_store.disconnect("state_changed", callback)
 	if _bound_store.has_signal("private_state_changed") and _bound_store.is_connected("private_state_changed", callback):
 		_bound_store.disconnect("private_state_changed", callback)
+	if _bound_store.has_signal("connection_changed") and _bound_store.is_connected("connection_changed", callback):
+		_bound_store.disconnect("connection_changed", callback)
 	var error_callback := Callable(self, "_on_action_failed")
 	if _bound_store.has_signal("action_failed") and _bound_store.is_connected("action_failed", error_callback):
 		_bound_store.disconnect("action_failed", error_callback)
@@ -527,6 +544,7 @@ func _build_seat_card(seat_index: int) -> PanelContainer:
 	heading.add_child(heading_spacer)
 	var role := _label("", 11, COLOR_GOLD)
 	role.name = "SeatRole%d" % seat_index
+	role.custom_minimum_size = Vector2(84.0, 16.0)
 	role.horizontal_alignment = HORIZONTAL_ALIGNMENT_RIGHT
 	role.clip_text = true
 	role.text_overrun_behavior = TextServer.OVERRUN_TRIM_ELLIPSIS
@@ -556,6 +574,7 @@ func _refresh() -> void:
 		_animated_collision_turns.clear()
 		_match_identity = ""
 		_last_phase = ""
+		_last_action_id = -1
 		_reset_final_editor()
 		_submit_claim_button.visible = false
 		_submit_claim_button.disabled = true
@@ -591,10 +610,15 @@ func _refresh() -> void:
 		_animated_collision_turns.clear()
 		_reset_final_editor()
 		_last_phase = ""
+		_last_action_id = -1
 		_match_identity = match_identity
 	var phase := str(_store.phase)
+	var action_id := int(_store.get("action_id"))
 	var actor_seat_index := int(_store.actor_seat_index)
-	if phase == "final_commit" and _last_phase != "final_commit":
+	if phase == "final_commit" and (
+		_last_phase != "final_commit"
+		or _last_action_id != action_id
+	):
 		_reset_final_editor()
 	if phase == "final_commit" and bool(_store.get("final_committed")):
 		_final_submission_pending = false
@@ -618,7 +642,7 @@ func _refresh() -> void:
 		int(_store.draw_pile_count),
 		int(_store.get("sealed_card_count")),
 	]
-	_connection_label.text = "公开状态"
+	_refresh_connection_label()
 	_refresh_seats(local_seat_index, actor_seat_index)
 	var play_events: Array[Dictionary] = []
 	if _store.has_method("get_play_events"):
@@ -643,6 +667,7 @@ func _refresh() -> void:
 	_refresh_hand()
 	_refresh_action_prompt(phase, actor_seat_index, local_seat_index)
 	_last_phase = phase
+	_last_action_id = action_id
 
 
 func _reset_final_editor() -> void:
@@ -714,8 +739,12 @@ func _refresh_seats(local_seat_index: int, actor_seat_index: int) -> void:
 			role_parts.append("本地")
 		if is_actor:
 			role_parts.append("行动中")
-		if bool(participant.get("is_bot", false)) and occupied:
+		var is_bot := bool(participant.get("is_bot", false))
+		var is_connected := bool(participant.get("is_connected", true))
+		if is_bot and occupied:
 			role_parts.append("机器人")
+		elif occupied and not is_connected:
+			role_parts.append("断线")
 		if is_winner:
 			role_parts.append("共同胜者" if winner_seat_indexes.size() > 1 else "胜者")
 		_seat_position_labels[seat_index].text = _seat_position_text(seat_index, local_seat_index)
@@ -1395,10 +1424,43 @@ func _build_hand_card(
 func _can_select_hand() -> bool:
 	return (
 		_store != null
+		and _is_action_context_ready()
 		and str(_store.phase) == "actor_play"
 		and _local_seat_index >= 0
 		and int(_store.actor_seat_index) == _local_seat_index
 	)
+
+
+func _is_action_context_ready() -> bool:
+	return (
+		_store != null
+		and _store.has_method("is_action_context_ready")
+		and bool(_store.is_action_context_ready())
+	)
+
+
+func _refresh_connection_label() -> void:
+	if _connection_label == null:
+		return
+	if _store == null:
+		_connection_label.text = "等待状态"
+		return
+	var state := str(_store.get("connection_state"))
+	if state == "reconnecting":
+		_connection_label.text = "重连中"
+		return
+	if state != "connected" or not _is_action_context_ready():
+		_connection_label.text = "同步中"
+		return
+	var deadline_at_unix_ms := float(_store.get("action_deadline_at_unix_ms"))
+	if deadline_at_unix_ms <= 0.0:
+		_connection_label.text = "等待"
+		return
+	var remaining_ms := deadline_at_unix_ms - float(_time_source.call())
+	if remaining_ms <= 0.0:
+		_connection_label.text = "等待服务器"
+		return
+	_connection_label.text = "剩余 %d 秒" % ceili(remaining_ms / 1000.0)
 
 
 func _can_select_hand_card(card_id: String, is_protected: bool) -> bool:
@@ -1414,7 +1476,11 @@ func _can_select_hand_card(card_id: String, is_protected: bool) -> bool:
 
 
 func _can_discard_hand() -> bool:
-	return _show_discard_controls() and not _discard_submission_pending
+	return (
+		_show_discard_controls()
+		and _is_action_context_ready()
+		and not _discard_submission_pending
+	)
 
 
 func _show_discard_controls() -> bool:
@@ -1434,7 +1500,11 @@ func _show_final_controls() -> bool:
 
 
 func _can_edit_final_groups() -> bool:
-	return _show_final_controls() and not _final_submission_pending
+	return (
+		_show_final_controls()
+		and _is_action_context_ready()
+		and not _final_submission_pending
+	)
 
 
 func _final_group_index_for_card(card_id: String) -> int:
@@ -1459,6 +1529,7 @@ func _is_local_discard_pending() -> bool:
 func _can_choose_claim() -> bool:
 	return (
 		_show_claim_controls()
+		and _is_action_context_ready()
 		and not _claim_submission_pending
 		and not bool(_store.claim_committed)
 	)
@@ -1632,7 +1703,13 @@ func _refresh_action_prompt(phase: String, actor_seat_index: int, local_seat_ind
 		or not _is_valid_final_groups(_final_group_ids)
 	)
 	_best_final_button.disabled = not _can_edit_final_groups()
-	if phase == "point_contest":
+	if phase in ["actor_play", "claim_commit", "award_discard", "final_commit"] and not _is_action_context_ready():
+		_action_prompt_label.text = (
+			"重连中：等待权威状态"
+			if str(_store.get("connection_state")) == "reconnecting"
+			else "同步中：等待权威状态"
+		)
+	elif phase == "point_contest":
 		_action_prompt_label.text = "拼点进行中：所有公开翻牌后决定首位行动者"
 	elif phase == "actor_play":
 		if actor_seat_index == local_seat_index:

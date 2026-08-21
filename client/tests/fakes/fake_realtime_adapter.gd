@@ -73,38 +73,38 @@ func start_match() -> void:
 	room_requests.append({"type": "start", "payload": null})
 
 
-func play_cards(card_ids: Array[String]) -> void:
+func play_cards(card_ids: Array[String], action_id: int = -1) -> void:
 	room_requests.append({
 		"type": "play_cards",
-		"payload": {"cardIds": card_ids.duplicate()},
+		"payload": {"cardIds": card_ids.duplicate(), "actionId": action_id},
 	})
 
 
-func claim_card(card_id: Variant) -> void:
+func claim_card(card_id: Variant, action_id: int = -1) -> void:
 	room_requests.append({
 		"type": "claim",
-		"payload": {"cardId": card_id},
+		"payload": {"cardId": card_id, "actionId": action_id},
 	})
 
 
-func discard_card(card_id: String, turn_number: int) -> void:
+func discard_card(card_id: String, turn_number: int, action_id: int = -1) -> void:
 	room_requests.append({
 		"type": "discard",
-		"payload": {"cardId": card_id, "turnNumber": turn_number},
+		"payload": {"cardId": card_id, "turnNumber": turn_number, "actionId": action_id},
 	})
 
 
-func submit_final_selection(groups: Array) -> void:
+func submit_final_selection(groups: Array, action_id: int = -1) -> void:
 	room_requests.append({
 		"type": "final_selection",
-		"payload": {"mode": "manual", "groups": groups.duplicate(true)},
+		"payload": {"mode": "manual", "groups": groups.duplicate(true), "actionId": action_id},
 	})
 
 
-func submit_best_final_selection() -> void:
+func submit_best_final_selection(action_id: int = -1) -> void:
 	room_requests.append({
 		"type": "final_selection",
-		"payload": {"mode": "best"},
+		"payload": {"mode": "best", "actionId": action_id},
 	})
 
 

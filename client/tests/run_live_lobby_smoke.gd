@@ -29,6 +29,9 @@ var _opening_public_observed := false
 var _participant_ids_by_adapter: Dictionary = {}
 var _opening_hands_by_adapter: Dictionary = {}
 var _private_message_counts: Dictionary = {}
+var _public_action_ids_by_adapter: Dictionary = {}
+var _private_action_ids_by_adapter: Dictionary = {}
+var _public_phases_by_adapter: Dictionary = {}
 var _private_hand_observed := false
 var _actor_seat_index := -1
 var _actor_participant_id := ""
@@ -36,6 +39,7 @@ var _actor_adapter_index := -1
 var _actor_played_card_ids: Array[String] = []
 var _actor_play_requested := false
 var _claim_commit_observed := false
+var _claim_action_id := -1
 var _actor_replacement_observed := false
 var _claim_requests: Dictionary = {}
 var _claim_confirmations: Dictionary = {}
@@ -208,6 +212,12 @@ func _on_game_room_state_changed(state: Dictionary, participant_index: int) -> v
 			return
 
 	if state.get("status", "") == "started":
+		var action_id := int(state.get("action_id", -1))
+		if action_id <= 0:
+			_fail("participant %d decoded an invalid public action id" % participant_index)
+			return
+		_public_action_ids_by_adapter[participant_index] = action_id
+		_public_phases_by_adapter[participant_index] = str(state.get("phase", ""))
 		if state.get("phase", "") == "claim_reveal":
 			_observe_claim_reveal(state, participant_index)
 		if participant_index == 0:
@@ -306,6 +316,7 @@ func _observe_started_host_state(state: Dictionary, seats: Array) -> void:
 				_fail("public played cards did not match the actor intention")
 				return
 			_claim_commit_observed = true
+			_claim_action_id = int(state.get("action_id", -1))
 			_try_request_claims()
 		"claim_reveal":
 			pass
@@ -319,6 +330,11 @@ func _on_match_private_state_changed(state: Dictionary, participant_index: int) 
 	if participant_id.is_empty() or not hand is Array or hand.size() != 8:
 		_fail("participant %d did not receive a targeted eight-card hand" % participant_index)
 		return
+	var action_id := int(state.get("action_id", -1))
+	if action_id <= 0:
+		_fail("participant %d decoded an invalid private action id" % participant_index)
+		return
+	_private_action_ids_by_adapter[participant_index] = action_id
 	var expected_participant_id := str(_participant_ids_by_adapter.get(participant_index, ""))
 	if not expected_participant_id.is_empty() and participant_id != expected_participant_id:
 		_fail("participant %d received another participant's private hand" % participant_index)
@@ -343,7 +359,7 @@ func _on_match_private_state_changed(state: Dictionary, participant_index: int) 
 		_claim_confirmations[participant_index] = true
 		return
 	if participant_index != _actor_adapter_index:
-		_fail("participant %d received an unexpected private match snapshot" % participant_index)
+		_try_request_claims()
 		return
 	var replacement_ids := _card_ids(hand)
 	for played_card_id in _actor_played_card_ids:
@@ -380,9 +396,15 @@ func _try_request_actor_play() -> void:
 				return
 			selected_ids.append(card_id)
 		_actor_adapter_index = participant_index
+		var action_id := _matching_action_id(participant_index)
+		if (
+			action_id < 0
+			or str(_public_phases_by_adapter.get(participant_index, "")) != "actor_play"
+		):
+			return
 		_actor_played_card_ids = selected_ids
 		_actor_play_requested = true
-		_adapters[participant_index].play_cards(selected_ids)
+		_adapters[participant_index].play_cards(selected_ids, action_id)
 		return
 	_fail("public actor did not map to a connected Native SDK adapter")
 
@@ -394,11 +416,34 @@ func _try_request_claims() -> void:
 		or not _claim_requests.is_empty()
 	):
 		return
+	var action_ids: Dictionary = {}
+	for participant_index in range(PARTICIPANT_NAMES.size()):
+		if participant_index == _actor_adapter_index:
+			continue
+		var action_id := _matching_action_id(participant_index)
+		if (
+			action_id < 0
+			or action_id != _claim_action_id
+			or str(_public_phases_by_adapter.get(participant_index, "")) != "claim_commit"
+		):
+			return
+		action_ids[participant_index] = action_id
 	for participant_index in range(PARTICIPANT_NAMES.size()):
 		if participant_index == _actor_adapter_index:
 			continue
 		_claim_requests[participant_index] = true
-		_adapters[participant_index].claim_card(null)
+		_adapters[participant_index].claim_card(null, int(action_ids[participant_index]))
+
+
+func _matching_action_id(participant_index: int) -> int:
+	if (
+		not _public_action_ids_by_adapter.has(participant_index)
+		or not _private_action_ids_by_adapter.has(participant_index)
+	):
+		return -1
+	var public_action_id := int(_public_action_ids_by_adapter[participant_index])
+	var private_action_id := int(_private_action_ids_by_adapter[participant_index])
+	return public_action_id if public_action_id == private_action_id else -1
 
 
 func _observe_claim_reveal(state: Dictionary, participant_index: int) -> void:

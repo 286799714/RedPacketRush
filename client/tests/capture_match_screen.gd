@@ -8,6 +8,10 @@ class VisualMatchStore extends RefCounted:
 	signal private_state_changed()
 	signal action_failed(code: String, message: String)
 
+	var action_id := 1
+	var private_action_id := 1
+	var action_deadline_at_unix_ms := 0.0
+	var connection_state := "connected"
 	var phase := "actor_play"
 	var actor_seat_index := 0
 	var draw_pile_count := 17
@@ -56,11 +60,20 @@ class VisualMatchStore extends RefCounted:
 	func get_final_events() -> Array[Dictionary]:
 		return final_events
 
+	func get_discard_events() -> Array[Dictionary]:
+		return []
+
+	func get_pending_discard_seat_indexes() -> Array[int]:
+		return []
+
 	func get_local_hand() -> Array[Dictionary]:
 		return local_hand
 
 	func get_final_groups() -> Array:
 		return final_groups
+
+	func is_action_context_ready() -> bool:
+		return connection_state == "connected" and action_id == private_action_id
 
 	func play_cards(_card_ids: Array[String]) -> void:
 		pass
@@ -91,6 +104,10 @@ func _run() -> void:
 		if not await _capture_state("actor_play", viewport_size, output_directory):
 			quit(1)
 			return
+		for visual_state in ["disconnected_human", "bot_takeover", "reconnecting"]:
+			if not await _capture_state("actor_play", viewport_size, output_directory, visual_state):
+				quit(1)
+				return
 		if not await _capture_state("claim_commit", viewport_size, output_directory):
 			quit(1)
 			return
@@ -109,14 +126,15 @@ func _run() -> void:
 func _capture_state(
 	phase: String,
 	viewport_size: Vector2i,
-	output_directory: String
+	output_directory: String,
+	visual_state: String = ""
 ) -> bool:
 	var viewport := SubViewport.new()
 	viewport.size = viewport_size
 	viewport.render_target_update_mode = SubViewport.UPDATE_ALWAYS
 	root.add_child(viewport)
 
-	var store := _make_store(phase)
+	var store := _make_store(phase, visual_state)
 	var screen := MatchScreen.new()
 	screen.set_anchors_and_offsets_preset(Control.PRESET_TOP_LEFT)
 	screen.size = Vector2(viewport_size)
@@ -170,7 +188,8 @@ func _capture_state(
 	for frame in range(3):
 		await process_frame
 	var image := viewport.get_texture().get_image()
-	var filename := "%s-%dx%d.png" % [phase, viewport_size.x, viewport_size.y]
+	var filename_stem := visual_state if not visual_state.is_empty() else phase
+	var filename := "%s-%dx%d.png" % [filename_stem, viewport_size.x, viewport_size.y]
 	var output_path := output_directory.path_join(filename)
 	var save_error := image.save_png(output_path)
 	var nonblank := _has_pixel_variation(image)
@@ -185,7 +204,7 @@ func _capture_state(
 	return true
 
 
-func _make_store(phase: String) -> VisualMatchStore:
+func _make_store(phase: String, visual_state: String = "") -> VisualMatchStore:
 	var store := VisualMatchStore.new()
 	store.phase = phase
 	store.participants = [
@@ -291,6 +310,18 @@ func _make_store(phase: String) -> VisualMatchStore:
 			"results": store.final_results,
 			"winner_seat_indexes": store.winner_seat_indexes,
 		}]
+	match visual_state:
+		"disconnected_human":
+			var disconnected_seat := store.participants[1].duplicate(true)
+			disconnected_seat["is_connected"] = false
+			store.participants[1] = disconnected_seat
+		"bot_takeover":
+			var takeover_seat := store.participants[1].duplicate(true)
+			takeover_seat["is_connected"] = false
+			takeover_seat["is_bot"] = true
+			store.participants[1] = takeover_seat
+		"reconnecting":
+			store.connection_state = "reconnecting"
 	return store
 
 
@@ -298,7 +329,7 @@ func _read_output_directory() -> String:
 	for argument in OS.get_cmdline_user_args():
 		if argument.begins_with("--output-dir="):
 			return argument.trim_prefix("--output-dir=")
-	return ProjectSettings.globalize_path("res://.godot/visual-qa/ticket07")
+	return ProjectSettings.globalize_path("res://.godot/visual-qa/ticket08")
 
 
 func _has_pixel_variation(image: Image) -> bool:
@@ -324,6 +355,7 @@ func _seat(
 		"participant_id": participant_id,
 		"nickname": nickname,
 		"is_bot": is_bot,
+		"is_connected": true,
 		"is_ready": true,
 		"score": score,
 		"hand_count": hand_count,

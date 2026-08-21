@@ -18,6 +18,14 @@ const LOBBY_ROOM_TYPE := "lobby"
 const GAME_ROOM_TYPE := "game"
 const ROOM_SEAT_COUNT := 4
 const MAX_DECK_CARD_COUNT := 104
+const GAME_ROOM_RECONNECTION_OPTIONS := {
+	"enabled": true,
+	"max_retries": 15,
+	"min_delay_ms": 100,
+	"max_delay_ms": 5000,
+	"min_uptime_ms": 0,
+	"delay_ms": 100,
+}
 
 var _client: Variant
 var _lobby_room: Variant
@@ -128,30 +136,41 @@ func start_match() -> void:
 	_send_game_room_message("start")
 
 
-func play_cards(card_ids: Array[String]) -> void:
-	_send_game_room_message("play_cards", {"cardIds": card_ids.duplicate()})
+func play_cards(card_ids: Array[String], action_id: int) -> void:
+	_send_game_room_message("play_cards", {
+		"cardIds": card_ids.duplicate(),
+		"actionId": action_id,
+	})
 
 
-func claim_card(card_id: Variant) -> void:
-	_send_game_room_message("claim", {"cardId": card_id})
+func claim_card(card_id: Variant, action_id: int) -> void:
+	_send_game_room_message("claim", {
+		"cardId": card_id,
+		"actionId": action_id,
+	})
 
 
-func discard_card(card_id: String, turn_number: int) -> void:
+func discard_card(card_id: String, turn_number: int, action_id: int) -> void:
 	_send_game_room_message("discard", {
 		"cardId": card_id,
 		"turnNumber": turn_number,
+		"actionId": action_id,
 	})
 
 
-func submit_final_selection(groups: Array) -> void:
+func submit_final_selection(groups: Array, action_id: int) -> void:
 	_send_game_room_message("final_selection", {
 		"mode": "manual",
 		"groups": groups.duplicate(true),
+		"actionId": action_id,
 	})
 
 
-func submit_best_final_selection() -> void:
-	_send_game_room_message("final_selection", {"mode": "best"})
+func submit_best_final_selection(action_id: int) -> void:
+	_send_game_room_message("final_selection", {
+		"mode": "best",
+		"actionId": action_id,
+	})
 
 
 func _exit_tree() -> void:
@@ -168,6 +187,7 @@ func _watch_game_room(room: Variant) -> void:
 	# its handshake. A stale/full/locked join can therefore never replace it.
 	_cancel_pending_game_room()
 	_pending_game_room = room
+	room.set_reconnection_options(GAME_ROOM_RECONNECTION_OPTIONS)
 	room.set_state_type(GameSchema.GameRoomState)
 	_connect_game_room_callbacks(room)
 
@@ -474,11 +494,13 @@ func _normalize_game_room_state(raw_state: Variant, room: Variant) -> Dictionary
 				var seat_index := int(raw_seat.get("seatIndex", -1))
 				if seat_index < 0 or seat_index >= ROOM_SEAT_COUNT:
 					continue
+				var participant_id := str(raw_seat.get("participantId", ""))
 				seats_by_index[seat_index] = {
 					"seat_index": seat_index,
-					"participant_id": str(raw_seat.get("participantId", "")),
+					"participant_id": participant_id,
 					"nickname": str(raw_seat.get("nickname", "")),
 					"is_bot": bool(raw_seat.get("bot", false)),
+					"is_connected": bool(raw_seat.get("connected", not participant_id.is_empty())),
 					"is_ready": bool(raw_seat.get("ready", false)),
 					"score": int(raw_seat.get("score", 0)),
 					"hand_count": int(raw_seat.get("handCount", 0)),
@@ -490,6 +512,7 @@ func _normalize_game_room_state(raw_state: Variant, room: Variant) -> Dictionary
 			"participant_id": "",
 			"nickname": "",
 			"is_bot": false,
+			"is_connected": false,
 			"is_ready": false,
 			"score": 0,
 			"hand_count": 0,
@@ -504,6 +527,8 @@ func _normalize_game_room_state(raw_state: Variant, room: Variant) -> Dictionary
 		"action_deadline_seconds": int(raw_state.get("actionDeadlineSeconds", 30)),
 		"host_participant_id": str(raw_state.get("hostParticipantId", "")),
 		"phase": str(raw_state.get("phase", "")),
+		"action_id": maxi(0, int(raw_state.get("actionId", 0))),
+		"action_deadline_at_unix_ms": maxf(0.0, float(raw_state.get("actionDeadlineAtUnixMs", 0.0))),
 		"actor_seat_index": int(raw_state.get("actorSeatIndex", -1)),
 		"first_actor_seat_index": int(raw_state.get("firstActorSeatIndex", -1)),
 		"draw_pile_count": int(raw_state.get("drawPileCount", 0)),
@@ -926,7 +951,7 @@ func _normalize_match_private_state(raw_state: Variant, room: Variant) -> Dictio
 			return {}
 		card_ids[card["id"]] = true
 		hand.append(card)
-	return {
+	var snapshot := {
 		"participant_id": participant_id,
 		"seat_index": seat_index,
 		"hand": hand,
@@ -935,6 +960,9 @@ func _normalize_match_private_state(raw_state: Variant, room: Variant) -> Dictio
 		"final_committed": bool(raw_state.get("finalCommitted", false)),
 		"final_groups": _normalize_final_groups(raw_state.get("finalGroups", [])),
 	}
+	if raw_state.has("actionId"):
+		snapshot["action_id"] = maxi(0, int(raw_state.get("actionId", 0)))
+	return snapshot
 
 
 func _dictionary_from_schema(value: Variant) -> Variant:

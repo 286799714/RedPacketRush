@@ -13,6 +13,8 @@ var local_participant_id := ""
 var status := ""
 var deck_mode := "one"
 var phase := ""
+var action_id := -1
+var action_deadline_at_unix_ms := 0.0
 var actor_seat_index := -1
 var draw_pile_count := 0
 var sealed_card_count := 0
@@ -22,6 +24,7 @@ var played_score := 0
 var claim_committed := false
 var claim_card_id: Variant = null
 var final_committed := false
+var connection_state := "disconnected"
 
 var _adapter: Object
 var _participants: Array[Dictionary] = []
@@ -37,6 +40,9 @@ var _final_events: Array[Dictionary] = []
 var _local_hand: Array[Dictionary] = []
 var _final_groups: Array = []
 var _activated := false
+var _private_action_id := -1
+var _public_action_snapshot_fresh := false
+var _private_action_snapshot_fresh := false
 
 
 func _init(adapter: Object) -> void:
@@ -48,6 +54,8 @@ func _init(adapter: Object) -> void:
 	_adapter.game_room_left.connect(_on_game_room_left)
 	if _adapter.has_signal("game_room_connection_changed"):
 		_adapter.game_room_connection_changed.connect(_on_game_room_connection_changed)
+	if _adapter.has_signal("game_room_joined"):
+		_adapter.game_room_joined.connect(_on_game_room_joined)
 
 
 func get_participants() -> Array[Dictionary]:
@@ -98,6 +106,15 @@ func get_final_groups() -> Array:
 	return _final_groups.duplicate(true)
 
 
+func is_action_context_ready() -> bool:
+	return (
+		connection_state == "connected"
+		and _public_action_snapshot_fresh
+		and _private_action_snapshot_fresh
+		and action_id == _private_action_id
+	)
+
+
 func _duplicate_dictionary_array(source: Array[Dictionary]) -> Array[Dictionary]:
 	var result: Array[Dictionary] = []
 	for item in source:
@@ -106,23 +123,33 @@ func _duplicate_dictionary_array(source: Array[Dictionary]) -> Array[Dictionary]
 
 
 func play_cards(card_ids: Array[String]) -> void:
-	_adapter.play_cards(card_ids.duplicate())
+	if not is_action_context_ready():
+		return
+	_adapter.play_cards(card_ids.duplicate(), action_id)
 
 
 func claim_card(card_id: Variant) -> void:
-	_adapter.claim_card(card_id)
+	if not is_action_context_ready():
+		return
+	_adapter.claim_card(card_id, action_id)
 
 
 func discard_card(card_id: String, expected_turn_number: int) -> void:
-	_adapter.discard_card(card_id, expected_turn_number)
+	if not is_action_context_ready():
+		return
+	_adapter.discard_card(card_id, expected_turn_number, action_id)
 
 
 func submit_final_selection(groups: Array) -> void:
-	_adapter.submit_final_selection(groups.duplicate(true))
+	if not is_action_context_ready():
+		return
+	_adapter.submit_final_selection(groups.duplicate(true), action_id)
 
 
 func submit_best_final_selection() -> void:
-	_adapter.submit_best_final_selection()
+	if not is_action_context_ready():
+		return
+	_adapter.submit_best_final_selection(action_id)
 
 
 func _on_game_room_state_changed(snapshot: Dictionary) -> void:
@@ -131,6 +158,9 @@ func _on_game_room_state_changed(snapshot: Dictionary) -> void:
 	status = str(snapshot.get("status", ""))
 	deck_mode = str(snapshot.get("deck_mode", "one"))
 	phase = str(snapshot.get("phase", ""))
+	action_id = int(snapshot.get("action_id", -1))
+	action_deadline_at_unix_ms = float(snapshot.get("action_deadline_at_unix_ms", 0.0))
+	_public_action_snapshot_fresh = snapshot.has("action_id")
 	actor_seat_index = int(snapshot.get("actor_seat_index", -1))
 	draw_pile_count = int(snapshot.get("draw_pile_count", 0))
 	sealed_card_count = int(snapshot.get("sealed_card_count", 0))
@@ -148,6 +178,7 @@ func _on_game_room_state_changed(snapshot: Dictionary) -> void:
 					"participant_id": str(raw_seat.get("participant_id", "")),
 					"nickname": str(raw_seat.get("nickname", "")),
 					"is_bot": bool(raw_seat.get("is_bot", false)),
+					"is_connected": bool(raw_seat.get("is_connected", false)),
 					"is_ready": bool(raw_seat.get("is_ready", false)),
 					"score": int(raw_seat.get("score", 0)),
 					"hand_count": int(raw_seat.get("hand_count", 0)),
@@ -236,6 +267,8 @@ func _on_match_private_state_changed(snapshot: Dictionary) -> void:
 	claim_committed = bool(snapshot.get("claim_committed", false))
 	claim_card_id = snapshot.get("claim_card_id", null)
 	final_committed = bool(snapshot.get("final_committed", false))
+	_private_action_id = int(snapshot.get("action_id", -1))
+	_private_action_snapshot_fresh = snapshot.has("action_id")
 	_final_groups.clear()
 	var raw_final_groups: Variant = snapshot.get("final_groups", [])
 	if raw_final_groups is Array:
@@ -248,7 +281,22 @@ func _on_room_action_failed(code: String, message: String) -> void:
 
 
 func _on_game_room_connection_changed(state: String, detail: String) -> void:
+	connection_state = state
+	if state != "connected":
+		_public_action_snapshot_fresh = false
+		_private_action_snapshot_fresh = false
 	connection_changed.emit(state, detail)
+
+
+func _on_game_room_joined(_joined_room_id: String) -> void:
+	# A successful join starts a new transport generation. Old room snapshots
+	# must never authorize an action in the replacement room.
+	action_id = -1
+	action_deadline_at_unix_ms = 0.0
+	_private_action_id = -1
+	_public_action_snapshot_fresh = false
+	_private_action_snapshot_fresh = false
+	state_changed.emit()
 
 
 func _on_game_room_left(code: int, reason: String) -> void:
@@ -257,6 +305,8 @@ func _on_game_room_left(code: int, reason: String) -> void:
 	status = ""
 	deck_mode = "one"
 	phase = ""
+	action_id = -1
+	action_deadline_at_unix_ms = 0.0
 	actor_seat_index = -1
 	draw_pile_count = 0
 	sealed_card_count = 0
@@ -266,6 +316,10 @@ func _on_game_room_left(code: int, reason: String) -> void:
 	claim_committed = false
 	claim_card_id = null
 	final_committed = false
+	connection_state = "disconnected"
+	_private_action_id = -1
+	_public_action_snapshot_fresh = false
+	_private_action_snapshot_fresh = false
 	_participants.clear()
 	_contest_rounds.clear()
 	_played_cards.clear()

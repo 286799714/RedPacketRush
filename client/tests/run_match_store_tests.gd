@@ -13,12 +13,15 @@ func _init() -> void:
 func _run() -> void:
 	_test_started_snapshot_activates_match_once()
 	_test_deck_mode_follows_room_snapshot_and_resets_on_leave()
+	_test_public_continuity_state_is_retained()
 	_test_public_collections_are_sanitized_deep_copies()
 	_test_public_play_state_is_retained_deep_copied_and_cleared()
 	_test_public_claim_progress_is_not_retained()
 	_test_public_claim_event_history_is_retained_deep_copied_and_cleared()
 	_test_public_discard_state_is_retained_deep_copied_and_cleared()
 	_test_public_final_settlement_is_retained_deep_copied_and_cleared()
+	_test_action_context_requires_connected_fresh_matching_snapshots()
+	_test_new_room_generation_invalidates_action_context()
 	_test_play_cards_intention_is_forwarded_without_optimistic_state()
 	_test_claim_intention_is_forwarded_without_optimistic_state()
 	_test_discard_intention_is_forwarded_without_optimistic_state()
@@ -87,6 +90,25 @@ func _test_deck_mode_follows_room_snapshot_and_resets_on_leave() -> void:
 	_expect_equal(match_store.get("deck_mode"), "one", "离房重置为一副牌模式")
 
 
+func _test_public_continuity_state_is_retained() -> void:
+	var adapter := FakeRealtimeAdapter.new()
+	var match_store := MatchStore.new(adapter)
+	var snapshot := _started_snapshot("room-a", "human-a", 20)
+	snapshot["action_id"] = 17
+	snapshot["action_deadline_at_unix_ms"] = 1787317245123.0
+	snapshot["seats"][1]["is_connected"] = false
+
+	adapter.publish_game_room_state(snapshot)
+
+	_expect_equal(match_store.get("action_id"), 17, "保存公开动作编号")
+	_expect_equal(
+		match_store.get("action_deadline_at_unix_ms"),
+		1787317245123.0,
+		"保存绝对动作截止时间"
+	)
+	_expect_equal(match_store.get_participants()[1].get("is_connected"), false, "保存席位断线状态")
+
+
 func _test_public_collections_are_sanitized_deep_copies() -> void:
 	var adapter := FakeRealtimeAdapter.new()
 	var match_store := MatchStore.new(adapter)
@@ -101,6 +123,7 @@ func _test_public_collections_are_sanitized_deep_copies() -> void:
 		"participant_id",
 		"nickname",
 		"is_bot",
+		"is_connected",
 		"is_ready",
 		"score",
 		"hand_count",
@@ -315,13 +338,88 @@ func _test_public_final_settlement_is_retained_deep_copied_and_cleared() -> void
 	_expect_equal(match_store.get_final_events(), [], "离房清空终局事件")
 
 
+func _test_action_context_requires_connected_fresh_matching_snapshots() -> void:
+	var adapter := FakeRealtimeAdapter.new()
+	var match_store := MatchStore.new(adapter)
+	if not match_store.has_method("is_action_context_ready"):
+		_failures.append("MatchStore 应公开权威动作上下文是否就绪")
+		return
+	adapter.publish_game_room_connection_state("connected")
+	_expect_equal(match_store.is_action_context_ready(), false, "只有连接状态时仍等待动作快照")
+
+	var public_snapshot := _started_snapshot("room-a", "human-a", 20)
+	public_snapshot["action_id"] = 31
+	adapter.publish_game_room_state(public_snapshot)
+	_expect_equal(match_store.is_action_context_ready(), false, "只有公开动作编号时仍不可操作")
+	adapter.publish_match_private_state({
+		"participant_id": "human-a",
+		"action_id": 30,
+		"hand": [],
+	})
+	_expect_equal(match_store.is_action_context_ready(), false, "公开私有动作编号不一致时不可操作")
+	adapter.publish_match_private_state({
+		"participant_id": "human-a",
+		"action_id": 31,
+		"hand": [],
+	})
+	_expect_equal(match_store.is_action_context_ready(), true, "连接且两份动作编号一致时可操作")
+	adapter.publish_game_room_state(public_snapshot)
+	_expect_equal(match_store.is_action_context_ready(), true, "同一动作的普通公开刷新保持可操作")
+
+	adapter.publish_game_room_connection_state("reconnecting", "网络中断")
+	_expect_equal(match_store.is_action_context_ready(), false, "重连期间立即关闭动作上下文")
+	adapter.publish_game_room_connection_state("connected")
+	_expect_equal(match_store.is_action_context_ready(), false, "传输恢复后仍等待新权威快照")
+	adapter.publish_game_room_state(public_snapshot)
+	_expect_equal(match_store.is_action_context_ready(), false, "重连后仅刷新公开状态仍不可操作")
+	adapter.publish_match_private_state({
+		"participant_id": "human-a",
+		"action_id": 31,
+		"hand": [],
+	})
+	_expect_equal(match_store.is_action_context_ready(), true, "重连后两份新快照配对才恢复操作")
+
+
+func _test_new_room_generation_invalidates_action_context() -> void:
+	var adapter := FakeRealtimeAdapter.new()
+	var match_store := MatchStore.new(adapter)
+	adapter.publish_game_room_connection_state("connected")
+	var old_snapshot := _started_snapshot("room-a", "human-a", 20)
+	old_snapshot["action_id"] = 9
+	adapter.publish_game_room_state(old_snapshot)
+	adapter.publish_match_private_state({
+		"participant_id": "human-a",
+		"action_id": 9,
+		"hand": [],
+	})
+	_expect_equal(match_store.is_action_context_ready(), true, "旧房间双快照配对后可操作")
+
+	adapter.publish_game_room_joined("room-b")
+	_expect_equal(match_store.is_action_context_ready(), false, "新房间 joined 立即撤销旧动作资格")
+	_expect_equal(match_store.action_id, -1, "新房间 joined 清除旧公开动作编号")
+
+	var new_snapshot := _started_snapshot("room-b", "human-a", 20)
+	new_snapshot["action_id"] = 9
+	adapter.publish_game_room_state(new_snapshot)
+	_expect_equal(match_store.is_action_context_ready(), false, "新房间仅公开快照仍不可操作")
+	adapter.publish_match_private_state({
+		"participant_id": "human-a",
+		"action_id": 9,
+		"hand": [],
+	})
+	_expect_equal(match_store.is_action_context_ready(), true, "新房间双快照重新配对后恢复操作")
+
+
 func _test_play_cards_intention_is_forwarded_without_optimistic_state() -> void:
 	var adapter := FakeRealtimeAdapter.new()
 	var match_store := MatchStore.new(adapter)
 	if not match_store.has_method("play_cards"):
 		_failures.append("MatchStore 应公开 play_cards 意图")
 		return
-	adapter.publish_game_room_state(_started_snapshot("room-a", "human-a", 20))
+	adapter.publish_game_room_connection_state("connected")
+	var public_snapshot := _started_snapshot("room-a", "human-a", 20)
+	public_snapshot["action_id"] = 71
+	adapter.publish_game_room_state(public_snapshot)
 	var local_hand := [
 		_card("local-2", 2, "clubs", 0),
 		_card("local-3", 3, "clubs", 0),
@@ -329,6 +427,7 @@ func _test_play_cards_intention_is_forwarded_without_optimistic_state() -> void:
 	]
 	adapter.publish_match_private_state({
 		"participant_id": "human-a",
+		"action_id": 71,
 		"hand": local_hand,
 	})
 	var selected_card_ids: Array[String] = ["local-2", "local-3", "local-4"]
@@ -337,8 +436,8 @@ func _test_play_cards_intention_is_forwarded_without_optimistic_state() -> void:
 
 	_expect_equal(adapter.room_requests, [{
 		"type": "play_cards",
-		"payload": {"cardIds": ["local-2", "local-3", "local-4"]},
-	}], "出牌意图转发到 adapter")
+		"payload": {"cardIds": ["local-2", "local-3", "local-4"], "actionId": 71},
+	}], "出牌意图附当前权威动作编号转发到 adapter")
 	_expect_equal(match_store.get_local_hand(), local_hand, "发送后等待权威私有手牌")
 	_expect_equal(match_store.get_played_cards(), [], "发送后等待权威公开出牌")
 	_expect_equal(match_store.played_score, 0, "发送后不乐观加分")
@@ -352,21 +451,28 @@ func _test_claim_intention_is_forwarded_without_optimistic_state() -> void:
 		return
 	var snapshot := _started_snapshot("room-a", "human-a", 17)
 	snapshot["phase"] = "claim_commit"
+	snapshot["action_id"] = 72
 	snapshot["actor_seat_index"] = 2
 	snapshot["played_cards"] = [
 		_card("played-queen", 12, "hearts", 0),
 		_card("played-king", 13, "hearts", 0),
 		_card("played-ace", 14, "hearts", 0),
 	]
+	adapter.publish_game_room_connection_state("connected")
 	adapter.publish_game_room_state(snapshot)
+	adapter.publish_match_private_state({
+		"participant_id": "human-a",
+		"action_id": 72,
+		"hand": [],
+	})
 
 	match_store.claim_card("played-ace")
 	match_store.claim_card(null)
 
 	_expect_equal(adapter.room_requests, [
-		{"type": "claim", "payload": {"cardId": "played-ace"}},
-		{"type": "claim", "payload": {"cardId": null}},
-	], "抢牌与不抢意图转发到 adapter")
+		{"type": "claim", "payload": {"cardId": "played-ace", "actionId": 72}},
+		{"type": "claim", "payload": {"cardId": null, "actionId": 72}},
+	], "抢牌与不抢意图附当前权威动作编号转发到 adapter")
 	_expect_equal(match_store.get_played_cards(), snapshot["played_cards"], "发送后等待权威抢牌揭晓")
 	_expect_equal(match_store.phase, "claim_commit", "发送后不乐观推进阶段")
 
@@ -379,13 +485,16 @@ func _test_discard_intention_is_forwarded_without_optimistic_state() -> void:
 		return
 	var snapshot := _started_snapshot("room-a", "human-a", 17)
 	snapshot["phase"] = "award_discard"
+	snapshot["action_id"] = 73
 	snapshot["pending_discard_seat_indexes"] = [0]
+	adapter.publish_game_room_connection_state("connected")
 	adapter.publish_game_room_state(snapshot)
 	var hand: Array[Dictionary] = []
 	for rank in range(2, 11):
 		hand.append(_card("local-%d" % rank, rank, "clubs", 0))
 	adapter.publish_match_private_state({
 		"participant_id": "human-a",
+		"action_id": 73,
 		"hand": hand,
 	})
 
@@ -393,8 +502,8 @@ func _test_discard_intention_is_forwarded_without_optimistic_state() -> void:
 
 	_expect_equal(adapter.room_requests, [{
 		"type": "discard",
-		"payload": {"cardId": "local-2", "turnNumber": 2},
-	}], "弃牌意图转发到 adapter")
+		"payload": {"cardId": "local-2", "turnNumber": 2, "actionId": 73},
+	}], "弃牌意图附当前权威动作编号转发到 adapter")
 	_expect_equal(match_store.get_local_hand(), hand, "发送后等待权威私有手牌")
 	_expect_equal(match_store.get_pending_discard_seat_indexes(), [0], "发送后等待权威待弃席位")
 	_expect_equal(match_store.phase, "award_discard", "发送后不乐观推进阶段")
@@ -411,9 +520,12 @@ func _test_final_selection_intentions_are_forwarded_without_optimistic_state() -
 		return
 	var snapshot := _started_snapshot("room-a", "human-a", 0)
 	snapshot["phase"] = "final_commit"
+	snapshot["action_id"] = 74
+	adapter.publish_game_room_connection_state("connected")
 	adapter.publish_game_room_state(snapshot)
 	adapter.publish_match_private_state({
 		"participant_id": "human-a",
+		"action_id": 74,
 		"hand": [],
 		"final_committed": false,
 		"final_groups": [],
@@ -429,13 +541,13 @@ func _test_final_selection_intentions_are_forwarded_without_optimistic_state() -
 	_expect_equal(adapter.room_requests, [
 		{
 			"type": "final_selection",
-			"payload": {"mode": "manual", "groups": groups},
+			"payload": {"mode": "manual", "groups": groups, "actionId": 74},
 		},
 		{
 			"type": "final_selection",
-			"payload": {"mode": "best"},
+			"payload": {"mode": "best", "actionId": 74},
 		},
-	], "最终选择意图转发到 adapter")
+	], "最终选择意图附当前权威动作编号转发到 adapter")
 	_expect_equal(match_store.final_committed, false, "发送后等待权威最终确认")
 	_expect_equal(match_store.get_final_groups(), [], "发送后不乐观写入最终分组")
 	_expect_equal(match_store.get_final_results(), [], "发送后不乐观生成终局结果")

@@ -15,6 +15,7 @@ class FakeRoom extends RefCounted:
 	var session_id := "session-a"
 	var leave_count := 0
 	var sent_messages: Array[Dictionary] = []
+	var reconnection_options: Array[Dictionary] = []
 	var state: Variant = {}
 	var state_type: Variant
 
@@ -35,6 +36,9 @@ class FakeRoom extends RefCounted:
 
 	func send_message(type: Variant, data: Variant = null) -> void:
 		sent_messages.append({"type": type, "data": data})
+
+	func set_reconnection_options(options: Dictionary) -> void:
+		reconnection_options.append(options.duplicate(true))
 
 	func leave() -> void:
 		leave_count += 1

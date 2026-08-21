@@ -15,11 +15,13 @@ func _run() -> void:
 	_test_failed_retry_preserves_active_room()
 	_test_new_attempt_detaches_old_pending_room()
 	_test_null_retry_preserves_active_room()
+	_test_game_room_watcher_configures_thirty_second_auto_reconnect()
 	_test_play_cards_intention_is_sent_to_active_room()
 	_test_claim_intentions_are_sent_to_active_room()
 	_test_discard_intention_is_sent_to_active_room()
 	_test_final_selection_intentions_are_sent_to_active_room()
 	_test_match_public_state_is_normalized_without_private_fields()
+	_test_match_continuity_fields_are_normalized_from_whitelist()
 	_test_public_play_state_is_normalized_from_whitelisted_fields()
 	_test_public_claim_reveal_is_normalized_from_whitelisted_fields()
 	_test_public_discard_history_is_not_truncated_to_one_turn()
@@ -27,6 +29,7 @@ func _run() -> void:
 	_test_public_discard_state_is_normalized_from_whitelisted_fields()
 	_test_public_final_settlement_is_normalized_without_private_progress()
 	_test_only_local_match_private_state_is_normalized()
+	_test_local_private_action_id_is_normalized()
 	_test_local_claim_confirmation_is_normalized_privately()
 	_test_local_final_confirmation_is_normalized_privately()
 
@@ -143,6 +146,25 @@ func _test_null_retry_preserves_active_room() -> void:
 	adapter.queue_free()
 
 
+func _test_game_room_watcher_configures_thirty_second_auto_reconnect() -> void:
+	var adapter := _new_adapter()
+	var client := FakeColyseusClient.new()
+	adapter._client = client
+	var room := client.queue_join_room("continuity-room")
+
+	adapter.join_game_room("continuity-room", "甲")
+
+	_expect_equal(room.reconnection_options, [{
+		"enabled": true,
+		"max_retries": 15,
+		"min_delay_ms": 100,
+		"max_delay_ms": 5000,
+		"min_uptime_ms": 0,
+		"delay_ms": 100,
+	}], "比赛房间自动重连覆盖 30 秒保留窗口且不等待稳定在线时间")
+	adapter.queue_free()
+
+
 func _test_play_cards_intention_is_sent_to_active_room() -> void:
 	var adapter := _new_adapter()
 	var client := FakeColyseusClient.new()
@@ -156,12 +178,12 @@ func _test_play_cards_intention_is_sent_to_active_room() -> void:
 		adapter.queue_free()
 		return
 
-	adapter.play_cards(selected_card_ids)
+	adapter.play_cards(selected_card_ids, 41)
 
 	_expect_equal(room.sent_messages, [{
 		"type": "play_cards",
-		"data": {"cardIds": ["card-c", "card-a", "card-b"]},
-	}], "出牌意图应发送物理牌标识")
+		"data": {"cardIds": ["card-c", "card-a", "card-b"], "actionId": 41},
+	}], "出牌意图应发送物理牌标识与当前动作编号")
 	adapter.queue_free()
 
 
@@ -177,13 +199,13 @@ func _test_claim_intentions_are_sent_to_active_room() -> void:
 		adapter.queue_free()
 		return
 
-	adapter.claim_card("played-hearts-a")
-	adapter.claim_card(null)
+	adapter.claim_card("played-hearts-a", 42)
+	adapter.claim_card(null, 42)
 
 	_expect_equal(room.sent_messages, [
-		{"type": "claim", "data": {"cardId": "played-hearts-a"}},
-		{"type": "claim", "data": {"cardId": null}},
-	], "抢牌与不抢意图应保留实体牌标识或 null")
+		{"type": "claim", "data": {"cardId": "played-hearts-a", "actionId": 42}},
+		{"type": "claim", "data": {"cardId": null, "actionId": 42}},
+	], "抢牌与不抢意图应保留实体牌标识、null 与当前动作编号")
 	adapter.queue_free()
 
 
@@ -199,12 +221,12 @@ func _test_discard_intention_is_sent_to_active_room() -> void:
 		adapter.queue_free()
 		return
 
-	adapter.discard_card("original-clubs-2", 6)
+	adapter.discard_card("original-clubs-2", 6, 43)
 
 	_expect_equal(room.sent_messages, [{
 		"type": "discard",
-		"data": {"cardId": "original-clubs-2", "turnNumber": 6},
-	}], "弃牌意图应发送原手牌的物理牌标识")
+		"data": {"cardId": "original-clubs-2", "turnNumber": 6, "actionId": 43},
+	}], "弃牌意图应发送原手牌标识、回合与当前动作编号")
 	adapter.queue_free()
 
 
@@ -227,19 +249,19 @@ func _test_final_selection_intentions_are_sent_to_active_room() -> void:
 		["hearts-q", "hearts-k", "hearts-a"],
 	]
 
-	adapter.submit_final_selection(groups)
-	adapter.submit_best_final_selection()
+	adapter.submit_final_selection(groups, 44)
+	adapter.submit_best_final_selection(44)
 
 	_expect_equal(room.sent_messages, [
 		{
 			"type": "final_selection",
-			"data": {"mode": "manual", "groups": groups},
+			"data": {"mode": "manual", "groups": groups, "actionId": 44},
 		},
 		{
 			"type": "final_selection",
-			"data": {"mode": "best"},
+			"data": {"mode": "best", "actionId": 44},
 		},
-	], "最终选择意图应保留物理牌标识并区分手动与最佳模式")
+	], "最终选择意图应保留物理牌标识、当前动作编号并区分模式")
 	adapter.queue_free()
 
 
@@ -311,6 +333,42 @@ func _test_match_public_state_is_normalized_without_private_fields() -> void:
 	}], "拼点历史规范化")
 	_expect_equal(snapshot.has("hand"), false, "公开快照丢弃本地手牌")
 	_expect_equal(snapshot.has("hands"), false, "公开快照丢弃其他手牌")
+	adapter.queue_free()
+
+
+func _test_match_continuity_fields_are_normalized_from_whitelist() -> void:
+	var adapter := _new_adapter()
+	var client := FakeColyseusClient.new()
+	adapter._client = client
+	var observed := {"snapshot": {}}
+	adapter.game_room_state_changed.connect(
+		func(snapshot: Dictionary): observed["snapshot"] = snapshot
+	)
+	var room := client.queue_join_room("continuity-room")
+	adapter.join_game_room("continuity-room", "甲")
+	room.emit_joined()
+	var disconnected_seat := _raw_seat(1, "session-b", "乙", false, 6, 8)
+	disconnected_seat["connected"] = false
+	disconnected_seat["reconnectionToken"] = "must-not-pass"
+	room.emit_state({
+		"status": "started",
+		"phase": "actor_play",
+		"actionId": 41,
+		"actionDeadlineAtUnixMs": 1787317245123.0,
+		"seats": [disconnected_seat],
+		"reconnectionToken": "must-not-pass",
+	})
+
+	var snapshot: Dictionary = observed["snapshot"]
+	_expect_equal(snapshot.get("action_id"), 41, "公开动作编号规范化")
+	_expect_equal(
+		snapshot.get("action_deadline_at_unix_ms"),
+		1787317245123.0,
+		"绝对动作截止时间规范化为浮点毫秒"
+	)
+	_expect_equal(snapshot["seats"][1].get("is_connected"), false, "断线席位状态规范化")
+	_expect_equal(snapshot.has("reconnection_token"), false, "公开快照不透传重连凭证")
+	_expect_equal(snapshot["seats"][1].has("reconnectionToken"), false, "席位仅保留连接状态白名单")
 	adapter.queue_free()
 
 
@@ -427,6 +485,31 @@ func _test_only_local_match_private_state_is_normalized() -> void:
 		"final_committed": false,
 		"final_groups": [],
 	}], "仅规范化本地参与者私有手牌")
+	adapter.queue_free()
+
+
+func _test_local_private_action_id_is_normalized() -> void:
+	var adapter := _new_adapter()
+	var client := FakeColyseusClient.new()
+	adapter._client = client
+	var observed := {"snapshot": {}}
+	adapter.match_private_state_changed.connect(
+		func(snapshot: Dictionary): observed["snapshot"] = snapshot
+	)
+	var room := client.queue_join_room("private-action-room")
+	adapter.join_game_room("private-action-room", "甲")
+	room.emit_joined()
+	room.message_received.emit("match_private_state", {
+		"participantId": "session-a",
+		"seatIndex": 0,
+		"actionId": 57,
+		"hand": [],
+		"reconnectionToken": "must-not-pass",
+	})
+
+	var snapshot: Dictionary = observed["snapshot"]
+	_expect_equal(snapshot.get("action_id"), 57, "本地私有动作编号规范化")
+	_expect_equal(snapshot.has("reconnection_token"), false, "私有快照不透传重连凭证")
 	adapter.queue_free()
 
 

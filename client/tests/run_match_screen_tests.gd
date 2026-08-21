@@ -9,9 +9,14 @@ class FakeMatchStore extends RefCounted:
 	signal state_changed()
 	signal private_state_changed()
 	signal action_failed(code: String, message: String)
+	signal connection_changed(state: String, detail: String)
 	signal final_selection_requested(mode: String, groups: Array)
 
 	var phase := "actor_play"
+	var action_id := 1
+	var private_action_id := 1
+	var action_deadline_at_unix_ms := 0.0
+	var connection_state := "connected"
 	var actor_seat_index := 2
 	var draw_pile_count := 20
 	var sealed_card_count := 0
@@ -73,6 +78,9 @@ class FakeMatchStore extends RefCounted:
 	func get_final_events() -> Array[Dictionary]:
 		return _final_events
 
+	func is_action_context_ready() -> bool:
+		return connection_state == "connected" and action_id == private_action_id
+
 	func play_cards(card_ids: Array[String]) -> void:
 		play_requests.append(card_ids.duplicate())
 
@@ -100,6 +108,10 @@ class FakeMatchStore extends RefCounted:
 			deck_mode = str(snapshot["deck_mode"])
 		if snapshot.has("phase"):
 			phase = str(snapshot["phase"])
+		if snapshot.has("action_id"):
+			action_id = int(snapshot["action_id"])
+		if snapshot.has("action_deadline_at_unix_ms"):
+			action_deadline_at_unix_ms = float(snapshot["action_deadline_at_unix_ms"])
 		if snapshot.has("actor_seat_index"):
 			actor_seat_index = int(snapshot["actor_seat_index"])
 		if snapshot.has("draw_pile_count"):
@@ -135,6 +147,8 @@ class FakeMatchStore extends RefCounted:
 		state_changed.emit()
 
 	func apply_private_snapshot(snapshot: Dictionary) -> void:
+		if snapshot.has("action_id"):
+			private_action_id = int(snapshot["action_id"])
 		_apply_dictionary_array(snapshot, "hand", _local_hand)
 		if snapshot.has("claim_committed"):
 			claim_committed = bool(snapshot["claim_committed"])
@@ -148,6 +162,10 @@ class FakeMatchStore extends RefCounted:
 
 	func reject_action(code: String, message: String) -> void:
 		action_failed.emit(code, message)
+
+	func publish_connection_state(state: String, detail: String = "") -> void:
+		connection_state = state
+		connection_changed.emit(state, detail)
 
 	func publish() -> void:
 		state_changed.emit()
@@ -215,6 +233,8 @@ func _run() -> void:
 
 	_test_four_seats_are_visible(screen, Vector2(960, 540), 2)
 	_test_public_header_and_contest_history_are_visible(screen)
+	await _test_deadline_header_uses_absolute_server_time(screen, store)
+	await _test_disconnected_seat_and_bot_takeover_are_visible(screen, store)
 	_expect_equal(screen._hand_cards.size(), 0, "拼点展示期间尚未收到私有手牌")
 	for rank in [2, 5, 8, 11, 12, 13, 14, 10]:
 		store._local_hand.append(_card("local-%s" % rank, rank, "hearts" if rank >= 11 else "clubs", 0))
@@ -222,9 +242,12 @@ func _run() -> void:
 	await process_frame
 	await process_frame
 	_test_local_hand_is_readable_and_private(screen)
+	await _test_actor_controls_wait_for_matching_action_context(screen, store)
+	await _test_reconnecting_signal_disables_actor_controls(screen, store)
 	await _test_only_local_actor_can_select_exactly_three_and_play(screen, store)
 	await _test_claim_commit_shows_played_combination(screen, store)
 	await _test_actor_only_sees_claim_waiting_state(screen, store)
+	await _test_claim_controls_wait_for_matching_action_context(screen, store)
 	await _test_non_actor_can_choose_one_claim_or_pass(screen, store)
 	await _test_selected_claim_submits_physical_id_and_stays_pending(screen, store)
 	await _test_private_claim_confirmation_shows_waiting_state(screen, store)
@@ -291,6 +314,56 @@ func _test_public_header_and_contest_history_are_visible(screen: MatchScreen) ->
 		_expect(reveal.get_global_rect().end.x <= screen._contest_panel.get_global_rect().end.x, "中央公开翻牌不被裁出")
 
 
+func _test_deadline_header_uses_absolute_server_time(
+	screen: MatchScreen,
+	store: FakeMatchStore
+) -> void:
+	if not screen.has_method("set_time_source"):
+		_failures.append("MatchScreen 应允许注入时间源以确定性显示绝对截止时间")
+		return
+	var clock := {"unix_ms": 100000.0}
+	screen.set_time_source(func() -> float: return float(clock["unix_ms"]))
+	store.action_deadline_at_unix_ms = 112400.0
+	store.publish()
+	await process_frame
+	_expect_equal(screen._connection_label.text, "剩余 13 秒", "绝对截止时间向上取整显示剩余秒数")
+	clock["unix_ms"] = 111500.0
+	await process_frame
+	_expect_equal(screen._connection_label.text, "剩余 1 秒", "倒计时随时间推进且布局不依赖新快照")
+	clock["unix_ms"] = 112500.0
+	await process_frame
+	_expect_equal(screen._connection_label.text, "等待服务器", "本地倒计时结束后等待权威阶段推进")
+	store.action_deadline_at_unix_ms = 0.0
+	store.publish()
+	await process_frame
+
+
+func _test_disconnected_seat_and_bot_takeover_are_visible(
+	screen: MatchScreen,
+	store: FakeMatchStore
+) -> void:
+	store._participants[1]["is_connected"] = false
+	store._participants[1]["is_bot"] = false
+	store.publish()
+	await process_frame
+	await process_frame
+	_expect(screen._seat_role_labels[1].text.contains("断线"), "他席人类断线有明确可见标记")
+	_expect(screen._seat_role_labels[1].get_global_rect().size.x >= 30.0, "断线标记保持可见宽度")
+
+	store._participants[1]["is_bot"] = true
+	store.publish()
+	await process_frame
+	await process_frame
+	_expect(screen._seat_role_labels[1].text.contains("机器人"), "断线宽限期后显示机器人接管")
+	_expect(screen._seat_role_labels[1].get_global_rect().size.x >= 30.0, "机器人接管标记保持可见宽度")
+	_expect(not screen._seat_role_labels[1].text.contains("断线"), "机器人接管标记优先于旧断线状态")
+	store._participants[1]["is_bot"] = false
+	store._participants[1]["is_connected"] = true
+	store.publish()
+	await process_frame
+	await process_frame
+
+
 func _test_local_hand_is_readable_and_private(screen: MatchScreen) -> void:
 	_expect_equal(screen._hand_cards.size(), 8, "本地手牌八张")
 	for card in screen._hand_cards:
@@ -302,6 +375,59 @@ func _test_local_hand_is_readable_and_private(screen: MatchScreen) -> void:
 		_expect(card_text.contains("♣") or card_text.contains("♥"), "本地牌同时显示花色符号")
 	_expect(screen._hand_title_label.text.contains("8"), "本地手牌数量显示")
 	_expect(not _node_text(screen).contains("secret-opponent-card"), "不显示对手私有牌面")
+
+
+func _test_actor_controls_wait_for_matching_action_context(
+	screen: MatchScreen,
+	store: FakeMatchStore
+) -> void:
+	store.action_id = 8
+	store.private_action_id = 7
+	store.actor_seat_index = 0
+	store.publish()
+	await process_frame
+	await process_frame
+	for hand_card in screen._hand_cards:
+		_expect(hand_card.disabled, "公开私有动作编号未配对时手牌不可操作")
+	_expect(screen._play_button.disabled, "公开私有动作编号未配对时出牌不可操作")
+	_expect(_find_visible_label_containing(screen, "同步中") != null, "半份动作快照显示同步中")
+
+	store.private_action_id = 8
+	store.private_state_changed.emit()
+	await process_frame
+	await process_frame
+	_expect(not screen._hand_cards[0].disabled, "动作编号配对后恢复选牌")
+	store.actor_seat_index = 2
+	store.publish()
+	await process_frame
+	await process_frame
+
+
+func _test_reconnecting_signal_disables_actor_controls(
+	screen: MatchScreen,
+	store: FakeMatchStore
+) -> void:
+	store.actor_seat_index = 0
+	store.action_id = 12
+	store.private_action_id = 12
+	store.publish()
+	await process_frame
+	await process_frame
+	_expect(not screen._hand_cards[0].disabled, "重连前权威动作可操作")
+
+	store.publish_connection_state("reconnecting", "网络中断")
+	await process_frame
+	await process_frame
+	_expect(screen._hand_cards.all(func(card: Button): return card.disabled), "重连期间全部手牌不可操作")
+	_expect(_find_visible_label_containing(screen, "重连中") != null, "连接掉线后显示重连中")
+	store.publish_connection_state("connected")
+	await process_frame
+	await process_frame
+	_expect(not screen._hand_cards[0].disabled, "权威上下文恢复后重新允许操作")
+	store.actor_seat_index = 2
+	store.publish()
+	await process_frame
+	await process_frame
 
 
 func _test_only_local_actor_can_select_exactly_three_and_play(
@@ -407,6 +533,36 @@ func _test_actor_only_sees_claim_waiting_state(
 	_expect(waiting_label != null, "行动者看到等待其他参与者抢牌")
 	if waiting_label != null:
 		_expect(not waiting_label.text.contains("/3"), "行动者等待状态不泄露提交进度")
+
+
+func _test_claim_controls_wait_for_matching_action_context(
+	screen: MatchScreen,
+	store: FakeMatchStore
+) -> void:
+	store.actor_seat_index = 1
+	store.action_id = 9
+	store.private_action_id = 8
+	store.publish()
+	await process_frame
+	await process_frame
+	var claim_card := _find_visible_button(screen, "Q ♥ 红桃")
+	var pass_button := _find_visible_button(screen, "不抢")
+	_expect(claim_card != null and claim_card.disabled, "抢牌动作编号未配对时牌面不可操作")
+	_expect(pass_button != null and pass_button.disabled, "抢牌动作编号未配对时不抢不可操作")
+	_expect(_find_visible_label_containing(screen, "同步中") != null, "抢牌半份快照显示同步中")
+
+	store.private_action_id = 9
+	store.private_state_changed.emit()
+	await process_frame
+	await process_frame
+	claim_card = _find_visible_button(screen, "Q ♥ 红桃")
+	pass_button = _find_visible_button(screen, "不抢")
+	_expect(claim_card != null and not claim_card.disabled, "抢牌动作编号配对后恢复牌面")
+	_expect(pass_button != null and not pass_button.disabled, "抢牌动作编号配对后恢复不抢")
+	store.actor_seat_index = 0
+	store.publish()
+	await process_frame
+	await process_frame
 
 
 func _test_non_actor_can_choose_one_claim_or_pass(
@@ -760,6 +916,7 @@ func _test_award_recipient_discards_an_original_card(
 	store.apply_private_snapshot({"hand": nine_card_hand})
 	await process_frame
 	await process_frame
+	await _assert_discard_controls_wait_for_matching_action_context(screen, store)
 
 	_expect(_find_visible_label_containing(screen, "阶段：弃牌") != null, "领取牌后进入可见弃牌阶段")
 	_expect(_find_visible_label_containing(screen, "我的手牌（9）") != null, "领取者在弃牌前显示九张手牌")
@@ -826,6 +983,26 @@ func _test_award_recipient_discards_an_original_card(
 	_expect(_find_visible_button(screen, "弃牌") == null, "弃牌完成后隐藏提交命令")
 	_expect(_find_visible_label_containing(screen, "行动者：机器人丙") != null, "下一回合显示权威行动者")
 	_expect(_find_visible_label_containing(screen, "甲 弃置") != null, "公开历史显示领取者弃掉的牌")
+
+
+func _assert_discard_controls_wait_for_matching_action_context(
+	screen: MatchScreen,
+	store: FakeMatchStore
+) -> void:
+	store.action_id = 10
+	store.private_action_id = 9
+	store.publish()
+	await process_frame
+	await process_frame
+	var original_card := _find_visible_button_with_content(screen, "2")
+	_expect(original_card != null and original_card.disabled, "弃牌动作编号未配对时原手牌不可操作")
+	_expect(_find_visible_label_containing(screen, "同步中") != null, "弃牌半份快照显示同步中")
+	store.private_action_id = 10
+	store.private_state_changed.emit()
+	await process_frame
+	await process_frame
+	original_card = _find_visible_button_with_content(screen, "2")
+	_expect(original_card != null and not original_card.disabled, "弃牌动作编号配对后恢复原手牌")
 
 
 func _test_discard_rejection_and_non_recipient_waiting(
@@ -938,6 +1115,7 @@ func _test_final_group_editor_locks_exactly_two_groups(
 	store.apply_public_snapshot({
 		"room_id": "final-editor-room",
 		"phase": "final_commit",
+		"action_id": 11,
 		"actor_seat_index": -1,
 		"draw_pile_count": 0,
 		"sealed_card_count": 2,
@@ -948,6 +1126,7 @@ func _test_final_group_editor_locks_exactly_two_groups(
 		"final_events": [],
 	})
 	store.apply_private_snapshot({
+		"action_id": 10,
 		"hand": _final_hand(),
 		"final_committed": false,
 		"final_groups": [],
@@ -964,6 +1143,19 @@ func _test_final_group_editor_locks_exactly_two_groups(
 		_failures.append("最终选择阶段应提供 A/B 分组、锁定和最佳选择命令")
 		store.final_selection_requested.disconnect(observe_request)
 		return
+	_expect(group_a_button.disabled and group_b_button.disabled, "终局动作编号未配对时分组模式不可操作")
+	_expect(best_button.disabled, "终局动作编号未配对时最佳选择不可操作")
+	_expect(screen._hand_cards.all(func(card: Button): return card.disabled), "终局动作编号未配对时手牌不可操作")
+	_expect(_find_visible_label_containing(screen, "同步中") != null, "终局半份快照显示同步中")
+	store.apply_private_snapshot({"action_id": 11})
+	await process_frame
+	await process_frame
+	group_a_button = _find_visible_button(screen, "A 组")
+	group_b_button = _find_visible_button(screen, "B 组")
+	lock_button = _find_visible_button(screen, "锁定分组")
+	best_button = _find_visible_button(screen, "最佳并锁定")
+	_expect(group_a_button != null and not group_a_button.disabled, "终局动作编号配对后恢复分组模式")
+	_expect(best_button != null and not best_button.disabled, "终局动作编号配对后恢复最佳选择")
 	_expect(group_a_button.button_pressed, "进入终局时默认编辑 A 组")
 	_expect(lock_button.disabled, "未完成 3+3 分组时不能锁定")
 	var editor_prompt := _find_visible_label_containing(screen, "最终结算：A/B 各选 3 张")
@@ -998,7 +1190,6 @@ func _test_final_group_editor_locks_exactly_two_groups(
 	group_b_card = _find_visible_button_with_content(screen, "5♠")
 	_expect(group_a_card != null and _node_text(group_a_card).contains("A组"), "刷新后保留 A 组 badge")
 	_expect(group_b_card != null and _node_text(group_b_card).contains("B组"), "刷新后保留 B 组 badge")
-
 	lock_button.pressed.emit()
 	_expect_equal(observed_requests, [{
 		"mode": "manual",
@@ -1041,6 +1232,15 @@ func _test_final_group_editor_locks_exactly_two_groups(
 		committed_card != null and committed_card.disabled and _node_text(committed_card).contains("A组"),
 		"权威分组以只读 badge 展示"
 	)
+	store.apply_private_snapshot({"final_committed": false, "final_groups": []})
+	store.apply_public_snapshot({"action_id": 12})
+	await process_frame
+	await process_frame
+	_expect(screen._final_group_ids == [[], []], "终局动作编号变化时清空上一动作的本地分组")
+	_expect(_find_visible_label_containing(screen, "同步中") != null, "终局新动作等待私有权威快照")
+	# Keep the shared fixture aligned for the following independent screen slice.
+	store.action_id = 11
+	store.private_action_id = 11
 	store.final_selection_requested.disconnect(observe_request)
 
 
