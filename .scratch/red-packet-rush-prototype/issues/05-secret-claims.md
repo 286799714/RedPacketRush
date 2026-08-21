@@ -4,7 +4,7 @@
 
 **Blocked by:** 04 - Play and score a combination.
 
-**Status:** ready-for-agent
+**Status:** in-progress
 
 - [ ] Only the three non-actors can commit one valid played-card identifier or pass during claim commit.
 - [ ] A commit is acknowledged only to its owner and no unrevealed choice appears in shared state or another client's messages.
