@@ -10,7 +10,8 @@ import {
   type MatchPhase,
   type PublicMatchState,
 } from "../match/MatchEngine.js";
-import { SeededRandomSource } from "../match/random.js";
+import { chooseBotCommand, type BotCommand } from "../match/botPolicy.js";
+import { SeededRandomSource, type RandomSource } from "../match/random.js";
 import {
   CardDiscardedEventState,
   ClaimAwardState,
@@ -171,6 +172,8 @@ export class GameRoom extends Room<{
   public maxClients = 4;
   private matchmakingPrivate = false;
   private matchEngine: MatchEngine | null = null;
+  private botRandom: RandomSource | null = null;
+  private botTimer: { clear(): void } | null = null;
   private phaseTimer: { clear(): void } | null = null;
   private startInProgress = false;
 
@@ -379,6 +382,7 @@ export class GameRoom extends Room<{
       const matchEngine = new MatchEngine(new SeededRandomSource(
         randomInt(1, 0x1_0000_0000),
       ));
+      const botRandom = new SeededRandomSource(randomInt(1, 0x1_0000_0000));
       matchEngine.start(
         this.state.seats.map((seat) => ({
           seatIndex: seat.seatIndex,
@@ -407,6 +411,7 @@ export class GameRoom extends Room<{
       }
 
       this.matchEngine = matchEngine;
+      this.botRandom = botRandom;
       this.state.status = "started";
       this.autoDispose = false;
       this.enterMatchPhase(matchEngine, publicMatchState);
@@ -438,7 +443,7 @@ export class GameRoom extends Room<{
     }
 
     try {
-      this.matchEngine.playCards(seatIndex, message.cardIds);
+      this.submitPlay(this.matchEngine, seatIndex, message.cardIds);
     } catch (error) {
       if (error instanceof MatchCommandError) {
         this.sendRoomError(client, { code: error.code, message: error.message });
@@ -446,7 +451,6 @@ export class GameRoom extends Room<{
       }
       throw error;
     }
-    this.enterMatchPhase(this.matchEngine, this.matchEngine.view(seatIndex).publicState);
     this.sendPrivateMatchState(client);
   }
 
@@ -475,20 +479,18 @@ export class GameRoom extends Room<{
     const cardId = message.cardId as string | null;
 
     try {
-      this.matchEngine.commitClaim(seatIndex, cardId);
+      const transitioned = this.submitClaim(this.matchEngine, seatIndex, cardId);
+      if (transitioned) {
+        this.sendPrivateMatchStates();
+      } else {
+        this.sendPrivateMatchState(client);
+      }
     } catch (error) {
       if (error instanceof MatchCommandError) {
         this.sendRoomError(client, { code: error.code, message: error.message });
         return;
       }
       throw error;
-    }
-    const publicState = this.matchEngine.view(seatIndex).publicState;
-    if (publicState.phase === "claim_commit") {
-      this.sendPrivateMatchState(client);
-    } else {
-      this.enterMatchPhase(this.matchEngine, publicState);
-      this.sendPrivateMatchStates();
     }
   }
 
@@ -518,19 +520,18 @@ export class GameRoom extends Room<{
     }
 
     try {
-      this.matchEngine.discardCard(seatIndex, message.cardId, message.turnNumber as number);
+      this.submitDiscard(
+        this.matchEngine,
+        seatIndex,
+        message.cardId,
+        message.turnNumber as number,
+      );
     } catch (error) {
       if (error instanceof MatchCommandError) {
         this.sendRoomError(client, { code: error.code, message: error.message });
         return;
       }
       throw error;
-    }
-    const publicState = this.matchEngine.view(seatIndex).publicState;
-    if (publicState.phase === "award_discard") {
-      this.applyPublicMatchState(publicState);
-    } else {
-      this.enterMatchPhase(this.matchEngine, publicState);
     }
     this.sendPrivateMatchStates();
   }
@@ -576,9 +577,10 @@ export class GameRoom extends Room<{
 
     try {
       if (message.mode === "best") {
-        this.matchEngine.commitBestFinalSelection(seatIndex);
+        this.submitBestFinalSelection(this.matchEngine, seatIndex);
       } else {
-        this.matchEngine.commitFinalSelection(
+        this.submitFinalSelection(
+          this.matchEngine,
           seatIndex,
           message.groups as readonly (readonly string[])[],
         );
@@ -591,12 +593,69 @@ export class GameRoom extends Room<{
       throw error;
     }
 
-    const publicState = this.matchEngine.view(seatIndex).publicState;
-    if (publicState.phase === "final_commit") {
+    if (this.state.phase === "final_commit") {
       this.sendPrivateMatchState(client);
     } else {
-      this.enterMatchPhase(this.matchEngine, publicState);
       this.sendPrivateMatchStates();
+    }
+  }
+
+  private submitPlay(
+    matchEngine: MatchEngine,
+    seatIndex: number,
+    cardIds: readonly string[],
+  ): void {
+    matchEngine.playCards(seatIndex, cardIds);
+    this.enterMatchPhase(matchEngine, matchEngine.view(seatIndex).publicState);
+  }
+
+  private submitClaim(
+    matchEngine: MatchEngine,
+    seatIndex: number,
+    cardId: string | null,
+  ): boolean {
+    matchEngine.commitClaim(seatIndex, cardId);
+    const publicState = matchEngine.view(seatIndex).publicState;
+    if (publicState.phase === "claim_commit") {
+      return false;
+    }
+    this.enterMatchPhase(matchEngine, publicState);
+    return true;
+  }
+
+  private submitDiscard(
+    matchEngine: MatchEngine,
+    seatIndex: number,
+    cardId: string,
+    turnNumber: number,
+  ): void {
+    matchEngine.discardCard(seatIndex, cardId, turnNumber);
+    const publicState = matchEngine.view(seatIndex).publicState;
+    if (publicState.phase === "award_discard") {
+      this.applyPublicMatchState(publicState);
+      return;
+    }
+    this.enterMatchPhase(matchEngine, publicState);
+  }
+
+  private submitBestFinalSelection(matchEngine: MatchEngine, seatIndex: number): void {
+    matchEngine.commitBestFinalSelection(seatIndex);
+    this.projectFinalSelection(matchEngine, seatIndex);
+  }
+
+  private submitFinalSelection(
+    matchEngine: MatchEngine,
+    seatIndex: number,
+    groups: readonly (readonly string[])[],
+  ): void {
+    matchEngine.commitFinalSelection(seatIndex, groups);
+    this.projectFinalSelection(matchEngine, seatIndex);
+  }
+
+  private projectFinalSelection(matchEngine: MatchEngine, seatIndex: number): void {
+    const publicState = matchEngine.view(seatIndex).publicState;
+    if (publicState.phase !== "final_commit") {
+      this.enterMatchPhase(matchEngine, publicState);
     }
   }
 
@@ -605,6 +664,7 @@ export class GameRoom extends Room<{
     publicState: PublicMatchState = matchEngine.view(0).publicState,
   ): void {
     this.clearPhaseTimer();
+    this.clearBotTimer();
     if (this.state.actionId >= MAX_ACTION_ID) {
       throw new Error("match exhausted its action id range");
     }
@@ -620,6 +680,7 @@ export class GameRoom extends Room<{
       this.autoDispose = true;
     }
     if (delayMilliseconds === null) {
+      this.scheduleBotAction(matchEngine);
       return;
     }
 
@@ -639,6 +700,95 @@ export class GameRoom extends Room<{
       this.resolvePhaseTimer(matchEngine, phase);
     }, delayMilliseconds);
     this.phaseTimer = timer;
+    this.scheduleBotAction(matchEngine);
+  }
+
+  private scheduleBotAction(matchEngine: MatchEngine): void {
+    if (this.botTimer !== null || this.botRandom === null) {
+      return;
+    }
+    const seatIndex = this.nextBotSeatIndex(matchEngine);
+    if (seatIndex === null) {
+      return;
+    }
+    const phase = this.state.phase;
+    const actionId = this.state.actionId;
+    const timer = this.clock.setTimeout(() => {
+      if (this.botTimer !== timer) {
+        return;
+      }
+      this.botTimer = null;
+      if (
+        this.matchEngine !== matchEngine
+        || this.state.phase !== phase
+        || this.state.actionId !== actionId
+        || !this.state.seats[seatIndex]?.bot
+      ) {
+        return;
+      }
+      const command = chooseBotCommand(matchEngine.view(seatIndex), this.botRandom!);
+      if (command === null) {
+        return;
+      }
+      this.executeBotCommand(matchEngine, seatIndex, command);
+      this.scheduleBotAction(matchEngine);
+    }, 0);
+    this.botTimer = timer;
+  }
+
+  private nextBotSeatIndex(matchEngine: MatchEngine): number | null {
+    if (this.state.phase === "actor_play") {
+      const actorSeat = this.state.seats[this.state.actorSeatIndex];
+      return actorSeat?.bot ? actorSeat.seatIndex : null;
+    }
+    for (const seat of this.state.seats) {
+      if (seat.participantId === "" || !seat.bot) {
+        continue;
+      }
+      const privateState = matchEngine.view(seat.seatIndex).privateState;
+      if (
+        (
+          this.state.phase === "claim_commit"
+          && seat.seatIndex !== this.state.actorSeatIndex
+          && !privateState.claimCommitted
+        )
+        || (
+          this.state.phase === "award_discard"
+          && this.state.pendingDiscardSeatIndexes.includes(seat.seatIndex)
+        )
+        || (this.state.phase === "final_commit" && !privateState.finalCommitted)
+      ) {
+        return seat.seatIndex;
+      }
+    }
+    return null;
+  }
+
+  private executeBotCommand(
+    matchEngine: MatchEngine,
+    seatIndex: number,
+    command: BotCommand,
+  ): void {
+    if (command.type === "play_cards") {
+      this.submitPlay(matchEngine, seatIndex, command.cardIds);
+      return;
+    }
+    if (command.type === "claim") {
+      if (this.submitClaim(matchEngine, seatIndex, command.cardId)) {
+        this.sendPrivateMatchStates();
+      }
+      return;
+    }
+    if (command.type === "discard") {
+      this.submitDiscard(matchEngine, seatIndex, command.cardId, command.turnNumber);
+      this.sendPrivateMatchStates();
+      return;
+    }
+    const phase = this.state.phase;
+    this.submitBestFinalSelection(matchEngine, seatIndex);
+    if (this.state.phase !== phase) {
+      this.sendPrivateMatchStates();
+    }
   }
 
   private resolvePhaseTimer(matchEngine: MatchEngine, phase: MatchPhase): void {
@@ -696,6 +846,11 @@ export class GameRoom extends Room<{
   private clearPhaseTimer(): void {
     this.phaseTimer?.clear();
     this.phaseTimer = null;
+  }
+
+  private clearBotTimer(): void {
+    this.botTimer?.clear();
+    this.botTimer = null;
   }
 
   private applyPublicMatchState(publicState: PublicMatchState): void {
