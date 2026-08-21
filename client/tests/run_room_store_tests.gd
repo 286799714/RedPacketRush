@@ -38,7 +38,7 @@ func _test_public_snapshot_derives_local_room_capabilities() -> void:
 		"action_deadline_seconds": 60,
 		"host_participant_id": "human-a",
 		"seats": [
-			_seat(0, "human-a", "甲", false, false),
+			_seat(0, "human-a", "甲", false, true),
 			_seat(1, "human-b", "乙", false, true),
 			_seat(2, "bot-c", "机器人 3", true, true),
 			_seat(3, "", "", false, false),
@@ -50,10 +50,10 @@ func _test_public_snapshot_derives_local_room_capabilities() -> void:
 	_expect_equal(room.action_deadline_seconds, 60, "行动时限")
 	_expect_equal(room.get_seats().size(), 4, "固定四席")
 	_expect_equal(room.is_local_host(), true, "本地房主")
-	_expect_equal(room.is_local_ready(), false, "本地准备状态")
+	_expect_equal(room.is_local_ready(), true, "房主始终准备")
 	_expect_equal(room.can_configure(), true, "房主可配置")
 	_expect_equal(room.can_fill_bots(), true, "有空座可填机器人")
-	_expect_equal(room.can_toggle_ready(), true, "人类可切换准备")
+	_expect_equal(room.can_toggle_ready(), false, "房主不能取消准备")
 	_expect_equal(room.can_start(), false, "未满座不能开始")
 
 

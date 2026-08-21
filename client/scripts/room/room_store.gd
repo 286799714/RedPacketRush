@@ -55,7 +55,7 @@ func can_fill_bots() -> bool:
 
 
 func can_toggle_ready() -> bool:
-	if status != "waiting":
+	if status != "waiting" or is_local_host():
 		return false
 	for seat in _seats:
 		if str(seat.get("participant_id", "")) == local_participant_id:

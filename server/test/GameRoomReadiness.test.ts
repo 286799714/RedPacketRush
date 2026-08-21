@@ -78,7 +78,7 @@ describe("four-participant room readiness", () => {
           participantId: host.sessionId,
           nickname: "甲",
           bot: false,
-          ready: false,
+          ready: true,
           connected: true,
           score: 0,
           handCount: 0,
@@ -132,17 +132,36 @@ describe("four-participant room readiness", () => {
       actionDeadlineSeconds: 30,
     });
     await new Promise<void>((resolve) => host.onStateChange.once(() => resolve()));
+    const guest = await colyseus.sdk.joinById(host.roomId, { nickname: "乙" });
     const serverRoom = colyseus.getRoomById<GameRoom>(host.roomId);
     const handled = serverRoom.waitForMessage("set_ready");
 
-    host.send("set_ready", { ready: true });
+    guest.send("set_ready", { ready: true });
+    await handled;
+
+    assert.strictEqual(serverRoom.state.seats[1].ready, true);
+    await guest.leave();
+    await host.leave();
+  });
+
+  it("keeps the waiting host ready when it sends a false readiness update", async () => {
+    const host = await colyseus.sdk.create("game", {
+      nickname: "甲",
+      displayName: "房主准备测试",
+      deckMode: "one",
+      actionDeadlineSeconds: 30,
+    });
+    const serverRoom = colyseus.getRoomById<GameRoom>(host.roomId);
+    const handled = serverRoom.waitForMessage("set_ready");
+
+    host.send("set_ready", { ready: false });
     await handled;
 
     assert.strictEqual(serverRoom.state.seats[0].ready, true);
     await host.leave();
   });
 
-  it("lets the host configure the room and clears human readiness", async () => {
+  it("keeps the host ready when configuration clears other human readiness", async () => {
     const host = await colyseus.sdk.create("game", {
       nickname: "甲",
       displayName: "配置测试",
@@ -153,9 +172,6 @@ describe("four-participant room readiness", () => {
     const serverRoom = colyseus.getRoomById<GameRoom>(host.roomId);
 
     let handled = serverRoom.waitForMessage("set_ready");
-    host.send("set_ready", { ready: true });
-    await handled;
-    handled = serverRoom.waitForMessage("set_ready");
     guest.send("set_ready", { ready: true });
     await handled;
 
@@ -167,7 +183,7 @@ describe("four-participant room readiness", () => {
     assert.strictEqual(serverRoom.state.actionDeadlineSeconds, 60);
     assert.deepStrictEqual(
       Array.from(serverRoom.state.seats, (seat) => seat.ready),
-      [false, false, false, false],
+      [true, false, false, false],
     );
     assert.deepStrictEqual(serverRoom.metadata, {
       displayName: "配置测试",
@@ -362,18 +378,34 @@ describe("four-participant room readiness", () => {
     assert.strictEqual(serverRoom.metadata.participantCount, 4);
     assert.strictEqual(serverRoom.locked, true);
 
-    let nextHandled = serverRoom.waitForMessage("set_ready");
-    host.send("set_ready", { ready: true });
-    await nextHandled;
-    nextHandled = serverRoom.waitForMessage("configure");
+    const nextHandled = serverRoom.waitForMessage("configure");
     host.send("configure", { deckMode: "two", actionDeadlineSeconds: 60 });
     await nextHandled;
     assert.deepStrictEqual(
       serverRoom.state.seats.toArray().map((seat) => seat.ready),
-      [false, true, true, true],
+      [true, true, true, true],
     );
 
     await host.leave();
+  });
+
+  it("leaves an empty seat unready when no human can inherit the host", async () => {
+    const host = await colyseus.sdk.create("game", {
+      nickname: "甲",
+      displayName: "空房主测试",
+      deckMode: "one",
+      actionDeadlineSeconds: 30,
+    });
+    const serverRoom = colyseus.getRoomById<GameRoom>(host.roomId);
+    const handled = serverRoom.waitForMessage("fill_bots");
+    host.send("fill_bots");
+    await handled;
+
+    await host.leave();
+
+    assert.strictEqual(serverRoom.state.hostParticipantId, "");
+    assert.strictEqual(serverRoom.state.seats[0].participantId, "");
+    assert.strictEqual(serverRoom.state.seats[0].ready, false);
   });
 
   it("keeps a bot-filled room joinable when the host leaves during persistence", async () => {
@@ -506,13 +538,14 @@ describe("four-participant room readiness", () => {
     await host.leave();
   });
 
-  it("rejects start until all four seats are occupied and ready", async () => {
+  it("rejects start until every non-host human participant is ready", async () => {
     const host = await colyseus.sdk.create("game", {
       nickname: "甲",
       displayName: "开始条件测试",
       deckMode: "one",
       actionDeadlineSeconds: 30,
     });
+    const guest = await colyseus.sdk.joinById(host.roomId, { nickname: "乙" });
     const serverRoom = colyseus.getRoomById<GameRoom>(host.roomId);
     let handled = serverRoom.waitForMessage("fill_bots");
     host.send("fill_bots");
@@ -530,6 +563,7 @@ describe("four-participant room readiness", () => {
     assert.strictEqual(serverRoom.state.status, "waiting");
     assert.strictEqual(serverRoom.metadata.status, "waiting");
 
+    await guest.leave();
     await host.leave();
   });
 
@@ -562,7 +596,7 @@ describe("four-participant room readiness", () => {
     await host.leave();
   });
 
-  it("starts a fully ready room exactly once and closes matchmaking", async () => {
+  it("starts a room with a ready host and bots without a readiness command", async () => {
     const host = await colyseus.sdk.create("game", {
       nickname: "甲",
       displayName: "正式开始测试",
@@ -572,9 +606,6 @@ describe("four-participant room readiness", () => {
     const serverRoom = colyseus.getRoomById<GameRoom>(host.roomId);
     let handled = serverRoom.waitForMessage("fill_bots");
     host.send("fill_bots");
-    await handled;
-    handled = serverRoom.waitForMessage("set_ready");
-    host.send("set_ready", { ready: true });
     await handled;
 
     const privateStateReceived = host.waitForMessage("match_private_state", 2000);
@@ -626,6 +657,7 @@ describe("four-participant room readiness", () => {
       handCount: 0,
     });
     assert.strictEqual(serverRoom.state.hostParticipantId, guest.sessionId);
+    assert.strictEqual(serverRoom.state.seats[1].ready, true);
     assert.strictEqual(serverRoom.metadata.participantCount, 3);
     assert.strictEqual(serverRoom.locked, false);
 

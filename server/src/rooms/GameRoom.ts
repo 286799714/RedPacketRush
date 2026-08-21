@@ -249,6 +249,7 @@ export class GameRoom extends Room<{
     client.userData = { seatIndex: seat.seatIndex };
     if (this.state.hostParticipantId === "") {
       this.state.hostParticipantId = client.sessionId;
+      this.ensureWaitingHostReady();
     }
     await this.synchronizeMatchmaking();
   }
@@ -322,6 +323,7 @@ export class GameRoom extends Room<{
     seat.clear();
     if (wasHost) {
       this.state.hostParticipantId = this.findNextHumanParticipantId(seatIndex);
+      this.ensureWaitingHostReady();
     }
     await this.synchronizeMatchmakingEventually();
   }
@@ -383,6 +385,10 @@ export class GameRoom extends Room<{
       this.sendRoomError(client, ROOM_ERRORS.noSeat);
       return;
     }
+    if (seat.participantId === this.state.hostParticipantId) {
+      this.ensureWaitingHostReady();
+      return;
+    }
     seat.ready = message.ready;
   }
 
@@ -410,7 +416,11 @@ export class GameRoom extends Room<{
     this.state.deckMode = message.deckMode;
     this.state.actionDeadlineSeconds = message.actionDeadlineSeconds;
     for (const seat of this.state.seats) {
-      if (seat.participantId !== "" && !seat.bot) {
+      if (
+        seat.participantId !== ""
+        && !seat.bot
+        && seat.participantId !== this.state.hostParticipantId
+      ) {
         seat.ready = false;
       }
     }
@@ -638,6 +648,18 @@ export class GameRoom extends Room<{
       }
     }
     return "";
+  }
+
+  private ensureWaitingHostReady(): void {
+    if (this.state.hostParticipantId === "") {
+      return;
+    }
+    const hostSeat = this.state.seats.find(
+      (candidate) => candidate.participantId === this.state.hostParticipantId,
+    );
+    if (hostSeat && !hostSeat.bot) {
+      hostSeat.ready = true;
+    }
   }
 
   private playCards(client: Client, message: unknown): void {
