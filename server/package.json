@@ -1,8 +1,8 @@
 {
   "private": true,
   "name": "red-packet-rush-server",
-  "version": "0.17.0",
-  "description": "npm init template for bootstrapping an empty Colyseus project",
+  "version": "0.1.0",
+  "description": "Authoritative Colyseus server for the Red Packet Rush four-participant card-game prototype",
   "type": "module",
   "main": "build/index.js",
   "engines": {
@@ -16,12 +16,8 @@
     "clean": "rimraf build",
     "test": "mocha -r tsx test/**.test.ts --exit --timeout 15000"
   },
-  "author": "",
+  "author": "Red Packet Rush",
   "license": "UNLICENSED",
-  "bugs": {
-    "url": "https://github.com/colyseus/create-colyseus/issues"
-  },
-  "homepage": "https://github.com/colyseus/create-colyseus#readme",
   "devDependencies": {
     "@colyseus/loadtest": "^0.17.7",
     "@colyseus/sdk": "^0.17.17",
