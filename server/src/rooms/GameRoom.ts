@@ -1,12 +1,21 @@
+import { randomInt } from "node:crypto";
 import { Client, Room } from "colyseus";
 
-import { GameRoomState } from "./schema/GameRoomState.js";
+import { DECK_MODES, type DeckMode } from "../match/cards.js";
+import {
+  ACTION_DEADLINES,
+  MatchEngine,
+  type ActionDeadlineSeconds,
+  type PublicMatchState,
+} from "../match/MatchEngine.js";
+import { SeededRandomSource } from "../match/random.js";
+import {
+  GameRoomState,
+  PointContestRoundState,
+} from "./schema/GameRoomState.js";
 
-export const DECK_MODES = ["one", "two"] as const;
-export type DeckMode = (typeof DECK_MODES)[number];
-
-export const ACTION_DEADLINES = [15, 30, 60] as const;
-export type ActionDeadlineSeconds = (typeof ACTION_DEADLINES)[number];
+export { ACTION_DEADLINES, DECK_MODES };
+export type { ActionDeadlineSeconds, DeckMode };
 
 export type GameRoomStatus = "waiting" | "started";
 
@@ -43,7 +52,11 @@ const ROOM_ERRORS = {
   noSeat: { code: "not_participant", message: "当前连接没有占用座位" },
   notReady: { code: "not_ready", message: "需要四个已准备座位才能开始" },
   readyPhase: { code: "invalid_phase", message: "房间当前不能修改准备状态" },
+  startFailed: { code: "start_failed", message: "对局启动失败，请重试" },
+  startInProgress: { code: "start_in_progress", message: "对局正在启动" },
 } as const satisfies Record<string, RoomError>;
+
+const POINT_CONTEST_DISPLAY_MILLISECONDS = 900;
 
 function isRecordLike(value: unknown): value is RecordLike {
   return typeof value === "object" && value !== null && !Array.isArray(value);
@@ -131,6 +144,8 @@ export class GameRoom extends Room<{
 }> {
   public maxClients = 4;
   private matchmakingPrivate = false;
+  private matchEngine: MatchEngine | null = null;
+  private startInProgress = false;
 
   public override async setPrivate(isPrivate = true, persist = true): Promise<void> {
     this.matchmakingPrivate = isPrivate;
@@ -302,6 +317,10 @@ export class GameRoom extends Room<{
     if (!this.authorizeWaitingHost(client, ROOM_ERRORS.alreadyStarted)) {
       return;
     }
+    if (this.startInProgress) {
+      this.sendRoomError(client, ROOM_ERRORS.startInProgress);
+      return;
+    }
     if (message !== undefined && message !== null) {
       this.sendRoomError(client, ROOM_ERRORS.invalidCommandPayload);
       return;
@@ -314,12 +333,98 @@ export class GameRoom extends Room<{
       return;
     }
 
-    this.state.status = "started";
-    await this.setMatchmaking({
-      metadata: { ...this.metadata, status: "started" },
-      private: true,
-      locked: true,
-    });
+    this.startInProgress = true;
+    const waitingMetadata = { ...this.metadata };
+    const waitingPrivate = this.matchmakingPrivate;
+    try {
+      const matchEngine = new MatchEngine(new SeededRandomSource(
+        randomInt(1, 0x1_0000_0000),
+      ));
+      matchEngine.start(
+        this.state.seats.map((seat) => ({
+          seatIndex: seat.seatIndex,
+          participantId: seat.participantId,
+          nickname: seat.nickname,
+          bot: seat.bot,
+        })),
+        {
+          deckMode: this.state.deckMode,
+          actionDeadlineSeconds: this.state.actionDeadlineSeconds,
+        },
+      );
+      const publicMatchState = matchEngine.view(0).publicState;
+
+      try {
+        await this.setMatchmaking({
+          metadata: { ...waitingMetadata, status: "started" },
+          private: true,
+          locked: true,
+        });
+      } catch {
+        await this.setMetadata(waitingMetadata, false);
+        await this.setPrivate(waitingPrivate, false);
+        this.sendRoomError(client, ROOM_ERRORS.startFailed);
+        return;
+      }
+
+      this.matchEngine = matchEngine;
+      this.applyPublicMatchState(publicMatchState);
+      this.state.status = "started";
+      this.clock.setTimeout(() => {
+        this.completePointContest(matchEngine);
+      }, POINT_CONTEST_DISPLAY_MILLISECONDS);
+    } finally {
+      this.startInProgress = false;
+    }
+  }
+
+  private completePointContest(matchEngine: MatchEngine): void {
+    if (
+      this.matchEngine !== matchEngine
+      || this.state.status !== "started"
+      || this.state.phase !== "point_contest"
+    ) {
+      return;
+    }
+    matchEngine.completePointContest();
+    this.applyPublicMatchState(matchEngine.view(0).publicState);
+    this.sendPrivateMatchStates();
+  }
+
+  private applyPublicMatchState(publicState: PublicMatchState): void {
+    this.state.phase = publicState.phase;
+    this.state.actorSeatIndex = publicState.actorSeatIndex;
+    this.state.firstActorSeatIndex = publicState.firstActorSeatIndex;
+    this.state.drawPileCount = publicState.drawPileCount;
+    for (const participant of publicState.participants) {
+      const seat = this.state.seats[participant.seatIndex];
+      if (!seat || seat.participantId !== participant.participantId) {
+        throw new Error("match participant does not match the occupied room seat");
+      }
+      seat.score = participant.score;
+      seat.handCount = participant.handCount;
+    }
+    this.state.contestRounds.clear();
+    for (const event of publicState.events) {
+      this.state.contestRounds.push(new PointContestRoundState(event));
+    }
+  }
+
+  private sendPrivateMatchStates(): void {
+    if (!this.matchEngine) {
+      throw new Error("cannot send private state before the match starts");
+    }
+    for (const participantClient of this.clients) {
+      const seatIndex = participantClient.userData?.seatIndex;
+      if (typeof seatIndex !== "number") {
+        continue;
+      }
+      const privateState = this.matchEngine.view(seatIndex).privateState;
+      if (privateState.participantId !== participantClient.sessionId) {
+        throw new Error("private match state does not belong to its recipient");
+      }
+      participantClient.send("match_private_state", privateState);
+    }
   }
 
   private authorizeWaitingHost(client: Client, phaseError: RoomError): boolean {

@@ -12,8 +12,14 @@ var _creation_requested := false
 var _listed_room_id := ""
 var _joined_room_id := ""
 var _room_state_observed := false
+var _fill_bots_requested := false
+var _bots_observed := false
 var _readiness_requested := false
 var _readiness_observed := false
+var _start_requested := false
+var _point_contest_observed := false
+var _opening_public_observed := false
+var _private_hand_observed := false
 var _failure := ""
 
 
@@ -35,6 +41,7 @@ func _run() -> void:
 	_adapter.game_room_joined.connect(_on_game_room_joined)
 	_adapter.game_room_failed.connect(_on_game_room_failed)
 	_adapter.game_room_state_changed.connect(_on_game_room_state_changed)
+	_adapter.game_room_private_state_changed.connect(_on_game_room_private_state_changed)
 	_adapter.room_action_failed.connect(_on_room_action_failed)
 
 	_deadline_msec = Time.get_ticks_msec() + int(TEST_TIMEOUT_SECONDS * 1000.0)
@@ -46,14 +53,19 @@ func _run() -> void:
 	if _failure.is_empty() and not _is_complete():
 		_fail(
 			"timed out waiting for live lobby flow "
-			+ "(connected=%s, initial=%s, listed=%s, joined=%s, state=%s, ready=%s)"
+			+ "(connected=%s, initial=%s, listed=%s, joined=%s, state=%s, "
+			+ "bots=%s, ready=%s, point_contest=%s, opening=%s, private=%s)"
 			% [
 				_connected,
 				_initial_rooms_observed,
 				_listed_room_id,
 				_joined_room_id,
 				_room_state_observed,
+				_bots_observed,
 				_readiness_observed,
+				_point_contest_observed,
+				_opening_public_observed,
+				_private_hand_observed,
 			]
 		)
 
@@ -110,6 +122,9 @@ func _on_lobby_rooms_changed(rooms: Array[Dictionary]) -> void:
 		if room.get("participant_count", 0) != 1:
 			return
 		_listed_room_id = room.get("room_id", "")
+		if _room_state_observed and not _fill_bots_requested:
+			_fill_bots_requested = true
+			_adapter.fill_bots()
 
 
 func _on_game_room_joined(room_id: String) -> void:
@@ -133,17 +148,63 @@ func _on_game_room_state_changed(state: Dictionary) -> void:
 		return
 
 	_room_state_observed = true
+	if state.get("status", "") == "started":
+		if state.get("draw_pile_count", -1) != 72:
+			_fail("two-deck opening did not leave 72 draw cards")
+			return
+		var contest_rounds: Variant = state.get("contest_rounds", [])
+		if not contest_rounds is Array or contest_rounds.is_empty():
+			_fail("opening did not publish point-contest history")
+			return
+		for seat: Dictionary in seats:
+			if int(seat.get("hand_count", 0)) != 8:
+				_fail("opening did not publish eight-card hand counts")
+				return
+		var phase := str(state.get("phase", ""))
+		if phase == "point_contest":
+			_point_contest_observed = true
+			return
+		if phase != "actor_play":
+			_fail("started room published an unknown opening phase: %s" % phase)
+			return
+		if not _point_contest_observed:
+			_fail("actor_play arrived before a visible point_contest phase")
+			return
+		_opening_public_observed = true
+		return
+
+	var occupied_count := 0
+	for seat: Dictionary in seats:
+		if not str(seat.get("participant_id", "")).is_empty():
+			occupied_count += 1
+	if occupied_count < 4:
+		if not _listed_room_id.is_empty() and not _fill_bots_requested:
+			_fill_bots_requested = true
+			_adapter.fill_bots()
+		return
+	_bots_observed = true
 	var local_participant_id := str(state.get("local_participant_id", ""))
 	for seat: Dictionary in seats:
 		if str(seat.get("participant_id", "")) != local_participant_id:
 			continue
 		if bool(seat.get("is_ready", false)):
 			_readiness_observed = true
+			if not _start_requested:
+				_start_requested = true
+				_adapter.start_match()
 		elif not _readiness_requested:
 			_readiness_requested = true
 			_adapter.set_ready(true)
 		return
 	_fail("decoded game room state did not contain the local seat")
+
+
+func _on_game_room_private_state_changed(state: Dictionary) -> void:
+	var hand: Variant = state.get("hand", [])
+	if state.get("participant_id", "") != "" and hand is Array and hand.size() == 8:
+		_private_hand_observed = true
+		return
+	_fail("private opening state did not contain the local eight-card hand")
 
 
 func _on_room_action_failed(code: String, message: String) -> void:
@@ -158,7 +219,11 @@ func _is_complete() -> bool:
 		and not _listed_room_id.is_empty()
 		and _listed_room_id == _joined_room_id
 		and _room_state_observed
+		and _bots_observed
 		and _readiness_observed
+		and _point_contest_observed
+		and _opening_public_observed
+		and _private_hand_observed
 	)
 
 
@@ -182,7 +247,7 @@ func _finish() -> void:
 		print(
 			(
 				"PASS: native SDK created and listed game room %s, decoded four seats, "
-				+ "and synchronized readiness"
+				+ "synchronized readiness, opened the match, and received one private hand"
 			) % _joined_room_id
 		)
 		quit(0)

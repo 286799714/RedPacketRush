@@ -6,6 +6,7 @@ signal lobby_rooms_changed(rooms: Array[Dictionary])
 signal game_room_joined(room_id: String)
 signal game_room_failed(message: String)
 signal game_room_state_changed(state: Dictionary)
+signal game_room_private_state_changed(state: Dictionary)
 signal game_room_left(code: int, reason: String)
 signal game_room_connection_changed(state: String, detail: String)
 signal room_action_failed(code: String, message: String)
@@ -379,15 +380,21 @@ func _on_game_room_state_changed(room: Variant) -> void:
 
 
 func _on_game_room_message(type: Variant, data: Variant, room: Variant) -> void:
-	if room != _game_room or str(type) != "room_error":
+	if room != _game_room:
 		return
-	if not data is Dictionary:
-		room_action_failed.emit("unknown", str(data))
-		return
-	room_action_failed.emit(
-		str(data.get("code", "unknown")),
-		str(data.get("message", "房间操作失败"))
-	)
+	match str(type):
+		"room_error":
+			if not data is Dictionary:
+				room_action_failed.emit("unknown", str(data))
+				return
+			room_action_failed.emit(
+				str(data.get("code", "unknown")),
+				str(data.get("message", "房间操作失败"))
+			)
+		"match_private_state":
+			var snapshot := _normalize_match_private_state(data, room)
+			if not snapshot.is_empty():
+				game_room_private_state_changed.emit(snapshot)
 
 
 func _on_game_room_left(code: int, reason: String, room: Variant) -> void:
@@ -445,6 +452,8 @@ func _normalize_game_room_state(raw_state: Variant, room: Variant) -> Dictionary
 					"nickname": str(raw_seat.get("nickname", "")),
 					"is_bot": bool(raw_seat.get("bot", false)),
 					"is_ready": bool(raw_seat.get("ready", false)),
+					"score": int(raw_seat.get("score", 0)),
+					"hand_count": int(raw_seat.get("handCount", 0)),
 				}
 	var seats: Array[Dictionary] = []
 	for seat_index in range(ROOM_SEAT_COUNT):
@@ -454,6 +463,8 @@ func _normalize_game_room_state(raw_state: Variant, room: Variant) -> Dictionary
 			"nickname": "",
 			"is_bot": false,
 			"is_ready": false,
+			"score": 0,
+			"hand_count": 0,
 		}))
 
 	return {
@@ -464,5 +475,122 @@ func _normalize_game_room_state(raw_state: Variant, room: Variant) -> Dictionary
 		"deck_mode": str(raw_state.get("deckMode", "one")),
 		"action_deadline_seconds": int(raw_state.get("actionDeadlineSeconds", 30)),
 		"host_participant_id": str(raw_state.get("hostParticipantId", "")),
+		"phase": str(raw_state.get("phase", "")),
+		"actor_seat_index": int(raw_state.get("actorSeatIndex", -1)),
+		"first_actor_seat_index": int(raw_state.get("firstActorSeatIndex", -1)),
+		"draw_pile_count": int(raw_state.get("drawPileCount", 0)),
 		"seats": seats,
+		"contest_rounds": _normalize_contest_rounds(raw_state.get("contestRounds", [])),
 	}
+
+
+func _normalize_contest_rounds(raw_rounds: Variant) -> Array[Dictionary]:
+	var rounds_by_index: Dictionary = {}
+	if not raw_rounds is Array:
+		return []
+	for raw_round: Variant in raw_rounds:
+		raw_round = _dictionary_from_schema(raw_round)
+		if not raw_round is Dictionary:
+			continue
+		var round_index := int(raw_round.get("roundIndex", -1))
+		if round_index < 0:
+			continue
+		var reveals_by_seat: Dictionary = {}
+		var raw_reveals: Variant = raw_round.get("reveals", [])
+		if raw_reveals is Array:
+			for raw_reveal: Variant in raw_reveals:
+				raw_reveal = _dictionary_from_schema(raw_reveal)
+				if not raw_reveal is Dictionary:
+					continue
+				var seat_index := int(raw_reveal.get("seatIndex", -1))
+				if seat_index < 0 or seat_index >= ROOM_SEAT_COUNT:
+					continue
+				var card := _normalize_card(raw_reveal.get("card", {}))
+				if card.is_empty():
+					continue
+				reveals_by_seat[seat_index] = {
+					"seat_index": seat_index,
+					"card": card,
+				}
+		var reveals: Array[Dictionary] = []
+		var reveal_seats := reveals_by_seat.keys()
+		reveal_seats.sort()
+		for seat_index: Variant in reveal_seats:
+			reveals.append(reveals_by_seat[seat_index])
+		var tied_seat_indexes: Array[int] = []
+		var raw_tied_seats: Variant = raw_round.get("tiedSeatIndexes", [])
+		if raw_tied_seats is Array:
+			for raw_seat_index: Variant in raw_tied_seats:
+				var seat_index := int(raw_seat_index)
+				if (
+					seat_index >= 0
+					and seat_index < ROOM_SEAT_COUNT
+					and not tied_seat_indexes.has(seat_index)
+				):
+					tied_seat_indexes.append(seat_index)
+		tied_seat_indexes.sort()
+		rounds_by_index[round_index] = {
+			"round_index": round_index,
+			"reveals": reveals,
+			"tied_seat_indexes": tied_seat_indexes,
+			"winner_seat_index": int(raw_round.get("winnerSeatIndex", -1)),
+		}
+	var result: Array[Dictionary] = []
+	var round_indexes := rounds_by_index.keys()
+	round_indexes.sort()
+	for round_index: Variant in round_indexes:
+		result.append(rounds_by_index[round_index])
+	return result
+
+
+func _normalize_card(raw_card: Variant) -> Dictionary:
+	raw_card = _dictionary_from_schema(raw_card)
+	if not raw_card is Dictionary:
+		return {}
+	var card_id := str(raw_card.get("id", ""))
+	var rank := int(raw_card.get("rank", 0))
+	var suit := str(raw_card.get("suit", ""))
+	if card_id.is_empty() or rank < 2 or rank > 14:
+		return {}
+	if suit not in ["clubs", "spades", "diamonds", "hearts"]:
+		return {}
+	return {
+		"id": card_id,
+		"rank": rank,
+		"suit": suit,
+		"copy_index": int(raw_card.get("copyIndex", 0)),
+	}
+
+
+func _normalize_match_private_state(raw_state: Variant, room: Variant) -> Dictionary:
+	raw_state = _dictionary_from_schema(raw_state)
+	if not raw_state is Dictionary:
+		return {}
+	var participant_id := str(raw_state.get("participantId", ""))
+	if participant_id.is_empty() or participant_id != str(room.get_session_id()):
+		return {}
+	var seat_index := int(raw_state.get("seatIndex", -1))
+	if seat_index < 0 or seat_index >= ROOM_SEAT_COUNT:
+		return {}
+	var raw_hand: Variant = raw_state.get("hand", null)
+	if not raw_hand is Array:
+		return {}
+	var hand: Array[Dictionary] = []
+	var card_ids: Dictionary = {}
+	for raw_card: Variant in raw_hand:
+		var card := _normalize_card(raw_card)
+		if card.is_empty() or card_ids.has(card["id"]):
+			return {}
+		card_ids[card["id"]] = true
+		hand.append(card)
+	return {
+		"participant_id": participant_id,
+		"seat_index": seat_index,
+		"hand": hand,
+	}
+
+
+func _dictionary_from_schema(value: Variant) -> Variant:
+	if value is Object and value.has_method("to_dictionary"):
+		return value.to_dictionary()
+	return value

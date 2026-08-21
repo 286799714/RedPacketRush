@@ -5,8 +5,10 @@ signal lobby_rooms_changed(rooms: Array[Dictionary])
 signal game_room_joined(room_id: String)
 signal game_room_failed(message: String)
 signal game_room_state_changed(state: Dictionary)
+signal game_room_private_state_changed(state: Dictionary)
 signal room_action_failed(code: String, message: String)
 signal game_room_left(code: int, reason: String)
+signal game_room_connection_changed(state: String, detail: String)
 
 var connection_requests: Array[Dictionary] = []
 var room_requests: Array[Dictionary] = []
@@ -29,6 +31,10 @@ func publish_game_room_state(state: Dictionary) -> void:
 	game_room_state_changed.emit(state)
 
 
+func publish_game_room_private_state(state: Dictionary) -> void:
+	game_room_private_state_changed.emit(state)
+
+
 func publish_game_room_joined(room_id: String) -> void:
 	game_room_joined.emit(room_id)
 
@@ -39,6 +45,10 @@ func publish_room_error(code: String, message: String) -> void:
 
 func publish_game_room_left(code: int = 1000, reason: String = "") -> void:
 	game_room_left.emit(code, reason)
+
+
+func publish_game_room_connection_state(state: String, detail: String = "") -> void:
+	game_room_connection_changed.emit(state, detail)
 
 
 func set_ready(ready: bool) -> void:

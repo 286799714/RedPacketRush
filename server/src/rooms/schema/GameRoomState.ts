@@ -1,13 +1,77 @@
 import { ArraySchema, Schema, type } from "@colyseus/schema";
 
-import type {
-  ActionDeadlineSeconds,
-  DeckMode,
-  GameRoomMetadata,
-  GameRoomStatus,
-} from "../GameRoom.js";
+import type { DeckMode, PhysicalCard } from "../../match/cards.js";
+import type { ActionDeadlineSeconds, PointContestRoundEvent } from "../../match/MatchEngine.js";
+import type { GameRoomMetadata, GameRoomStatus } from "../GameRoom.js";
 
 export const ROOM_SEAT_COUNT = 4;
+
+export class PublicCardState extends Schema {
+  @type("string")
+  public id = "";
+
+  @type("uint8")
+  public rank = 0;
+
+  @type("string")
+  public suit = "";
+
+  @type("uint8")
+  public copyIndex = 0;
+
+  public constructor(card?: PhysicalCard) {
+    super();
+    if (card) {
+      this.id = card.id;
+      this.rank = card.rank;
+      this.suit = card.suit;
+      this.copyIndex = card.copyIndex;
+    }
+  }
+}
+
+export class PointContestRevealState extends Schema {
+  @type("uint8")
+  public seatIndex = 0;
+
+  @type(PublicCardState)
+  public card = new PublicCardState();
+
+  public constructor(seatIndex = 0, card?: PhysicalCard) {
+    super();
+    this.seatIndex = seatIndex;
+    if (card) {
+      this.card = new PublicCardState(card);
+    }
+  }
+}
+
+export class PointContestRoundState extends Schema {
+  @type("uint8")
+  public roundIndex = 0;
+
+  @type([PointContestRevealState])
+  public reveals = new ArraySchema<PointContestRevealState>();
+
+  @type(["uint8"])
+  public tiedSeatIndexes = new ArraySchema<number>();
+
+  @type("int8")
+  public winnerSeatIndex = -1;
+
+  public constructor(event?: PointContestRoundEvent) {
+    super();
+    if (!event) {
+      return;
+    }
+    this.roundIndex = event.roundNumber - 1;
+    for (const reveal of event.reveals) {
+      this.reveals.push(new PointContestRevealState(reveal.seatIndex, reveal.card));
+    }
+    this.tiedSeatIndexes.push(...event.tiedSeats);
+    this.winnerSeatIndex = event.winnerSeatIndex ?? -1;
+  }
+}
 
 export class ParticipantSeat extends Schema {
   @type("uint8")
@@ -25,6 +89,12 @@ export class ParticipantSeat extends Schema {
   @type("boolean")
   public ready = false;
 
+  @type("uint16")
+  public score = 0;
+
+  @type("uint8")
+  public handCount = 0;
+
   public constructor(seatIndex = 0) {
     super();
     this.seatIndex = seatIndex;
@@ -35,6 +105,8 @@ export class ParticipantSeat extends Schema {
     this.nickname = nickname;
     this.bot = bot;
     this.ready = bot;
+    this.score = 0;
+    this.handCount = 0;
   }
 
   public clear(): void {
@@ -42,6 +114,8 @@ export class ParticipantSeat extends Schema {
     this.nickname = "";
     this.bot = false;
     this.ready = false;
+    this.score = 0;
+    this.handCount = 0;
   }
 }
 
@@ -61,8 +135,23 @@ export class GameRoomState extends Schema {
   @type("string")
   public hostParticipantId = "";
 
+  @type("string")
+  public phase = "";
+
+  @type("int8")
+  public actorSeatIndex = -1;
+
+  @type("int8")
+  public firstActorSeatIndex = -1;
+
+  @type("uint8")
+  public drawPileCount = 0;
+
   @type([ParticipantSeat])
   public seats = new ArraySchema<ParticipantSeat>();
+
+  @type([PointContestRoundState])
+  public contestRounds = new ArraySchema<PointContestRoundState>();
 
   public constructor(metadata?: GameRoomMetadata) {
     super();

@@ -2,14 +2,18 @@ extends Control
 class_name AppShell
 
 const AdapterScript = preload("res://scripts/network/colyseus_realtime_adapter.gd")
+const MatchStoreScript = preload("res://scripts/match/match_store.gd")
 const RoomStoreScript = preload("res://scripts/room/room_store.gd")
 const LobbyScene = preload("res://scenes/lobby/lobby_screen.tscn")
+const MatchScene = preload("res://scenes/match/match_screen.tscn")
 const RoomScene = preload("res://scenes/room/room_screen.tscn")
 
 var _adapter_override: Object
 var _adapter: Object
+var _match_store: Object
 var _room_store: Object
 var _lobby_screen: Variant
+var _match_screen: Variant
 var _room_screen: Variant
 var _current_surface := ""
 
@@ -31,6 +35,8 @@ func _ready() -> void:
 
 	_room_store = RoomStoreScript.new(_adapter)
 	_room_store.left.connect(_on_game_room_left)
+	_match_store = MatchStoreScript.new(_adapter)
+	_match_store.match_activated.connect(_on_match_activated)
 
 	_lobby_screen = LobbyScene.instantiate()
 	_lobby_screen.set_realtime_adapter(_adapter)
@@ -40,7 +46,7 @@ func _ready() -> void:
 
 
 func _on_game_room_joined(_room_id: String) -> void:
-	if _room_screen != null:
+	if _room_screen != null or _match_screen != null:
 		return
 	_lobby_screen.visible = false
 	_room_screen = RoomScene.instantiate()
@@ -49,9 +55,25 @@ func _on_game_room_joined(_room_id: String) -> void:
 	_current_surface = "room"
 
 
+func _on_match_activated() -> void:
+	if _match_screen != null:
+		return
+	_lobby_screen.visible = false
+	if _room_screen != null:
+		_room_screen.queue_free()
+		_room_screen = null
+	_match_screen = MatchScene.instantiate()
+	_match_screen.set_match_store(_match_store)
+	add_child(_match_screen)
+	_current_surface = "match"
+
+
 func _on_game_room_left(_code: int, _reason: String) -> void:
 	if _room_screen != null:
 		_room_screen.queue_free()
 		_room_screen = null
+	if _match_screen != null:
+		_match_screen.queue_free()
+		_match_screen = null
 	_lobby_screen.visible = true
 	_current_surface = "lobby"

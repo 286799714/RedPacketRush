@@ -15,6 +15,8 @@ func _run() -> void:
 	_test_failed_retry_preserves_active_room()
 	_test_new_attempt_detaches_old_pending_room()
 	_test_null_retry_preserves_active_room()
+	_test_match_public_state_is_normalized_without_private_fields()
+	_test_only_local_match_private_state_is_normalized()
 
 	if _failures.is_empty():
 		print("PASS: realtime adapter lifecycle tests")
@@ -127,6 +129,148 @@ func _test_null_retry_preserves_active_room() -> void:
 		"空请求结果不应覆盖当前 active 房间"
 	)
 	adapter.queue_free()
+
+
+func _test_match_public_state_is_normalized_without_private_fields() -> void:
+	var adapter := _new_adapter()
+	var client := FakeColyseusClient.new()
+	adapter._client = client
+	var observed := {"snapshot": {}}
+	adapter.game_room_state_changed.connect(
+		func(snapshot: Dictionary): observed["snapshot"] = snapshot
+	)
+	var room := client.queue_join_room("match-room")
+	adapter.join_game_room("match-room", "甲")
+	room.emit_joined()
+	room.emit_state({
+		"status": "started",
+		"displayName": "公开开局",
+		"deckMode": "one",
+		"actionDeadlineSeconds": 30,
+		"hostParticipantId": "session-a",
+		"phase": "actor_play",
+		"actorSeatIndex": 2,
+		"firstActorSeatIndex": 2,
+		"drawPileCount": 20,
+		"hand": [{"id": "leaked-local"}],
+		"hands": {"session-b": [{"id": "leaked-other"}]},
+		"seats": [
+			_raw_seat(0, "session-a", "甲", false, 0, 8),
+			_raw_seat(1, "session-b", "乙", false, 0, 8),
+			_raw_seat(2, "bot-c", "机器人 3", true, 0, 8),
+			_raw_seat(3, "bot-d", "机器人 4", true, 0, 8),
+		],
+		"contestRounds": [{
+			"roundIndex": 0,
+			"reveals": [{
+				"seatIndex": 2,
+				"card": {
+					"id": "copy-0:hearts:14",
+					"rank": 14,
+					"suit": "hearts",
+					"copyIndex": 0,
+				},
+			}],
+			"tiedSeatIndexes": [],
+			"winnerSeatIndex": 2,
+		}],
+	})
+
+	var snapshot: Dictionary = observed["snapshot"]
+	_expect_equal(snapshot.get("phase"), "actor_play", "比赛阶段规范化")
+	_expect_equal(snapshot.get("actor_seat_index"), 2, "行动席位规范化")
+	_expect_equal(snapshot.get("first_actor_seat_index"), 2, "首位行动席位规范化")
+	_expect_equal(snapshot.get("draw_pile_count"), 20, "牌堆数量规范化")
+	_expect_equal(snapshot["seats"][2].get("score"), 0, "公开分数规范化")
+	_expect_equal(snapshot["seats"][2].get("hand_count"), 8, "公开手牌数量规范化")
+	_expect_equal(snapshot.get("contest_rounds"), [{
+		"round_index": 0,
+		"reveals": [{
+			"seat_index": 2,
+			"card": {
+				"id": "copy-0:hearts:14",
+				"rank": 14,
+				"suit": "hearts",
+				"copy_index": 0,
+			},
+		}],
+		"tied_seat_indexes": [],
+		"winner_seat_index": 2,
+	}], "拼点历史规范化")
+	_expect_equal(snapshot.has("hand"), false, "公开快照丢弃本地手牌")
+	_expect_equal(snapshot.has("hands"), false, "公开快照丢弃其他手牌")
+	adapter.queue_free()
+
+
+func _test_only_local_match_private_state_is_normalized() -> void:
+	var adapter := _new_adapter()
+	if not adapter.has_signal("game_room_private_state_changed"):
+		_failures.append("Adapter 应公开比赛私有状态信号")
+		adapter.queue_free()
+		return
+	var client := FakeColyseusClient.new()
+	adapter._client = client
+	var observed: Array[Dictionary] = []
+	adapter.game_room_private_state_changed.connect(
+		func(snapshot: Dictionary): observed.append(snapshot)
+	)
+	var room := client.queue_join_room("private-room")
+	adapter.join_game_room("private-room", "甲")
+	room.emit_joined()
+	room.message_received.emit("match_private_state", {
+		"participantId": "session-a",
+		"seatIndex": 0,
+		"hand": [{
+			"id": "copy-0:clubs:2",
+			"rank": 2,
+			"suit": "clubs",
+			"copyIndex": 0,
+			"transportOnly": "drop-me",
+		}],
+		"anotherHand": [{"id": "drop-me"}],
+	})
+	room.message_received.emit("match_private_state", {
+		"participantId": "session-b",
+		"seatIndex": 1,
+		"hand": [{
+			"id": "copy-0:hearts:14",
+			"rank": 14,
+			"suit": "hearts",
+			"copyIndex": 0,
+		}],
+	})
+
+	_expect_equal(observed, [{
+		"participant_id": "session-a",
+		"seat_index": 0,
+		"hand": [{
+			"id": "copy-0:clubs:2",
+			"rank": 2,
+			"suit": "clubs",
+			"copy_index": 0,
+		}],
+	}], "仅规范化本地参与者私有手牌")
+	adapter.queue_free()
+
+
+func _raw_seat(
+	seat_index: int,
+	participant_id: String,
+	nickname: String,
+	is_bot: bool,
+	score: int,
+	hand_count: int
+) -> Dictionary:
+	return {
+		"seatIndex": seat_index,
+		"participantId": participant_id,
+		"nickname": nickname,
+		"bot": is_bot,
+		"ready": true,
+		"score": score,
+		"handCount": hand_count,
+		"hand": [{"id": "must-not-pass"}],
+	}
 
 
 func _new_adapter() -> Adapter:

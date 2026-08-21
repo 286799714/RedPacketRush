@@ -30,6 +30,10 @@ describe("four-participant room readiness", () => {
       deckMode: "two",
       actionDeadlineSeconds: 60,
       hostParticipantId: host.sessionId,
+      phase: "",
+      actorSeatIndex: -1,
+      firstActorSeatIndex: -1,
+      drawPileCount: 0,
       seats: [
         {
           seatIndex: 0,
@@ -37,11 +41,38 @@ describe("four-participant room readiness", () => {
           nickname: "甲",
           bot: false,
           ready: false,
+          score: 0,
+          handCount: 0,
         },
-        { seatIndex: 1, participantId: "", nickname: "", bot: false, ready: false },
-        { seatIndex: 2, participantId: "", nickname: "", bot: false, ready: false },
-        { seatIndex: 3, participantId: "", nickname: "", bot: false, ready: false },
+        {
+          seatIndex: 1,
+          participantId: "",
+          nickname: "",
+          bot: false,
+          ready: false,
+          score: 0,
+          handCount: 0,
+        },
+        {
+          seatIndex: 2,
+          participantId: "",
+          nickname: "",
+          bot: false,
+          ready: false,
+          score: 0,
+          handCount: 0,
+        },
+        {
+          seatIndex: 3,
+          participantId: "",
+          nickname: "",
+          bot: false,
+          ready: false,
+          score: 0,
+          handCount: 0,
+        },
       ],
+      contestRounds: [],
     });
 
     await host.leave();
@@ -299,9 +330,11 @@ describe("four-participant room readiness", () => {
     host.send("set_ready", { ready: true });
     await handled;
 
+    const privateStateReceived = host.waitForMessage("match_private_state", 2000);
     handled = serverRoom.waitForMessage("start");
     host.send("start", null);
     await handled;
+    assert.strictEqual((await privateStateReceived).hand.length, 8);
 
     assert.strictEqual(serverRoom.state.status, "started");
     assert.strictEqual(serverRoom.metadata.status, "started");
@@ -341,6 +374,8 @@ describe("four-participant room readiness", () => {
       nickname: "",
       bot: false,
       ready: false,
+      score: 0,
+      handCount: 0,
     });
     assert.strictEqual(serverRoom.state.hostParticipantId, guest.sessionId);
     assert.strictEqual(serverRoom.metadata.participantCount, 3);
