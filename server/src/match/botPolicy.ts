@@ -1,5 +1,4 @@
 import type { MatchView } from "./MatchEngine.js";
-import type { RandomSource } from "./random.js";
 
 export type BotCommand =
   | { readonly type: "play_cards"; readonly cardIds: readonly string[] }
@@ -7,7 +6,7 @@ export type BotCommand =
   | { readonly type: "discard"; readonly cardId: string; readonly turnNumber: number }
   | { readonly type: "final_selection"; readonly mode: "best" };
 
-export function chooseBotCommand(view: MatchView, random: RandomSource): BotCommand | null {
+export function chooseBotCommand(view: MatchView): BotCommand | null {
   const { publicState, privateState } = view;
   const seatIndex = privateState.seatIndex;
 
@@ -15,10 +14,9 @@ export function chooseBotCommand(view: MatchView, random: RandomSource): BotComm
     if (publicState.actorSeatIndex !== seatIndex || privateState.hand.length < 3) {
       return null;
     }
-    const combinations = chooseThree(privateState.hand.map((card) => card.id));
     return {
       type: "play_cards",
-      cardIds: combinations[randomIndex(random, combinations.length)],
+      cardIds: privateState.hand.slice(0, 3).map((card) => card.id),
     };
   }
 
@@ -26,10 +24,13 @@ export function chooseBotCommand(view: MatchView, random: RandomSource): BotComm
     if (publicState.actorSeatIndex === seatIndex || privateState.claimCommitted) {
       return null;
     }
-    const choices = [...publicState.playedCards.map((card) => card.id), null];
+    const [playedCard] = publicState.playedCards;
+    if (!playedCard) {
+      return null;
+    }
     return {
       type: "claim",
-      cardId: choices[randomIndex(random, choices.length)],
+      cardId: playedCard.id,
     };
   }
 
@@ -46,7 +47,7 @@ export function chooseBotCommand(view: MatchView, random: RandomSource): BotComm
     }
     return {
       type: "discard",
-      cardId: discardableCards[randomIndex(random, discardableCards.length)].id,
+      cardId: discardableCards[0].id,
       turnNumber: publicState.turnNumber,
     };
   }
@@ -56,24 +57,4 @@ export function chooseBotCommand(view: MatchView, random: RandomSource): BotComm
   }
 
   return null;
-}
-
-function chooseThree(cardIds: readonly string[]): string[][] {
-  const combinations: string[][] = [];
-  for (let first = 0; first < cardIds.length - 2; first += 1) {
-    for (let second = first + 1; second < cardIds.length - 1; second += 1) {
-      for (let third = second + 1; third < cardIds.length; third += 1) {
-        combinations.push([cardIds[first], cardIds[second], cardIds[third]]);
-      }
-    }
-  }
-  return combinations;
-}
-
-function randomIndex(random: RandomSource, maxExclusive: number): number {
-  const index = random.nextInt(maxExclusive);
-  if (!Number.isSafeInteger(index) || index < 0 || index >= maxExclusive) {
-    throw new Error(`random source returned invalid index ${index} for ${maxExclusive}`);
-  }
-  return index;
 }

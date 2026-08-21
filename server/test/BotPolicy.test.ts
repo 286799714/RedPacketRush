@@ -3,16 +3,6 @@ import assert from "assert";
 import type { PhysicalCard } from "../src/match/cards.js";
 import type { MatchView } from "../src/match/MatchEngine.js";
 import { chooseBotCommand } from "../src/match/botPolicy.js";
-import type { RandomSource } from "../src/match/random.js";
-
-class FixedRandomSource implements RandomSource {
-  public constructor(private readonly index: number) {}
-
-  public nextInt(maxExclusive: number): number {
-    assert.ok(this.index < maxExclusive);
-    return this.index;
-  }
-}
 
 function card(index: number): PhysicalCard {
   return {
@@ -68,16 +58,16 @@ function matchView(overrides: {
 }
 
 describe("bot policy", () => {
-  it("selects one seeded legal three-card play for the actor", () => {
+  it("plays the actor's first three cards", () => {
     const view = matchView();
 
-    assert.deepStrictEqual(chooseBotCommand(view, new FixedRandomSource(55)), {
+    assert.deepStrictEqual(chooseBotCommand(view), {
       type: "play_cards",
-      cardIds: ["card-5", "card-6", "card-7"],
+      cardIds: ["card-0", "card-1", "card-2"],
     });
   });
 
-  it("selects a seeded played card or pass for an uncommitted claimant", () => {
+  it("claims the first played card for an uncommitted claimant", () => {
     const playedCards = [card(0), card(1), card(2)];
     const view = matchView({
       phase: "claim_commit",
@@ -85,13 +75,9 @@ describe("bot policy", () => {
       playedCards,
     });
 
-    assert.deepStrictEqual(chooseBotCommand(view, new FixedRandomSource(1)), {
+    assert.deepStrictEqual(chooseBotCommand(view), {
       type: "claim",
-      cardId: playedCards[1].id,
-    });
-    assert.deepStrictEqual(chooseBotCommand(view, new FixedRandomSource(3)), {
-      type: "claim",
-      cardId: null,
+      cardId: playedCards[0].id,
     });
     assert.strictEqual(
       chooseBotCommand(matchView({
@@ -99,7 +85,7 @@ describe("bot policy", () => {
         actorSeatIndex: 0,
         playedCards,
         claimCommitted: true,
-      }), new FixedRandomSource(0)),
+      })),
       null,
     );
   });
@@ -113,9 +99,9 @@ describe("bot policy", () => {
       claimAwards: [{ seatIndex: 1, card: hand[8], source: "unique" }],
     });
 
-    assert.deepStrictEqual(chooseBotCommand(view, new FixedRandomSource(7)), {
+    assert.deepStrictEqual(chooseBotCommand(view), {
       type: "discard",
-      cardId: "card-7",
+      cardId: "card-0",
       turnNumber: 3,
     });
   });
@@ -123,25 +109,21 @@ describe("bot policy", () => {
   it("uses the engine's best-selection command during final settlement", () => {
     assert.deepStrictEqual(chooseBotCommand(
       matchView({ phase: "final_commit" }),
-      new FixedRandomSource(0),
     ), {
       type: "final_selection",
       mode: "best",
     });
     assert.strictEqual(chooseBotCommand(
       matchView({ phase: "final_commit", finalCommitted: true }),
-      new FixedRandomSource(0),
     ), null);
   });
 
   it("does nothing when the seat has no legal command in the current phase", () => {
     assert.strictEqual(chooseBotCommand(
       matchView({ phase: "claim_reveal" }),
-      new FixedRandomSource(0),
     ), null);
     assert.strictEqual(chooseBotCommand(
       matchView({ actorSeatIndex: 0 }),
-      new FixedRandomSource(0),
     ), null);
   });
 });

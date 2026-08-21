@@ -11,7 +11,7 @@ import {
   type PublicMatchState,
 } from "../match/MatchEngine.js";
 import { chooseBotCommand, type BotCommand } from "../match/botPolicy.js";
-import { SeededRandomSource, type RandomSource } from "../match/random.js";
+import { SeededRandomSource } from "../match/random.js";
 import {
   CardDiscardedEventState,
   ClaimAwardState,
@@ -172,7 +172,6 @@ export class GameRoom extends Room<{
   public maxClients = 4;
   private matchmakingPrivate = false;
   private matchEngine: MatchEngine | null = null;
-  private botRandom: RandomSource | null = null;
   private botTimer: { clear(): void } | null = null;
   private phaseTimer: { clear(): void } | null = null;
   private startInProgress = false;
@@ -382,7 +381,6 @@ export class GameRoom extends Room<{
       const matchEngine = new MatchEngine(new SeededRandomSource(
         randomInt(1, 0x1_0000_0000),
       ));
-      const botRandom = new SeededRandomSource(randomInt(1, 0x1_0000_0000));
       matchEngine.start(
         this.state.seats.map((seat) => ({
           seatIndex: seat.seatIndex,
@@ -411,7 +409,6 @@ export class GameRoom extends Room<{
       }
 
       this.matchEngine = matchEngine;
-      this.botRandom = botRandom;
       this.state.status = "started";
       this.autoDispose = false;
       this.enterMatchPhase(matchEngine, publicMatchState);
@@ -704,7 +701,7 @@ export class GameRoom extends Room<{
   }
 
   private scheduleBotAction(matchEngine: MatchEngine): void {
-    if (this.botTimer !== null || this.botRandom === null) {
+    if (this.botTimer !== null) {
       return;
     }
     const seatIndex = this.nextBotSeatIndex(matchEngine);
@@ -726,7 +723,7 @@ export class GameRoom extends Room<{
       ) {
         return;
       }
-      const command = chooseBotCommand(matchEngine.view(seatIndex), this.botRandom!);
+      const command = chooseBotCommand(matchEngine.view(seatIndex));
       if (command === null) {
         return;
       }
