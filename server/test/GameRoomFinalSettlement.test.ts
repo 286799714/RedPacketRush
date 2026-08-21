@@ -14,6 +14,7 @@ interface PrivateMatchState {
   claimCardId: string | null;
   finalCommitted: boolean;
   finalGroups: string[][];
+  actionId: number;
 }
 
 interface UntypedMessageRoom {
@@ -81,6 +82,7 @@ async function startFinalCommit(colyseus: ColyseusTestServer<typeof appConfig>) 
     let handled = serverRoom.waitForMessage("play_cards");
     participants[actorSeatIndex].send("play_cards", {
       cardIds: privateStates[actorSeatIndex].hand.slice(0, 3).map((card) => card.id),
+      actionId: serverRoom.state.actionId,
     });
     const [, actorPrivateState] = await Promise.all([handled, actorUpdate]);
     privateStates[actorSeatIndex] = actorPrivateState;
@@ -99,7 +101,10 @@ async function startFinalCommit(colyseus: ColyseusTestServer<typeof appConfig>) 
           1000,
         ) as Promise<PrivateMatchState>];
       handled = serverRoom.waitForMessage("claim");
-      participants[seatIndex].send("claim", { cardId: null });
+      participants[seatIndex].send("claim", {
+        cardId: null,
+        actionId: serverRoom.state.actionId,
+      });
       await handled;
       const updates = await Promise.all(privateUpdates);
       if (claimantIndex === claimantSeats.length - 1) {
@@ -141,10 +146,16 @@ async function expectFinalSelectionError(
   const before = serverRoom.state.toJSON();
   const handled = serverRoom.waitForMessage("final_selection");
   const rejected = participant.waitForMessage("room_error", 1000);
-  participant.send("final_selection", payload);
+  participant.send("final_selection", isRecordPayload(payload)
+    ? { ...payload, actionId: serverRoom.state.actionId }
+    : payload);
   const [, error] = await Promise.all([handled, rejected]);
   assert.strictEqual(error.code, expectedCode);
   assert.deepStrictEqual(serverRoom.state.toJSON(), before);
+}
+
+function isRecordPayload(payload: unknown): payload is Record<string, unknown> {
+  return typeof payload === "object" && payload !== null && !Array.isArray(payload);
 }
 
 describe("game room final settlement", () => {
@@ -192,7 +203,11 @@ describe("game room final settlement", () => {
       1000,
     ) as Promise<PrivateMatchState>;
     const handled = serverRoom.waitForMessage("final_selection");
-    participants[0].send("final_selection", { mode: "manual", groups });
+    participants[0].send("final_selection", {
+      mode: "manual",
+      groups,
+      actionId: serverRoom.state.actionId,
+    });
     const [, privateState] = await Promise.all([handled, acknowledged]);
     await new Promise((resolve) => setTimeout(resolve, 50));
 
@@ -221,7 +236,10 @@ describe("game room final settlement", () => {
         1000,
       );
       const handled = serverRoom.waitForMessage("final_selection");
-      participants[seatIndex].send("final_selection", { mode: "best" });
+      participants[seatIndex].send("final_selection", {
+        mode: "best",
+        actionId: serverRoom.state.actionId,
+      });
       await Promise.all([handled, acknowledged]);
       assert.strictEqual(serverRoom.state.phase, "final_commit");
       assert.strictEqual(serverRoom.state.finalResults.length, 0);
@@ -231,7 +249,10 @@ describe("game room final settlement", () => {
       participant.waitForMessage("match_private_state", 1000) as Promise<PrivateMatchState>
     ));
     const handled = serverRoom.waitForMessage("final_selection");
-    participants[3].send("final_selection", { mode: "best" });
+    participants[3].send("final_selection", {
+      mode: "best",
+      actionId: serverRoom.state.actionId,
+    });
     await Promise.all([handled, ...revealMessages]);
 
     const revealed = serverRoom.state.toJSON();

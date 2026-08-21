@@ -12,6 +12,7 @@ interface PrivateMatchState {
   hand: PhysicalCard[];
   claimCommitted: boolean;
   claimCardId: string | null;
+  actionId: number;
 }
 
 function tickClock(serverRoom: GameRoom, elapsedMilliseconds: number): void {
@@ -51,6 +52,7 @@ async function startClaimCommit(colyseus: ColyseusTestServer<typeof appConfig>) 
   handled = serverRoom.waitForMessage("play_cards");
   participants[actorSeatIndex].send("play_cards", {
     cardIds: openingStates[actorSeatIndex].hand.slice(0, 3).map((card) => card.id),
+    actionId: serverRoom.state.actionId,
   });
   await Promise.all([handled, actorUpdate]);
   assert.strictEqual(serverRoom.state.phase, "claim_commit");
@@ -67,7 +69,10 @@ async function revealUniqueAwards(
   for (let index = 0; index < claimantSeats.length; index += 1) {
     const seatIndex = claimantSeats[index];
     const handled = serverRoom.waitForMessage("claim");
-    participants[seatIndex].send("claim", { cardId: playedCardIds[index] });
+    participants[seatIndex].send("claim", {
+      cardId: playedCardIds[index],
+      actionId: serverRoom.state.actionId,
+    });
     await handled;
   }
   assert.strictEqual(serverRoom.state.phase, "claim_reveal");
@@ -85,10 +90,16 @@ async function expectDiscardError(
   const before = serverRoom.state.toJSON();
   const handled = serverRoom.waitForMessage("discard");
   const rejected = participant.waitForMessage("room_error", 1000);
-  participant.send("discard", payload);
+  participant.send("discard", isRecordPayload(payload)
+    ? { ...payload, actionId: serverRoom.state.actionId }
+    : payload);
   await handled;
   assert.strictEqual((await rejected).code, expectedCode);
   assert.deepStrictEqual(serverRoom.state.toJSON(), before);
+}
+
+function isRecordPayload(payload: unknown): payload is Record<string, unknown> {
+  return typeof payload === "object" && payload !== null && !Array.isArray(payload);
 }
 
 describe("game room award discard and actor rotation", () => {
@@ -117,6 +128,7 @@ describe("game room award discard and actor rotation", () => {
       participants[seatIndex].send("discard", {
         cardId: openingStates[seatIndex].hand[0].id,
         turnNumber: serverRoom.state.turnNumber,
+        actionId: serverRoom.state.actionId,
       });
       await Promise.all([handled, privateUpdate]);
       assert.strictEqual(serverRoom.state.seats[seatIndex].handCount, 8);
@@ -184,6 +196,7 @@ describe("game room award discard and actor rotation", () => {
     participants[firstSeat].send("discard", {
       cardId: openingStates[firstSeat].hand[0].id,
       turnNumber: serverRoom.state.turnNumber,
+      actionId: serverRoom.state.actionId,
     });
     await handled;
     await expectDiscardError(
@@ -206,7 +219,10 @@ describe("game room award discard and actor rotation", () => {
     assert.deepStrictEqual(resolved.seats.map((seat: { handCount: number }) => seat.handCount), [8, 8, 8, 8]);
     assert.strictEqual(resolved.discardEvents.length, 3);
     tickClock(serverRoom, 15_000);
-    assert.deepStrictEqual(serverRoom.state.toJSON(), resolved);
+    assert.strictEqual(serverRoom.state.phase, "claim_commit");
+    assert.strictEqual(serverRoom.state.actionId, resolved.actionId + 1);
+    assert.strictEqual(serverRoom.state.turnNumber, 2);
+    assert.strictEqual(serverRoom.state.discardEvents.length, 3);
     await Promise.all(participants.map((participant) => participant.leave()));
   });
 
@@ -217,7 +233,10 @@ describe("game room award discard and actor rotation", () => {
         continue;
       }
       const handled = serverRoom.waitForMessage("claim");
-      participants[seatIndex].send("claim", { cardId: null });
+      participants[seatIndex].send("claim", {
+        cardId: null,
+        actionId: serverRoom.state.actionId,
+      });
       await handled;
     }
     assert.strictEqual(serverRoom.state.phase, "claim_reveal");

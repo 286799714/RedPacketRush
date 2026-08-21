@@ -11,6 +11,7 @@ interface PrivateMatchState {
   seatIndex: number;
   participantId: string;
   hand: PhysicalCard[];
+  actionId: number;
 }
 
 interface UntypedMessageRoom {
@@ -157,7 +158,10 @@ describe("game room actor play", () => {
     });
 
     const rejected = actor.waitForMessage("room_error", 1000);
-    actor.send("play_cards", { cardIds: ["card-a", "card-b", "card-c"] });
+    actor.send("play_cards", {
+      cardIds: ["card-a", "card-b", "card-c"],
+      actionId: serverRoom.state.actionId,
+    });
     assert.strictEqual((await rejected).code, "invalid_phase");
     await new Promise((resolve) => setTimeout(resolve, 50));
 
@@ -214,7 +218,10 @@ describe("game room actor play", () => {
     });
 
     handled = serverRoom.waitForMessage("play_cards");
-    actor.send("play_cards", { cardIds: selectedCards.map((card) => card.id) });
+    actor.send("play_cards", {
+      cardIds: selectedCards.map((card) => card.id),
+      actionId: serverRoom.state.actionId,
+    });
     await handled;
     await waitUntil(() => serverRoom.state.phase === "claim_commit");
     await waitUntil(() => replacementMessages[actorSeatIndex].length === 1);
@@ -279,6 +286,7 @@ describe("game room actor play", () => {
     const handled = serverRoom.waitForMessage("play_cards");
     nonActor.send("play_cards", {
       cardIds: openingStates[nonActorSeatIndex].hand.slice(0, 3).map((card) => card.id),
+      actionId: serverRoom.state.actionId,
     });
     await handled;
     assert.strictEqual((await rejected).code, "not_actor");
@@ -311,7 +319,10 @@ describe("game room actor play", () => {
     });
 
     const rejected = actor.waitForMessage("room_error", 1000);
-    actor.send("play_cards", { cardIds: "not-an-array" });
+    actor.send("play_cards", {
+      cardIds: "not-an-array",
+      actionId: serverRoom.state.actionId,
+    });
     assert.strictEqual((await rejected).code, "invalid_payload");
     await new Promise((resolve) => setTimeout(resolve, 50));
 
@@ -363,7 +374,10 @@ describe("game room actor play", () => {
 
     for (const command of commands) {
       const rejected = actor.waitForMessage("room_error", 1000);
-      actor.send("play_cards", { cardIds: command.cardIds });
+      actor.send("play_cards", {
+        cardIds: command.cardIds,
+        actionId: serverRoom.state.actionId,
+      });
       assert.strictEqual((await rejected).code, command.expectedCode);
       assert.deepStrictEqual(serverRoom.state.toJSON(), beforePublicState);
     }

@@ -7,6 +7,7 @@ import {
   MatchCommandError,
   MatchEngine,
   type ActionDeadlineSeconds,
+  type MatchPhase,
   type PublicMatchState,
 } from "../match/MatchEngine.js";
 import { SeededRandomSource } from "../match/random.js";
@@ -71,14 +72,20 @@ const ROOM_ERRORS = {
   readyPhase: { code: "invalid_phase", message: "房间当前不能修改准备状态" },
   startFailed: { code: "start_failed", message: "对局启动失败，请重试" },
   startInProgress: { code: "start_in_progress", message: "对局正在启动" },
+  staleAction: { code: "stale_action", message: "操作已过期，请按最新状态重试" },
 } as const satisfies Record<string, RoomError>;
 
 const POINT_CONTEST_DISPLAY_MILLISECONDS = 900;
 const CLAIM_REVEAL_DISPLAY_MILLISECONDS = 900;
 const FINAL_REVEAL_DISPLAY_MILLISECONDS = 900;
+const MAX_ACTION_ID = 0xffff_ffff;
 
 function isRecordLike(value: unknown): value is RecordLike {
   return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function isActionId(value: unknown): value is number {
+  return Number.isSafeInteger(value) && (value as number) >= 0 && (value as number) <= MAX_ACTION_ID;
 }
 
 function parseDisplayName(value: unknown): string {
@@ -164,10 +171,7 @@ export class GameRoom extends Room<{
   public maxClients = 4;
   private matchmakingPrivate = false;
   private matchEngine: MatchEngine | null = null;
-  private claimDeadlineTimer: { clear(): void } | null = null;
-  private claimRevealTimer: { clear(): void } | null = null;
-  private discardDeadlineTimer: { clear(): void } | null = null;
-  private finalRevealTimer: { clear(): void } | null = null;
+  private phaseTimer: { clear(): void } | null = null;
   private startInProgress = false;
 
   public override async setPrivate(isPrivate = true, persist = true): Promise<void> {
@@ -403,27 +407,12 @@ export class GameRoom extends Room<{
       }
 
       this.matchEngine = matchEngine;
-      this.applyPublicMatchState(publicMatchState);
       this.state.status = "started";
-      this.clock.setTimeout(() => {
-        this.completePointContest(matchEngine);
-      }, POINT_CONTEST_DISPLAY_MILLISECONDS);
+      this.autoDispose = false;
+      this.enterMatchPhase(matchEngine, publicMatchState);
     } finally {
       this.startInProgress = false;
     }
-  }
-
-  private completePointContest(matchEngine: MatchEngine): void {
-    if (
-      this.matchEngine !== matchEngine
-      || this.state.status !== "started"
-      || this.state.phase !== "point_contest"
-    ) {
-      return;
-    }
-    matchEngine.completePointContest();
-    this.applyPublicMatchState(matchEngine.view(0).publicState);
-    this.sendPrivateMatchStates();
   }
 
   private playCards(client: Client, message: unknown): void {
@@ -435,8 +424,12 @@ export class GameRoom extends Room<{
       !isRecordLike(message)
       || !Array.isArray(message.cardIds)
       || !Array.from(message.cardIds).every((cardId) => typeof cardId === "string")
+      || !isActionId(message.actionId)
     ) {
       this.sendRoomError(client, ROOM_ERRORS.invalidPlayPayload);
+      return;
+    }
+    if (!this.authorizeCurrentAction(client, message.actionId)) {
       return;
     }
     const seatIndex = client.userData?.seatIndex;
@@ -453,9 +446,8 @@ export class GameRoom extends Room<{
       }
       throw error;
     }
-    this.applyPublicMatchState(this.matchEngine.view(seatIndex).publicState);
+    this.enterMatchPhase(this.matchEngine, this.matchEngine.view(seatIndex).publicState);
     this.sendPrivateMatchState(client);
-    this.scheduleClaimDeadline(this.matchEngine);
   }
 
   private commitClaim(client: Client, message: unknown): void {
@@ -467,8 +459,12 @@ export class GameRoom extends Room<{
       !isRecordLike(message)
       || !Object.hasOwn(message, "cardId")
       || (message.cardId !== null && typeof message.cardId !== "string")
+      || !isActionId(message.actionId)
     ) {
       this.sendRoomError(client, ROOM_ERRORS.invalidClaimPayload);
+      return;
+    }
+    if (!this.authorizeCurrentAction(client, message.actionId)) {
       return;
     }
     const seatIndex = client.userData?.seatIndex;
@@ -488,71 +484,12 @@ export class GameRoom extends Room<{
       throw error;
     }
     const publicState = this.matchEngine.view(seatIndex).publicState;
-    this.applyPublicMatchState(publicState);
     if (publicState.phase === "claim_commit") {
       this.sendPrivateMatchState(client);
     } else {
-      this.clearClaimDeadline();
+      this.enterMatchPhase(this.matchEngine, publicState);
       this.sendPrivateMatchStates();
-      this.scheduleClaimReveal(this.matchEngine);
     }
-  }
-
-  private scheduleClaimDeadline(matchEngine: MatchEngine): void {
-    this.clearClaimDeadline();
-    const timer = this.clock.setTimeout(() => {
-      if (this.claimDeadlineTimer !== timer) {
-        return;
-      }
-      this.claimDeadlineTimer = null;
-      if (
-        this.matchEngine !== matchEngine
-        || this.state.phase !== "claim_commit"
-      ) {
-        return;
-      }
-
-      matchEngine.resolveClaimsAtDeadline();
-      this.applyPublicMatchState(matchEngine.view(0).publicState);
-      this.sendPrivateMatchStates();
-      this.scheduleClaimReveal(matchEngine);
-    }, this.state.actionDeadlineSeconds * 1000);
-    this.claimDeadlineTimer = timer;
-  }
-
-  private clearClaimDeadline(): void {
-    this.claimDeadlineTimer?.clear();
-    this.claimDeadlineTimer = null;
-  }
-
-  private scheduleClaimReveal(matchEngine: MatchEngine): void {
-    this.clearClaimReveal();
-    const timer = this.clock.setTimeout(() => {
-      if (this.claimRevealTimer !== timer) {
-        return;
-      }
-      this.claimRevealTimer = null;
-      if (
-        this.matchEngine !== matchEngine
-        || this.state.phase !== "claim_reveal"
-      ) {
-        return;
-      }
-
-      matchEngine.completeClaimReveal();
-      const publicState = matchEngine.view(0).publicState;
-      this.applyPublicMatchState(publicState);
-      this.sendPrivateMatchStates();
-      if (publicState.phase === "award_discard") {
-        this.scheduleDiscardDeadline(matchEngine);
-      }
-    }, CLAIM_REVEAL_DISPLAY_MILLISECONDS);
-    this.claimRevealTimer = timer;
-  }
-
-  private clearClaimReveal(): void {
-    this.claimRevealTimer?.clear();
-    this.claimRevealTimer = null;
   }
 
   private discardCard(client: Client, message: unknown): void {
@@ -566,8 +503,12 @@ export class GameRoom extends Room<{
       || message.cardId.length === 0
       || !Number.isSafeInteger(message.turnNumber)
       || (message.turnNumber as number) <= 0
+      || !isActionId(message.actionId)
     ) {
       this.sendRoomError(client, ROOM_ERRORS.invalidDiscardPayload);
+      return;
+    }
+    if (!this.authorizeCurrentAction(client, message.actionId)) {
       return;
     }
     const seatIndex = client.userData?.seatIndex;
@@ -586,37 +527,12 @@ export class GameRoom extends Room<{
       throw error;
     }
     const publicState = this.matchEngine.view(seatIndex).publicState;
-    this.applyPublicMatchState(publicState);
-    this.sendPrivateMatchStates();
-    if (publicState.phase !== "award_discard") {
-      this.clearDiscardDeadline();
+    if (publicState.phase === "award_discard") {
+      this.applyPublicMatchState(publicState);
+    } else {
+      this.enterMatchPhase(this.matchEngine, publicState);
     }
-  }
-
-  private scheduleDiscardDeadline(matchEngine: MatchEngine): void {
-    this.clearDiscardDeadline();
-    const timer = this.clock.setTimeout(() => {
-      if (this.discardDeadlineTimer !== timer) {
-        return;
-      }
-      this.discardDeadlineTimer = null;
-      if (
-        this.matchEngine !== matchEngine
-        || this.state.phase !== "award_discard"
-      ) {
-        return;
-      }
-
-      matchEngine.resolveDiscardAtDeadline();
-      this.applyPublicMatchState(matchEngine.view(0).publicState);
-      this.sendPrivateMatchStates();
-    }, this.state.actionDeadlineSeconds * 1000);
-    this.discardDeadlineTimer = timer;
-  }
-
-  private clearDiscardDeadline(): void {
-    this.discardDeadlineTimer?.clear();
-    this.discardDeadlineTimer = null;
+    this.sendPrivateMatchStates();
   }
 
   private commitFinalSelection(client: Client, message: unknown): void {
@@ -624,8 +540,15 @@ export class GameRoom extends Room<{
       this.sendRoomError(client, ROOM_ERRORS.finalSelectionPhase);
       return;
     }
-    if (!isRecordLike(message) || (message.mode !== "manual" && message.mode !== "best")) {
+    if (
+      !isRecordLike(message)
+      || (message.mode !== "manual" && message.mode !== "best")
+      || !isActionId(message.actionId)
+    ) {
       this.sendRoomError(client, ROOM_ERRORS.invalidFinalSelectionPayload);
+      return;
+    }
+    if (!this.authorizeCurrentAction(client, message.actionId)) {
       return;
     }
     if (
@@ -672,36 +595,107 @@ export class GameRoom extends Room<{
     if (publicState.phase === "final_commit") {
       this.sendPrivateMatchState(client);
     } else {
-      this.applyPublicMatchState(publicState);
+      this.enterMatchPhase(this.matchEngine, publicState);
       this.sendPrivateMatchStates();
-      this.scheduleFinalReveal(this.matchEngine);
     }
   }
 
-  private scheduleFinalReveal(matchEngine: MatchEngine): void {
-    this.clearFinalReveal();
+  private enterMatchPhase(
+    matchEngine: MatchEngine,
+    publicState: PublicMatchState = matchEngine.view(0).publicState,
+  ): void {
+    this.clearPhaseTimer();
+    if (this.state.actionId >= MAX_ACTION_ID) {
+      throw new Error("match exhausted its action id range");
+    }
+    this.state.actionId += 1;
+    this.applyPublicMatchState(publicState);
+
+    const phase = publicState.phase;
+    const delayMilliseconds = this.phaseDelayMilliseconds(phase);
+    this.state.actionDeadlineAtUnixMs = this.isActionablePhase(phase)
+      ? Date.now() + delayMilliseconds!
+      : 0;
+    if (phase === "finished") {
+      this.autoDispose = true;
+    }
+    if (delayMilliseconds === null) {
+      return;
+    }
+
+    const actionId = this.state.actionId;
     const timer = this.clock.setTimeout(() => {
-      if (this.finalRevealTimer !== timer) {
+      if (this.phaseTimer !== timer) {
         return;
       }
-      this.finalRevealTimer = null;
+      this.phaseTimer = null;
       if (
         this.matchEngine !== matchEngine
-        || this.state.phase !== "final_reveal"
+        || this.state.phase !== phase
+        || this.state.actionId !== actionId
       ) {
         return;
       }
-
-      matchEngine.completeFinalReveal();
-      this.applyPublicMatchState(matchEngine.view(0).publicState);
-      this.sendPrivateMatchStates();
-    }, FINAL_REVEAL_DISPLAY_MILLISECONDS);
-    this.finalRevealTimer = timer;
+      this.resolvePhaseTimer(matchEngine, phase);
+    }, delayMilliseconds);
+    this.phaseTimer = timer;
   }
 
-  private clearFinalReveal(): void {
-    this.finalRevealTimer?.clear();
-    this.finalRevealTimer = null;
+  private resolvePhaseTimer(matchEngine: MatchEngine, phase: MatchPhase): void {
+    if (phase === "point_contest") {
+      matchEngine.completePointContest();
+    } else if (phase === "actor_play") {
+      const actorSeatIndex = matchEngine.view(0).publicState.actorSeatIndex;
+      const cardIds = matchEngine.view(actorSeatIndex).privateState.hand
+        .slice(0, 3)
+        .map((card) => card.id);
+      matchEngine.playCards(actorSeatIndex, cardIds);
+    } else if (phase === "claim_commit") {
+      matchEngine.resolveClaimsAtDeadline();
+    } else if (phase === "claim_reveal") {
+      matchEngine.completeClaimReveal();
+    } else if (phase === "award_discard") {
+      matchEngine.resolveDiscardAtDeadline();
+    } else if (phase === "final_commit") {
+      matchEngine.resolveFinalSelectionsAtDeadline();
+    } else if (phase === "final_reveal") {
+      matchEngine.completeFinalReveal();
+    } else {
+      return;
+    }
+
+    this.enterMatchPhase(matchEngine);
+    this.sendPrivateMatchStates();
+  }
+
+  private phaseDelayMilliseconds(phase: MatchPhase): number | null {
+    if (phase === "point_contest") {
+      return POINT_CONTEST_DISPLAY_MILLISECONDS;
+    }
+    if (phase === "claim_reveal") {
+      return CLAIM_REVEAL_DISPLAY_MILLISECONDS;
+    }
+    if (phase === "final_reveal") {
+      return FINAL_REVEAL_DISPLAY_MILLISECONDS;
+    }
+    if (this.isActionablePhase(phase)) {
+      return this.state.actionDeadlineSeconds * 1000;
+    }
+    return null;
+  }
+
+  private isActionablePhase(phase: MatchPhase): boolean {
+    return (
+      phase === "actor_play"
+      || phase === "claim_commit"
+      || phase === "award_discard"
+      || phase === "final_commit"
+    );
+  }
+
+  private clearPhaseTimer(): void {
+    this.phaseTimer?.clear();
+    this.phaseTimer = null;
   }
 
   private applyPublicMatchState(publicState: PublicMatchState): void {
@@ -790,7 +784,18 @@ export class GameRoom extends Room<{
     if (privateState.participantId !== participantClient.sessionId) {
       throw new Error("private match state does not belong to its recipient");
     }
-    participantClient.send("match_private_state", privateState);
+    participantClient.send("match_private_state", {
+      ...privateState,
+      actionId: this.state.actionId,
+    });
+  }
+
+  private authorizeCurrentAction(client: Client, actionId: number): boolean {
+    if (actionId !== this.state.actionId) {
+      this.sendRoomError(client, ROOM_ERRORS.staleAction);
+      return false;
+    }
+    return true;
   }
 
   private authorizeWaitingHost(client: Client, phaseError: RoomError): boolean {

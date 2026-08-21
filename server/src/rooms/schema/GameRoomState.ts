@@ -287,6 +287,9 @@ export class ParticipantSeat extends Schema {
   @type("boolean")
   public ready = false;
 
+  @type("boolean")
+  public connected = false;
+
   @type("uint16")
   public score = 0;
 
@@ -303,6 +306,7 @@ export class ParticipantSeat extends Schema {
     this.nickname = nickname;
     this.bot = bot;
     this.ready = bot;
+    this.connected = !bot;
     this.score = 0;
     this.handCount = 0;
   }
@@ -312,6 +316,7 @@ export class ParticipantSeat extends Schema {
     this.nickname = "";
     this.bot = false;
     this.ready = false;
+    this.connected = false;
     this.score = 0;
     this.handCount = 0;
   }
@@ -329,6 +334,12 @@ export class GameRoomState extends Schema {
 
   @type("uint8")
   public actionDeadlineSeconds: ActionDeadlineSeconds = 30;
+
+  @type("uint32")
+  public actionId = 0;
+
+  @type("float64")
+  public actionDeadlineAtUnixMs = 0;
 
   @type("string")
   public hostParticipantId = "";

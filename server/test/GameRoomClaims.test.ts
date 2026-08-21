@@ -12,6 +12,7 @@ interface PrivateMatchState {
   hand: PhysicalCard[];
   claimCommitted: boolean;
   claimCardId: string | null;
+  actionId: number;
 }
 
 interface UntypedMessageRoom {
@@ -69,6 +70,7 @@ async function startClaimCommit(colyseus: ColyseusTestServer<typeof appConfig>) 
   handled = serverRoom.waitForMessage("play_cards");
   participants[actorSeatIndex].send("play_cards", {
     cardIds: openingStates[actorSeatIndex].hand.slice(0, 3).map((card) => card.id),
+    actionId: serverRoom.state.actionId,
   });
   await Promise.all([handled, replacementStateReceived]);
   assert.strictEqual(serverRoom.state.phase, "claim_commit");
@@ -88,11 +90,17 @@ async function assertClaimRejectedWithoutMutation(
   const before = serverRoom.state.toJSON();
   const rejected = participant.waitForMessage("room_error", 1000);
   const handled = serverRoom.waitForMessage("claim");
-  participant.send("claim", payload);
+  participant.send("claim", isRecordPayload(payload)
+    ? { ...payload, actionId: serverRoom.state.actionId }
+    : payload);
   const [, roomError] = await Promise.all([handled, rejected]);
 
   assert.strictEqual(roomError.code, expectedCode);
   assert.deepStrictEqual(serverRoom.state.toJSON(), before);
+}
+
+function isRecordPayload(payload: unknown): payload is Record<string, unknown> {
+  return typeof payload === "object" && payload !== null && !Array.isArray(payload);
 }
 
 describe("game room secret claims", () => {
@@ -166,7 +174,10 @@ describe("game room secret claims", () => {
 
     const acknowledged = claimant.waitForMessage("match_private_state", 1000) as Promise<PrivateMatchState>;
     const handled = serverRoom.waitForMessage("claim");
-    claimant.send("claim", { cardId: claimedCardId });
+    claimant.send("claim", {
+      cardId: claimedCardId,
+      actionId: serverRoom.state.actionId,
+    });
     const [, privateState] = await Promise.all([handled, acknowledged]);
 
     const publicState = serverRoom.state.toJSON();
@@ -197,7 +208,10 @@ describe("game room secret claims", () => {
     for (const seatIndex of claimantSeatIndexes) {
       const acknowledged = participants[seatIndex].waitForMessage("match_private_state", 1000);
       const handled = serverRoom.waitForMessage("claim");
-      participants[seatIndex].send("claim", { cardId: null });
+      participants[seatIndex].send("claim", {
+        cardId: null,
+        actionId: serverRoom.state.actionId,
+      });
       await Promise.all([handled, acknowledged]);
     }
 
@@ -253,9 +267,13 @@ describe("game room secret claims", () => {
     tickClock(serverRoom, 900);
     assert.strictEqual(serverRoom.state.phase, "actor_play");
     assert.strictEqual(serverRoom.state.claimEvents.length, 1);
-    const advancedState = serverRoom.state.toJSON();
+    const actorActionId = serverRoom.state.actionId;
     tickClock(serverRoom, 15_000);
-    assert.deepStrictEqual(serverRoom.state.toJSON(), advancedState);
+    assert.strictEqual(serverRoom.state.phase, "claim_commit");
+    assert.strictEqual(serverRoom.state.actionId, actorActionId + 1);
+    assert.strictEqual(serverRoom.state.turnNumber, 2);
+    assert.strictEqual(serverRoom.state.claimEvents.length, 1);
+    assert.strictEqual(serverRoom.state.playEvents.length, 2);
 
     await Promise.all(participants.map((participant) => participant.leave()));
   });
@@ -285,7 +303,10 @@ describe("game room secret claims", () => {
       1000,
     );
     let handled = serverRoom.waitForMessage("claim");
-    participants[claimantSeatIndexes[0]].send("claim", { cardId: null });
+    participants[claimantSeatIndexes[0]].send("claim", {
+      cardId: null,
+      actionId: serverRoom.state.actionId,
+    });
     await Promise.all([handled, acknowledged]);
     await assertClaimRejectedWithoutMutation(
       serverRoom,
@@ -297,7 +318,10 @@ describe("game room secret claims", () => {
     for (const seatIndex of claimantSeatIndexes.slice(1)) {
       acknowledged = participants[seatIndex].waitForMessage("match_private_state", 1000);
       handled = serverRoom.waitForMessage("claim");
-      participants[seatIndex].send("claim", { cardId: null });
+      participants[seatIndex].send("claim", {
+        cardId: null,
+        actionId: serverRoom.state.actionId,
+      });
       await Promise.all([handled, acknowledged]);
     }
     assert.strictEqual(serverRoom.state.phase, "claim_reveal");
@@ -323,7 +347,10 @@ describe("game room secret claims", () => {
       const seatIndex = claimantSeatIndexes[index];
       const acknowledged = participants[seatIndex].waitForMessage("match_private_state", 1000);
       const handled = serverRoom.waitForMessage("claim");
-      participants[seatIndex].send("claim", { cardId: claimCardIds[index] });
+      participants[seatIndex].send("claim", {
+        cardId: claimCardIds[index],
+        actionId: serverRoom.state.actionId,
+      });
       await Promise.all([handled, acknowledged]);
     }
 
@@ -332,7 +359,10 @@ describe("game room secret claims", () => {
     ));
     const finalSeatIndex = claimantSeatIndexes[2];
     const handled = serverRoom.waitForMessage("claim");
-    participants[finalSeatIndex].send("claim", { cardId: claimCardIds[2] });
+    participants[finalSeatIndex].send("claim", {
+      cardId: claimCardIds[2],
+      actionId: serverRoom.state.actionId,
+    });
     await handled;
     const privateStates = await Promise.all(revealSnapshots);
 
