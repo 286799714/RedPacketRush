@@ -4,12 +4,12 @@
 
 **Blocked by:** 01 - Connect to the live lobby.
 
-**Status:** in-progress
+**Status:** done
 
-- [ ] Creating and joining a room establishes one seat per human session and rejects invalid or duplicate occupancy.
-- [ ] All participants see the same four seats, nicknames, bot markers, readiness, host, deck mode, and action deadline.
-- [ ] Only the host can change one/two-deck mode, choose 15/30/60 seconds, fill bots, or start.
-- [ ] Humans can toggle ready; bots are always ready; configuration changes clear human readiness.
-- [ ] Start is rejected until exactly four seats are ready and accepted exactly once afterward.
-- [ ] A waiting participant can leave, the seat is released, and host ownership transfers deterministically.
-- [ ] Started, full, private, or locked rooms cannot be joined from a stale listing.
+- [x] Creating and joining a room establishes one seat per human session and rejects invalid or duplicate occupancy.
+- [x] All participants see the same four seats, nicknames, bot markers, readiness, host, deck mode, and action deadline.
+- [x] Only the host can change one/two-deck mode, choose 15/30/60 seconds, fill bots, or start.
+- [x] Humans can toggle ready; bots are always ready; configuration changes clear human readiness.
+- [x] Start is rejected until exactly four seats are ready and accepted exactly once afterward.
+- [x] A waiting participant can leave, the seat is released, and host ownership transfers deterministically.
+- [x] Started, full, private, or locked rooms cannot be joined from a stale listing.

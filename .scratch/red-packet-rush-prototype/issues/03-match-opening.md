@@ -4,7 +4,7 @@
 
 **Blocked by:** 02 - Create and prepare a four-participant room.
 
-**Status:** ready-for-agent
+**Status:** in-progress
 
 - [ ] One- and two-deck physical cards have stable unique identifiers without jokers.
 - [ ] The point contest compares rank then suit, repeats only among tied leaders, and always selects one first actor under deterministic tests.
