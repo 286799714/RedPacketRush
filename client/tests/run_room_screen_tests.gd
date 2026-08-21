@@ -1,11 +1,8 @@
-extends SceneTree
+extends "res://tests/screen_test_runner.gd"
 
 const FakeRealtimeAdapter = preload("res://tests/fakes/fake_realtime_adapter.gd")
 const RoomScreen = preload("res://scripts/room/room_screen.gd")
 const RoomStore = preload("res://scripts/room/room_store.gd")
-
-var _failures: Array[String] = []
-
 
 func _init() -> void:
 	call_deferred("_run")
@@ -201,12 +198,9 @@ func _find_seat_panels(root_node: Node) -> Array[PanelContainer]:
 	var result: Array[PanelContainer] = []
 	for seat_number in range(1, 5):
 		var heading := _find_visible_label_exact(root_node, "席位 %d" % seat_number)
-		var ancestor := heading.get_parent() if heading != null else null
-		while ancestor != null and ancestor != root_node:
-			if ancestor is PanelContainer:
-				result.append(ancestor)
-				break
-			ancestor = ancestor.get_parent()
+		var panel := _ancestor_panel(heading, root_node)
+		if panel != null:
+			result.append(panel)
 	return result
 
 
@@ -220,33 +214,9 @@ func _find_option_button_with_item(root_node: Node, item_text: String) -> Option
 	return null
 
 
-func _find_visible_button(root_node: Node, expected_text: String) -> Button:
-	for node in root_node.find_children("*", "Button", true, false):
-		if node is Button and node.is_visible_in_tree() and node.text == expected_text:
-			return node
-	return null
-
-
-func _find_visible_label_exact(root_node: Node, expected_text: String) -> Label:
-	for node in root_node.find_children("*", "Label", true, false):
-		if node is Label and node.is_visible_in_tree() and node.text == expected_text:
-			return node
-	return null
-
-
 func _find_visible_labels_exact(root_node: Node, expected_text: String) -> Array[Label]:
 	var result: Array[Label] = []
 	for node in root_node.find_children("*", "Label", true, false):
 		if node is Label and node.is_visible_in_tree() and node.text == expected_text:
 			result.append(node)
 	return result
-
-
-func _expect(condition: bool, context: String) -> void:
-	if not condition:
-		_failures.append(context)
-
-
-func _expect_equal(actual: Variant, expected: Variant, context: String) -> void:
-	if actual != expected:
-		_failures.append("%s：期望 %s，实际 %s" % [context, expected, actual])

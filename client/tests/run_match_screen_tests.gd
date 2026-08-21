@@ -1,9 +1,6 @@
-extends SceneTree
+extends "res://tests/screen_test_runner.gd"
 
 const MatchScreen = preload("res://scripts/match/match_screen.gd")
-
-var _failures: Array[String] = []
-
 
 class FakeMatchStore extends RefCounted:
 	signal state_changed()
@@ -724,14 +721,19 @@ func _test_reveal_motion_honors_reduced_motion(
 	})
 	await process_frame
 	await process_frame
-	var animated_alpha := screen._played_panel.modulate.a
+	var reveal_title := _find_visible_label_containing(screen, "抢牌同时揭晓")
+	var reveal_panel := _ancestor_panel(reveal_title, screen)
+	if reveal_panel == null:
+		_failures.append("抢牌揭晓应提供可见的公开结果面板")
+		return
+	var animated_alpha := reveal_panel.modulate.a
 	_expect(animated_alpha < 1.0, "抢牌揭晓首次出现播放统一 reveal 动效")
 	await create_timer(0.28).timeout
-	_expect(is_equal_approx(screen._played_panel.modulate.a, 1.0), "reveal 动效结束后恢复不透明")
+	_expect(is_equal_approx(reveal_panel.modulate.a, 1.0), "reveal 动效结束后恢复不透明")
 	store.apply_public_snapshot({})
 	await process_frame
 	await process_frame
-	_expect(is_equal_approx(screen._played_panel.modulate.a, 1.0), "同回合公开刷新不重播 reveal 动效")
+	_expect(is_equal_approx(reveal_panel.modulate.a, 1.0), "同回合公开刷新不重播 reveal 动效")
 
 	screen.set_reduced_motion(true)
 	store.apply_public_snapshot({
@@ -742,7 +744,7 @@ func _test_reveal_motion_honors_reduced_motion(
 	})
 	await process_frame
 	await process_frame
-	_expect(is_equal_approx(screen._played_panel.modulate.a, 1.0), "reduced-motion 下跳过 reveal 动效")
+	_expect(is_equal_approx(reveal_panel.modulate.a, 1.0), "reduced-motion 下跳过 reveal 动效")
 	var reduced_collision := _find_last_visible_label_containing(screen, "机器人丙 · 抢 Q")
 	_expect(reduced_collision != null and is_equal_approx(reduced_collision.scale.x, 1.0), "reduced-motion 下跳过撞车动效")
 	screen.set_reduced_motion(false)
@@ -1393,7 +1395,7 @@ func _test_final_reveal_and_finished_ranking_are_authoritative(
 	_assert_final_surface_does_not_overlap_compact_panels(screen)
 	var fourth_group := _find_last_visible_label_containing(screen, "B · 同花 +4")
 	var reveal_title := _find_visible_label_containing(screen, "最终结算 · 统一揭晓")
-	var reveal_panel := _ancestor_panel(reveal_title)
+	var reveal_panel := _ancestor_panel(reveal_title, screen)
 	_expect(fourth_group != null and reveal_panel != null, "960x540 第四席 B 组结算行可见")
 	if fourth_group != null and reveal_panel != null:
 		var fourth_rect := fourth_group.get_global_rect()
@@ -1626,7 +1628,7 @@ func _assert_final_surface_does_not_overlap_compact_panels(screen: MatchScreen) 
 	var title := _find_visible_label_containing(screen, "最终排名")
 	if title == null:
 		title = _find_visible_label_containing(screen, "统一揭晓")
-	var final_panel := _ancestor_panel(title)
+	var final_panel := _ancestor_panel(title, screen)
 	if final_panel == null:
 		_failures.append("终局中央面应有可见面板边界")
 		return
@@ -1658,17 +1660,8 @@ func _visible_compact_panel_count(screen: MatchScreen) -> int:
 	return count
 
 
-func _ancestor_panel(node: Node) -> PanelContainer:
-	var current := node
-	while current != null:
-		if current is PanelContainer:
-			return current
-		current = current.get_parent()
-	return null
-
-
 func _seat_panel_for_position(root_node: Node, position: String) -> PanelContainer:
-	return _ancestor_panel(_find_visible_label_exact(root_node, position))
+	return _ancestor_panel(_find_visible_label_exact(root_node, position), root_node)
 
 
 func _selected_card_count(screen: MatchScreen) -> int:
@@ -1875,24 +1868,6 @@ func _node_text(node: Node) -> String:
 	return text
 
 
-func _find_visible_label_containing(root_node: Node, fragment: String) -> Label:
-	if root_node == null:
-		return null
-	for node in root_node.find_children("*", "Label", true, false):
-		if node is Label and node.is_visible_in_tree() and node.text.contains(fragment):
-			return node
-	return null
-
-
-func _find_visible_label_exact(root_node: Node, expected_text: String) -> Label:
-	if root_node == null:
-		return null
-	for node in root_node.find_children("*", "Label", true, false):
-		if node is Label and node.is_visible_in_tree() and node.text == expected_text:
-			return node
-	return null
-
-
 func _find_last_visible_label_containing(root_node: Node, fragment: String) -> Label:
 	var result: Label = null
 	for node in root_node.find_children("*", "Label", true, false):
@@ -1909,13 +1884,6 @@ func _count_visible_labels_containing(root_node: Node, fragment: String) -> int:
 	return count
 
 
-func _find_visible_button(root_node: Node, text: String) -> Button:
-	for node in root_node.find_children("*", "Button", true, false):
-		if node is Button and node.is_visible_in_tree() and node.text == text:
-			return node
-	return null
-
-
 func _find_visible_button_with_content(root_node: Node, fragment: String) -> Button:
 	for node in root_node.find_children("*", "Button", true, false):
 		if node is Button and node.is_visible_in_tree() and _node_text(node).contains(fragment):
@@ -1929,13 +1897,3 @@ func _find_visible_card_buttons(root_node: Node) -> Array[Button]:
 		if node is Button and node.is_visible_in_tree() and not _node_text(node).is_empty():
 			result.append(node)
 	return result
-
-
-func _expect(condition: bool, context: String) -> void:
-	if not condition:
-		_failures.append(context)
-
-
-func _expect_equal(actual: Variant, expected: Variant, context: String) -> void:
-	if actual != expected:
-		_failures.append("%s：期望 %s，实际 %s" % [context, expected, actual])

@@ -1,10 +1,7 @@
-extends SceneTree
+extends "res://tests/screen_test_runner.gd"
 
 const FakeRealtimeAdapter = preload("res://tests/fakes/fake_realtime_adapter.gd")
 const LobbyScreen = preload("res://scripts/lobby/lobby_screen.gd")
-
-var _failures: Array[String] = []
-
 
 func _init() -> void:
 	call_deferred("_run")
@@ -188,27 +185,3 @@ func _find_line_edit_by_placeholder(root_node: Node, placeholder: String) -> Lin
 		if node is LineEdit and node.is_visible_in_tree() and node.placeholder_text == placeholder:
 			return node
 	return null
-
-
-func _find_visible_button(root_node: Node, expected_text: String) -> Button:
-	for node in root_node.find_children("*", "Button", true, false):
-		if node is Button and node.is_visible_in_tree() and node.text == expected_text:
-			return node
-	return null
-
-
-func _find_visible_label_containing(root_node: Node, fragment: String) -> Label:
-	for node in root_node.find_children("*", "Label", true, false):
-		if node is Label and node.is_visible_in_tree() and node.text.contains(fragment):
-			return node
-	return null
-
-
-func _expect(condition: bool, context: String) -> void:
-	if not condition:
-		_failures.append(context)
-
-
-func _expect_equal(actual: Variant, expected: Variant, context: String) -> void:
-	if actual != expected:
-		_failures.append("%s：期望 %s，实际 %s" % [context, expected, actual])
