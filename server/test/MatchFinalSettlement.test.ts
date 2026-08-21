@@ -6,6 +6,7 @@ import {
   type MatchCommandErrorCode,
   type MatchParticipant,
 } from "../src/match/MatchEngine.js";
+import { evaluateFinalSelection } from "../src/match/finalSettlement.js";
 import { SeededRandomSource } from "../src/match/random.js";
 
 const PARTICIPANTS: readonly MatchParticipant[] = [
@@ -41,12 +42,6 @@ function firstLegalGroups(engine: MatchEngine, seatIndex: number): string[][] {
   return [ids.slice(0, 3), ids.slice(3, 6)];
 }
 
-function canonicalGroups(groups: readonly (readonly string[])[]): string[][] {
-  return groups
-    .map((group) => [...group].sort())
-    .sort((left, right) => left.join("\0").localeCompare(right.join("\0")));
-}
-
 function assertRejectedWithoutMutation(
   engine: MatchEngine,
   action: () => void,
@@ -72,6 +67,8 @@ describe("match final settlement", () => {
     const engine = engineAtFinalCommit();
     const seatZeroGroups = firstLegalGroups(engine, 0);
     const seatZeroHand = engine.view(0).privateState.hand;
+    const expectedSeatZeroGroups = evaluateFinalSelection(seatZeroHand, seatZeroGroups)
+      .groups.map((group) => group.cards.map((card) => card.id));
     const otherCardId = engine.view(1).privateState.hand[0].id;
     const invalidSelections: readonly (readonly (readonly string[])[])[] = [
       [seatZeroGroups[0]],
@@ -97,7 +94,7 @@ describe("match final settlement", () => {
       committed: view.privateState.finalCommitted,
       groups: view.privateState.finalGroups,
     })), [
-      { committed: true, groups: canonicalGroups(seatZeroGroups) },
+      { committed: true, groups: expectedSeatZeroGroups },
       { committed: false, groups: [] },
       { committed: false, groups: [] },
       { committed: false, groups: [] },
@@ -116,6 +113,10 @@ describe("match final settlement", () => {
   it("uses best choices for missing commits at the fallback boundary", () => {
     const engine = engineAtFinalCommit(23);
     const manualGroups = firstLegalGroups(engine, 0);
+    const expectedManualGroups = evaluateFinalSelection(
+      engine.view(0).privateState.hand,
+      manualGroups,
+    ).groups.map((group) => group.cards.map((card) => card.id));
     engine.commitFinalSelection(0, manualGroups);
 
     engine.resolveFinalSelectionsAtDeadline();
@@ -126,7 +127,7 @@ describe("match final settlement", () => {
     assert.strictEqual(state.finalResults.length, 4);
     assert.deepStrictEqual(
       state.finalResults[0].groups.map((group) => group.cards.map((card) => card.id)),
-      canonicalGroups(manualGroups),
+      expectedManualGroups,
     );
     assert.ok(views.every((view) => view.privateState.finalCommitted));
     assertRejectedWithoutMutation(

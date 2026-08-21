@@ -83,7 +83,35 @@ describe("final settlement rules", () => {
     );
   });
 
-  it("finds the maximum total and resolves equal optima by canonical physical ids", () => {
+  it("selects the highest-scoring pair of disjoint combinations", () => {
+    const hand = [
+      card("clubs-2", 2, "clubs"),
+      card("clubs-3", 3, "clubs"),
+      card("clubs-4", 4, "clubs"),
+      card("nine-clubs", 9, "clubs"),
+      card("nine-spades", 9, "spades"),
+      card("nine-hearts", 9, "hearts"),
+      card("unused-jack", 11, "diamonds"),
+      card("unused-ace", 14, "hearts"),
+    ] as const;
+
+    const best = findBestFinalSelection(hand);
+
+    assert.strictEqual(best.totalScore, 18);
+    assert.deepStrictEqual(
+      best.groups.map((group) => ({
+        ids: group.cards.map((selectedCard) => selectedCard.id),
+        category: group.category,
+        score: group.score,
+      })),
+      [
+        { ids: ["clubs-2", "clubs-3", "clubs-4"], category: "straight_flush", score: 10 },
+        { ids: ["nine-clubs", "nine-spades", "nine-hearts"], category: "three_of_a_kind", score: 8 },
+      ],
+    );
+  });
+
+  it("finds the maximum total and resolves equal optima by canonical physical card order", () => {
     const tiedHand = [
       card("h", 7, "hearts", 1),
       card("g", 7, "diamonds", 1),
@@ -101,12 +129,54 @@ describe("final settlement rules", () => {
     assert.strictEqual(forward.totalScore, 16);
     assert.deepStrictEqual(
       forward.groups.map((group) => group.cards.map((selectedCard) => selectedCard.id)),
-      [["a", "b", "c"], ["d", "e", "f"]],
+      [["a", "e", "b"], ["f", "c", "g"]],
     );
     assert.deepStrictEqual(reversed, forward);
     assert.deepStrictEqual(
       forward.unusedCards.map((unusedCard) => unusedCard.id),
-      ["g", "h"],
+      ["d", "h"],
+    );
+  });
+
+  it("canonicalizes selections by rank, suit, copy, then id instead of id text", () => {
+    const hand = [
+      card("a-hearts-copy-1", 7, "hearts", 1),
+      card("b-hearts-copy-0", 7, "hearts"),
+      card("c-diamonds-copy-1", 7, "diamonds", 1),
+      card("d-diamonds-copy-0", 7, "diamonds"),
+      card("e-spades-copy-1", 7, "spades", 1),
+      card("f-spades-copy-0", 7, "spades"),
+      card("g-clubs-copy-1", 7, "clubs", 1),
+      card("z-clubs-copy-0", 7, "clubs"),
+    ] as const;
+
+    const selection = evaluateFinalSelection(hand, [
+      ["e-spades-copy-1", "z-clubs-copy-0", "g-clubs-copy-1"],
+      ["a-hearts-copy-1", "d-diamonds-copy-0", "f-spades-copy-0"],
+    ]);
+    assert.deepStrictEqual(
+      selection.groups.map((group) => group.cards.map((selectedCard) => selectedCard.id)),
+      [
+        ["z-clubs-copy-0", "g-clubs-copy-1", "e-spades-copy-1"],
+        ["f-spades-copy-0", "d-diamonds-copy-0", "a-hearts-copy-1"],
+      ],
+    );
+    assert.deepStrictEqual(
+      selection.unusedCards.map((unusedCard) => unusedCard.id),
+      ["c-diamonds-copy-1", "b-hearts-copy-0"],
+    );
+
+    const best = findBestFinalSelection(hand);
+    assert.deepStrictEqual(
+      best.groups.map((group) => group.cards.map((selectedCard) => selectedCard.id)),
+      [
+        ["z-clubs-copy-0", "g-clubs-copy-1", "f-spades-copy-0"],
+        ["e-spades-copy-1", "d-diamonds-copy-0", "c-diamonds-copy-1"],
+      ],
+    );
+    assert.deepStrictEqual(
+      best.unusedCards.map((unusedCard) => unusedCard.id),
+      ["b-hearts-copy-0", "a-hearts-copy-1"],
     );
   });
 });

@@ -161,11 +161,17 @@ describe("game room final settlement", () => {
 
     const publicBefore = serverRoom.state.toJSON();
     const privateMessages = participants.map((): PrivateMatchState[] => []);
+    const publicStateChanges = participants.map(() => 0);
     participants.forEach((participant, seatIndex) => {
       onRoomMessage(participant, "match_private_state", (payload) => {
         privateMessages[seatIndex].push(payload as PrivateMatchState);
       });
+      participant.onStateChange(() => {
+        publicStateChanges[seatIndex] += 1;
+      });
     });
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    publicStateChanges.fill(0);
     const acknowledged = participants[0].waitForMessage(
       "match_private_state",
       1000,
@@ -173,11 +179,13 @@ describe("game room final settlement", () => {
     const handled = serverRoom.waitForMessage("final_selection");
     participants[0].send("final_selection", { mode: "manual", groups });
     const [, privateState] = await Promise.all([handled, acknowledged]);
+    await new Promise((resolve) => setTimeout(resolve, 50));
 
     assert.deepStrictEqual(serverRoom.state.toJSON(), publicBefore);
     assert.strictEqual(privateState.finalCommitted, true);
     assert.strictEqual(privateState.finalGroups.length, 2);
     assert.deepStrictEqual(privateMessages.map((messages) => messages.length), [1, 0, 0, 0]);
+    assert.deepStrictEqual(publicStateChanges, [0, 0, 0, 0]);
     assert.ok(!Object.hasOwn(serverRoom.state.toJSON(), "finalCommitCount"));
     assert.ok(!Object.hasOwn(serverRoom.state.toJSON(), "finalGroups"));
     await expectFinalSelectionError(

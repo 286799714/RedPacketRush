@@ -1,4 +1,4 @@
-import type { PhysicalCard } from "./cards.js";
+import { CARD_SUITS, type PhysicalCard } from "./cards.js";
 import {
   classifyCombination,
   type CombinationCategory,
@@ -15,6 +15,8 @@ export interface EvaluatedFinalSelection {
   readonly unusedCards: readonly PhysicalCard[];
   readonly totalScore: number;
 }
+
+const SUIT_ORDER = new Map(CARD_SUITS.map((suit, index) => [suit, index]));
 
 export function evaluateFinalSelection(
   hand: readonly PhysicalCard[],
@@ -44,10 +46,11 @@ export function evaluateFinalSelection(
   }
 
   const canonicalGroups = submittedGroups
-    .map((group) => Array.from(group).sort(compareStrings))
-    .sort(compareStringArrays);
-  const evaluatedGroups = canonicalGroups.map((groupIds) => {
-    const cards = groupIds.map((cardId) => handById.get(cardId)!);
+    .map((group) => group
+      .map((cardId) => handById.get(cardId)!)
+      .sort(comparePhysicalCards))
+    .sort(comparePhysicalCardArrays);
+  const evaluatedGroups = canonicalGroups.map((cards) => {
     const classification = classifyCombination(cards);
     return Object.freeze({
       cards: Object.freeze(cards),
@@ -58,7 +61,7 @@ export function evaluateFinalSelection(
   const selectedIdSet = new Set(selectedIds);
   const unusedCards = [...hand]
     .filter((card) => !selectedIdSet.has(card.id))
-    .sort((left, right) => compareStrings(left.id, right.id));
+    .sort(comparePhysicalCards);
 
   return Object.freeze({
     groups: Object.freeze(evaluatedGroups),
@@ -71,7 +74,7 @@ export function findBestFinalSelection(
   hand: readonly PhysicalCard[],
 ): EvaluatedFinalSelection {
   validateHand(hand);
-  const sortedCards = [...hand].sort((left, right) => compareStrings(left.id, right.id));
+  const sortedCards = [...hand].sort(comparePhysicalCards);
   const groupCandidates = chooseThree(sortedCards.map((card) => card.id));
   let best: EvaluatedFinalSelection | null = null;
 
@@ -139,10 +142,10 @@ function compareSelections(
   left: EvaluatedFinalSelection,
   right: EvaluatedFinalSelection,
 ): number {
-  const leftGroups = left.groups.map((group) => group.cards.map((card) => card.id));
-  const rightGroups = right.groups.map((group) => group.cards.map((card) => card.id));
+  const leftGroups = left.groups.map((group) => group.cards);
+  const rightGroups = right.groups.map((group) => group.cards);
   for (let index = 0; index < leftGroups.length; index += 1) {
-    const comparison = compareStringArrays(leftGroups[index], rightGroups[index]);
+    const comparison = comparePhysicalCardArrays(leftGroups[index], rightGroups[index]);
     if (comparison !== 0) {
       return comparison;
     }
@@ -150,14 +153,26 @@ function compareSelections(
   return 0;
 }
 
-function compareStringArrays(left: readonly string[], right: readonly string[]): number {
+function comparePhysicalCardArrays(
+  left: readonly PhysicalCard[],
+  right: readonly PhysicalCard[],
+): number {
   for (let index = 0; index < Math.min(left.length, right.length); index += 1) {
-    const comparison = compareStrings(left[index], right[index]);
+    const comparison = comparePhysicalCards(left[index], right[index]);
     if (comparison !== 0) {
       return comparison;
     }
   }
   return left.length - right.length;
+}
+
+function comparePhysicalCards(left: PhysicalCard, right: PhysicalCard): number {
+  return (
+    left.rank - right.rank
+    || (SUIT_ORDER.get(left.suit) ?? -1) - (SUIT_ORDER.get(right.suit) ?? -1)
+    || left.copyIndex - right.copyIndex
+    || compareStrings(left.id, right.id)
+  );
 }
 
 function compareStrings(left: string, right: string): number {

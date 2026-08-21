@@ -669,10 +669,10 @@ export class GameRoom extends Room<{
     }
 
     const publicState = this.matchEngine.view(seatIndex).publicState;
-    this.applyPublicMatchState(publicState);
     if (publicState.phase === "final_commit") {
       this.sendPrivateMatchState(client);
     } else {
+      this.applyPublicMatchState(publicState);
       this.sendPrivateMatchStates();
       this.scheduleFinalReveal(this.matchEngine);
     }
