@@ -30,7 +30,8 @@ export type MatchCommandErrorCode =
   | "claim_already_committed"
   | "invalid_discard"
   | "discard_not_required"
-  | "awarded_card_protected";
+  | "awarded_card_protected"
+  | "stale_turn";
 
 export class MatchCommandError extends Error {
   public constructor(
@@ -127,7 +128,6 @@ export interface PublicMatchState {
   readonly discardedCards: readonly PhysicalCard[];
   readonly sealedCards: readonly PhysicalCard[];
   readonly pendingDiscardSeatIndexes: readonly number[];
-  readonly discardEvents: readonly CardDiscardedEvent[];
   readonly participants: readonly PublicMatchParticipant[];
   readonly events: readonly PublicMatchEvent[];
 }
@@ -172,7 +172,6 @@ export class MatchEngine {
   private sealedCards: PhysicalCard[] = [];
   private pendingDiscardSeatIndexes = new Set<number>();
   private protectedAwardCardIds = new Map<number, string>();
-  private discardEvents: CardDiscardedEvent[] = [];
   private configuredCardCount = 0;
 
   public constructor(random: RandomSource) {
@@ -328,9 +327,12 @@ export class MatchEngine {
     this.openNextTurn();
   }
 
-  public discardCard(seatIndex: number, cardId: string): void {
+  public discardCard(seatIndex: number, cardId: string, turnNumber: number): void {
     if (this.participants === null || this.phase !== "award_discard") {
       throw new MatchCommandError("invalid_phase", "award discard is not active");
+    }
+    if (!Number.isSafeInteger(turnNumber) || turnNumber !== this.turnNumber) {
+      throw new MatchCommandError("stale_turn", "discard does not belong to the current turn");
     }
     if (!this.pendingDiscardSeatIndexes.has(seatIndex)) {
       throw new MatchCommandError(
@@ -416,7 +418,6 @@ export class MatchEngine {
       discardedCards: Object.freeze([...this.discardedCards]),
       sealedCards: Object.freeze([...this.sealedCards]),
       pendingDiscardSeatIndexes: Object.freeze([...this.pendingDiscardSeatIndexes]),
-      discardEvents: Object.freeze([...this.discardEvents]),
       participants: Object.freeze(publicParticipants),
       events: Object.freeze([...this.events]),
     });
@@ -593,7 +594,6 @@ export class MatchEngine {
       seatIndex: participant.seatIndex,
       card,
     });
-    this.discardEvents.push(event);
     this.events.push(event);
   }
 

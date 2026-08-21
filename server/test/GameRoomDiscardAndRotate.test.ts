@@ -114,7 +114,10 @@ describe("game room award discard and actor rotation", () => {
       const seatIndex = claimantSeats[index];
       const handled = serverRoom.waitForMessage("discard");
       const privateUpdate = participants[seatIndex].waitForMessage("match_private_state", 1000);
-      participants[seatIndex].send("discard", { cardId: openingStates[seatIndex].hand[0].id });
+      participants[seatIndex].send("discard", {
+        cardId: openingStates[seatIndex].hand[0].id,
+        turnNumber: serverRoom.state.turnNumber,
+      });
       await Promise.all([handled, privateUpdate]);
       assert.strictEqual(serverRoom.state.seats[seatIndex].handCount, 8);
       assert.strictEqual(
@@ -138,7 +141,7 @@ describe("game room award discard and actor rotation", () => {
     await expectDiscardError(
       serverRoom,
       participants[claimantSeats.at(-1)!],
-      { cardId: openingStates[claimantSeats.at(-1)!].hand[1].id },
+      { cardId: openingStates[claimantSeats.at(-1)!].hand[1].id, turnNumber: 1 },
       "invalid_phase",
     );
     await Promise.all(participants.map((participant) => participant.leave()));
@@ -158,23 +161,35 @@ describe("game room award discard and actor rotation", () => {
     await expectDiscardError(
       serverRoom,
       participants[firstSeat],
-      { cardId: protectedCardId },
+      { cardId: protectedCardId, turnNumber: serverRoom.state.turnNumber },
       "awarded_card_protected",
     );
     await expectDiscardError(
       serverRoom,
       participants[firstSeat],
-      { cardId: openingStates[claimantSeats[1]].hand[0].id },
+      {
+        cardId: openingStates[claimantSeats[1]].hand[0].id,
+        turnNumber: serverRoom.state.turnNumber,
+      },
       "card_not_owned",
+    );
+    await expectDiscardError(
+      serverRoom,
+      participants[firstSeat],
+      { cardId: openingStates[firstSeat].hand[0].id, turnNumber: 999 },
+      "stale_turn",
     );
 
     let handled = serverRoom.waitForMessage("discard");
-    participants[firstSeat].send("discard", { cardId: openingStates[firstSeat].hand[0].id });
+    participants[firstSeat].send("discard", {
+      cardId: openingStates[firstSeat].hand[0].id,
+      turnNumber: serverRoom.state.turnNumber,
+    });
     await handled;
     await expectDiscardError(
       serverRoom,
       participants[firstSeat],
-      { cardId: openingStates[firstSeat].hand[1].id },
+      { cardId: openingStates[firstSeat].hand[1].id, turnNumber: serverRoom.state.turnNumber },
       "discard_not_required",
     );
     await Promise.all(participants.map((participant) => participant.leave()));

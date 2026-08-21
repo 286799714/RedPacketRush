@@ -555,6 +555,8 @@ export class GameRoom extends Room<{
       !isRecordLike(message)
       || typeof message.cardId !== "string"
       || message.cardId.length === 0
+      || !Number.isSafeInteger(message.turnNumber)
+      || (message.turnNumber as number) <= 0
     ) {
       this.sendRoomError(client, ROOM_ERRORS.invalidDiscardPayload);
       return;
@@ -566,7 +568,7 @@ export class GameRoom extends Room<{
     }
 
     try {
-      this.matchEngine.discardCard(seatIndex, message.cardId);
+      this.matchEngine.discardCard(seatIndex, message.cardId, message.turnNumber as number);
     } catch (error) {
       if (error instanceof MatchCommandError) {
         this.sendRoomError(client, { code: error.code, message: error.message });
