@@ -12,13 +12,20 @@ import type { RandomSource } from "./random.js";
 
 export const ACTION_DEADLINES = [15, 30, 60] as const;
 export type ActionDeadlineSeconds = (typeof ACTION_DEADLINES)[number];
-export type MatchPhase = "point_contest" | "actor_play" | "claim_commit";
+export type MatchPhase =
+  | "point_contest"
+  | "actor_play"
+  | "claim_commit"
+  | "claim_reveal";
 export type MatchCommandErrorCode =
   | "invalid_phase"
   | "not_actor"
   | "invalid_play"
   | "card_not_owned"
-  | "draw_pile_exhausted";
+  | "draw_pile_exhausted"
+  | "actor_cannot_claim"
+  | "invalid_claim"
+  | "claim_already_committed";
 
 export class MatchCommandError extends Error {
   public constructor(
@@ -69,7 +76,29 @@ export interface CardsPlayedEvent {
   readonly score: number;
 }
 
-export type PublicMatchEvent = PointContestRoundEvent | CardsPlayedEvent;
+export interface RevealedClaim {
+  readonly seatIndex: number;
+  readonly cardId: string | null;
+}
+
+export interface ClaimAward {
+  readonly seatIndex: number;
+  readonly card: PhysicalCard;
+  readonly source: "unique" | "collision";
+}
+
+export interface ClaimsResolvedEvent {
+  readonly type: "claims_resolved";
+  readonly turnNumber: number;
+  readonly claims: readonly RevealedClaim[];
+  readonly awards: readonly ClaimAward[];
+  readonly discardedCards: readonly PhysicalCard[];
+}
+
+export type PublicMatchEvent =
+  | PointContestRoundEvent
+  | CardsPlayedEvent
+  | ClaimsResolvedEvent;
 
 export interface PublicMatchState {
   readonly phase: MatchPhase;
@@ -80,6 +109,10 @@ export interface PublicMatchState {
   readonly playedCategory: CombinationCategory | null;
   readonly playedScore: number;
   readonly turnNumber: number;
+  readonly claimCommitCount: number;
+  readonly revealedClaims: readonly RevealedClaim[];
+  readonly claimAwards: readonly ClaimAward[];
+  readonly discardedCards: readonly PhysicalCard[];
   readonly participants: readonly PublicMatchParticipant[];
   readonly events: readonly PublicMatchEvent[];
 }
@@ -88,6 +121,8 @@ export interface PrivateMatchState {
   readonly seatIndex: number;
   readonly participantId: string;
   readonly hand: readonly PhysicalCard[];
+  readonly claimCommitted: boolean;
+  readonly claimCardId: string | null;
 }
 
 export interface MatchView {
@@ -115,6 +150,10 @@ export class MatchEngine {
   private playedCategory: CombinationCategory | null = null;
   private playedScore = 0;
   private turnNumber = 0;
+  private claimChoices = new Map<number, string | null>();
+  private revealedClaims: RevealedClaim[] = [];
+  private claimAwards: ClaimAward[] = [];
+  private discardedCards: PhysicalCard[] = [];
 
   public constructor(random: RandomSource) {
     if (!random || typeof random.nextInt !== "function") {
@@ -222,6 +261,41 @@ export class MatchEngine {
     }));
   }
 
+  public commitClaim(seatIndex: number, cardId: string | null): void {
+    if (this.participants === null || this.phase !== "claim_commit") {
+      throw new MatchCommandError("invalid_phase", "claim commit is not active");
+    }
+    if (seatIndex === this.actorSeatIndex) {
+      throw new MatchCommandError("actor_cannot_claim", "the current actor cannot claim cards");
+    }
+    if (!this.participants.some((participant) => participant.seatIndex === seatIndex)) {
+      throw new MatchCommandError("invalid_claim", "seat cannot commit a claim");
+    }
+    if (this.claimChoices.has(seatIndex)) {
+      throw new MatchCommandError("claim_already_committed", "claim has already been committed");
+    }
+    if (
+      cardId !== null
+      && (
+        typeof cardId !== "string"
+        || !this.playedCards.some((card) => card.id === cardId)
+      )
+    ) {
+      throw new MatchCommandError("invalid_claim", "claim must reference a played physical card");
+    }
+    this.claimChoices.set(seatIndex, cardId);
+    if (this.claimChoices.size === this.participants.length - 1) {
+      this.resolveClaims();
+    }
+  }
+
+  public resolveClaimsAtDeadline(): void {
+    if (this.participants === null || this.phase !== "claim_commit") {
+      throw new MatchCommandError("invalid_phase", "claim commit is not active");
+    }
+    this.resolveClaims();
+  }
+
   public view(seatIndex: number): MatchView {
     if (
       this.participants === null
@@ -255,6 +329,10 @@ export class MatchEngine {
       playedCategory: this.playedCategory,
       playedScore: this.playedScore,
       turnNumber: this.turnNumber,
+      claimCommitCount: this.claimChoices.size,
+      revealedClaims: Object.freeze([...this.revealedClaims]),
+      claimAwards: Object.freeze([...this.claimAwards]),
+      discardedCards: Object.freeze([...this.discardedCards]),
       participants: Object.freeze(publicParticipants),
       events: Object.freeze([...this.events]),
     });
@@ -262,6 +340,8 @@ export class MatchEngine {
       seatIndex: participant.seatIndex,
       participantId: participant.participantId,
       hand: Object.freeze([...participant.hand]),
+      claimCommitted: this.claimChoices.has(seatIndex),
+      claimCardId: this.claimChoices.get(seatIndex) ?? null,
     });
     return Object.freeze({ publicState, privateState });
   }
@@ -312,6 +392,93 @@ export class MatchEngine {
     }
 
     throw new Error("point contest could not select a unique winner");
+  }
+
+  private resolveClaims(): void {
+    if (this.participants === null) {
+      throw new Error("cannot resolve claims before the match starts");
+    }
+    const claims = this.participants
+      .filter((participant) => participant.seatIndex !== this.actorSeatIndex)
+      .map((participant) => Object.freeze({
+        seatIndex: participant.seatIndex,
+        cardId: this.claimChoices.get(participant.seatIndex) ?? null,
+      }));
+    const claimCounts = new Map<string, number>();
+    for (const claim of claims) {
+      if (claim.cardId !== null) {
+        claimCounts.set(claim.cardId, (claimCounts.get(claim.cardId) ?? 0) + 1);
+      }
+    }
+    const awards: ClaimAward[] = [];
+    const awardedCardIds = new Set<string>();
+    for (const claim of claims) {
+      if (claim.cardId === null || claimCounts.get(claim.cardId) !== 1) {
+        continue;
+      }
+      const card = this.playedCards.find((candidate) => candidate.id === claim.cardId);
+      if (!card) {
+        throw new Error("committed claim does not reference a played card");
+      }
+      awards.push(Object.freeze({
+        seatIndex: claim.seatIndex,
+        card,
+        source: "unique",
+      }));
+      awardedCardIds.add(card.id);
+    }
+    const collisionClaims = claims.filter((claim) => (
+      claim.cardId !== null && (claimCounts.get(claim.cardId) ?? 0) > 1
+    ));
+    const remainingCards = this.playedCards.filter((card) => !awardedCardIds.has(card.id));
+    if (collisionClaims.length > 0) {
+      this.shuffle(remainingCards);
+      for (const claim of collisionClaims) {
+        const card = remainingCards.pop();
+        if (!card) {
+          throw new Error("collision pool cannot satisfy every collision participant");
+        }
+        awards.push(Object.freeze({
+          seatIndex: claim.seatIndex,
+          card,
+          source: "collision",
+        }));
+      }
+    }
+    const discardedCards = remainingCards;
+    for (const claim of claims) {
+      if (claim.cardId === null) {
+        const participant = this.participants.find((candidate) => (
+          candidate.seatIndex === claim.seatIndex
+        ));
+        if (!participant) {
+          throw new Error("resolved claim does not belong to a participant");
+        }
+        participant.score += 1;
+      }
+    }
+    for (const award of awards) {
+      const participant = this.participants.find((candidate) => (
+        candidate.seatIndex === award.seatIndex
+      ));
+      if (!participant) {
+        throw new Error("claim award does not belong to a participant");
+      }
+      participant.hand.push(award.card);
+    }
+
+    this.revealedClaims = claims;
+    this.claimAwards = awards;
+    this.discardedCards.push(...discardedCards);
+    this.playedCards = [];
+    this.phase = "claim_reveal";
+    this.events.push(Object.freeze({
+      type: "claims_resolved",
+      turnNumber: this.turnNumber,
+      claims: Object.freeze([...claims]),
+      awards: Object.freeze([...awards]),
+      discardedCards: Object.freeze([...discardedCards]),
+    }));
   }
 
   private drawRandomCard(cards: PhysicalCard[]): PhysicalCard {

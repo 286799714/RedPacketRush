@@ -80,5 +80,12 @@ func play_cards(card_ids: Array[String]) -> void:
 	})
 
 
+func claim_card(card_id: Variant) -> void:
+	room_requests.append({
+		"type": "claim",
+		"payload": {"cardId": card_id},
+	})
+
+
 func leave_game_room() -> void:
 	leave_game_room_requests += 1

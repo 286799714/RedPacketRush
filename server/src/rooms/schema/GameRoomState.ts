@@ -4,7 +4,10 @@ import type { DeckMode, PhysicalCard } from "../../match/cards.js";
 import type {
   ActionDeadlineSeconds,
   CardsPlayedEvent,
+  ClaimAward,
+  ClaimsResolvedEvent,
   PointContestRoundEvent,
+  RevealedClaim,
 } from "../../match/MatchEngine.js";
 import type { GameRoomMetadata, GameRoomStatus } from "../GameRoom.js";
 
@@ -108,6 +111,77 @@ export class PlayEventState extends Schema {
   }
 }
 
+export class RevealedClaimState extends Schema {
+  @type("uint8")
+  public seatIndex = 0;
+
+  @type("boolean")
+  public passed = false;
+
+  @type("string")
+  public cardId = "";
+
+  public constructor(claim?: RevealedClaim) {
+    super();
+    if (claim) {
+      this.seatIndex = claim.seatIndex;
+      this.passed = claim.cardId === null;
+      this.cardId = claim.cardId ?? "";
+    }
+  }
+}
+
+export class ClaimAwardState extends Schema {
+  @type("uint8")
+  public seatIndex = 0;
+
+  @type(PublicCardState)
+  public card = new PublicCardState();
+
+  @type("string")
+  public source = "";
+
+  public constructor(award?: ClaimAward) {
+    super();
+    if (award) {
+      this.seatIndex = award.seatIndex;
+      this.card = new PublicCardState(award.card);
+      this.source = award.source;
+    }
+  }
+}
+
+export class ClaimsResolvedEventState extends Schema {
+  @type("uint16")
+  public turnNumber = 0;
+
+  @type([RevealedClaimState])
+  public claims = new ArraySchema<RevealedClaimState>();
+
+  @type([ClaimAwardState])
+  public awards = new ArraySchema<ClaimAwardState>();
+
+  @type([PublicCardState])
+  public discardedCards = new ArraySchema<PublicCardState>();
+
+  public constructor(event?: ClaimsResolvedEvent) {
+    super();
+    if (!event) {
+      return;
+    }
+    this.turnNumber = event.turnNumber;
+    for (const claim of event.claims) {
+      this.claims.push(new RevealedClaimState(claim));
+    }
+    for (const award of event.awards) {
+      this.awards.push(new ClaimAwardState(award));
+    }
+    for (const card of event.discardedCards) {
+      this.discardedCards.push(new PublicCardState(card));
+    }
+  }
+}
+
 export class ParticipantSeat extends Schema {
   @type("uint8")
   public seatIndex = 0;
@@ -194,6 +268,18 @@ export class GameRoomState extends Schema {
   @type("uint8")
   public playedScore = 0;
 
+  @type("uint8")
+  public claimCommitCount = 0;
+
+  @type([RevealedClaimState])
+  public revealedClaims = new ArraySchema<RevealedClaimState>();
+
+  @type([ClaimAwardState])
+  public claimAwards = new ArraySchema<ClaimAwardState>();
+
+  @type([PublicCardState])
+  public discardedCards = new ArraySchema<PublicCardState>();
+
   @type([ParticipantSeat])
   public seats = new ArraySchema<ParticipantSeat>();
 
@@ -202,6 +288,9 @@ export class GameRoomState extends Schema {
 
   @type([PlayEventState])
   public playEvents = new ArraySchema<PlayEventState>();
+
+  @type([ClaimsResolvedEventState])
+  public claimEvents = new ArraySchema<ClaimsResolvedEventState>();
 
   public constructor(metadata?: GameRoomMetadata) {
     super();

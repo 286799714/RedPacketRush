@@ -11,10 +11,13 @@ import {
 } from "../match/MatchEngine.js";
 import { SeededRandomSource } from "../match/random.js";
 import {
+  ClaimAwardState,
+  ClaimsResolvedEventState,
   GameRoomState,
   PlayEventState,
   PointContestRoundState,
   PublicCardState,
+  RevealedClaimState,
 } from "./schema/GameRoomState.js";
 
 export { ACTION_DEADLINES, DECK_MODES };
@@ -50,12 +53,14 @@ const ROOM_ERRORS = {
   fillBotsPhase: { code: "invalid_phase", message: "房间当前不能添加机器人" },
   hostOnly: { code: "host_only", message: "只有房主可以执行此操作" },
   invalidCommandPayload: { code: "invalid_payload", message: "该命令不接受参数" },
+  invalidClaimPayload: { code: "invalid_payload", message: "抢牌参数必须包含牌标识或空值" },
   invalidPlayPayload: { code: "invalid_payload", message: "出牌参数必须是牌标识数组" },
   invalidReady: { code: "invalid_ready", message: "准备状态必须是布尔值" },
   invalidSettings: { code: "invalid_settings", message: "房间设置无效" },
   noSeat: { code: "not_participant", message: "当前连接没有占用座位" },
   notReady: { code: "not_ready", message: "需要四个已准备座位才能开始" },
   playPhase: { code: "invalid_phase", message: "当前阶段不能出牌" },
+  claimPhase: { code: "invalid_phase", message: "当前阶段不能抢牌" },
   readyPhase: { code: "invalid_phase", message: "房间当前不能修改准备状态" },
   startFailed: { code: "start_failed", message: "对局启动失败，请重试" },
   startInProgress: { code: "start_in_progress", message: "对局正在启动" },
@@ -150,6 +155,7 @@ export class GameRoom extends Room<{
   public maxClients = 4;
   private matchmakingPrivate = false;
   private matchEngine: MatchEngine | null = null;
+  private claimDeadlineTimer: { clear(): void } | null = null;
   private startInProgress = false;
 
   public override async setPrivate(isPrivate = true, persist = true): Promise<void> {
@@ -174,6 +180,9 @@ export class GameRoom extends Room<{
     });
     this.onMessage("play_cards", (client, message: unknown) => {
       this.playCards(client, message);
+    });
+    this.onMessage("claim", (client, message: unknown) => {
+      this.commitClaim(client, message);
     });
   }
 
@@ -428,6 +437,72 @@ export class GameRoom extends Room<{
     }
     this.applyPublicMatchState(this.matchEngine.view(seatIndex).publicState);
     this.sendPrivateMatchState(client);
+    this.scheduleClaimDeadline(this.matchEngine);
+  }
+
+  private commitClaim(client: Client, message: unknown): void {
+    if (!this.matchEngine) {
+      this.sendRoomError(client, ROOM_ERRORS.claimPhase);
+      return;
+    }
+    if (
+      !isRecordLike(message)
+      || !Object.hasOwn(message, "cardId")
+      || (message.cardId !== null && typeof message.cardId !== "string")
+    ) {
+      this.sendRoomError(client, ROOM_ERRORS.invalidClaimPayload);
+      return;
+    }
+    const seatIndex = client.userData?.seatIndex;
+    if (typeof seatIndex !== "number") {
+      this.sendRoomError(client, ROOM_ERRORS.noSeat);
+      return;
+    }
+    const cardId = message.cardId as string | null;
+
+    try {
+      this.matchEngine.commitClaim(seatIndex, cardId);
+    } catch (error) {
+      if (error instanceof MatchCommandError) {
+        this.sendRoomError(client, { code: error.code, message: error.message });
+        return;
+      }
+      throw error;
+    }
+    const publicState = this.matchEngine.view(seatIndex).publicState;
+    this.applyPublicMatchState(publicState);
+    if (publicState.phase === "claim_commit") {
+      this.sendPrivateMatchState(client);
+    } else {
+      this.clearClaimDeadline();
+      this.sendPrivateMatchStates();
+    }
+  }
+
+  private scheduleClaimDeadline(matchEngine: MatchEngine): void {
+    this.clearClaimDeadline();
+    const timer = this.clock.setTimeout(() => {
+      if (this.claimDeadlineTimer !== timer) {
+        return;
+      }
+      this.claimDeadlineTimer = null;
+      if (
+        this.matchEngine !== matchEngine
+        || this.state.phase !== "claim_commit"
+      ) {
+        return;
+      }
+
+      matchEngine.resolveClaimsAtDeadline();
+      this.applyPublicMatchState(matchEngine.view(0).publicState);
+      this.sendPrivateMatchStates();
+    }, this.state.actionDeadlineSeconds * 1000);
+    this.claimDeadlineTimer = timer;
+  }
+
+  private clearClaimDeadline(): void {
+    this.claimDeadlineTimer?.clear();
+    this.claimDeadlineTimer = null;
   }
 
   private applyPublicMatchState(publicState: PublicMatchState): void {
@@ -442,6 +517,19 @@ export class GameRoom extends Room<{
     }
     this.state.playedCategory = publicState.playedCategory ?? "";
     this.state.playedScore = publicState.playedScore;
+    this.state.claimCommitCount = publicState.claimCommitCount;
+    this.state.revealedClaims.clear();
+    for (const claim of publicState.revealedClaims) {
+      this.state.revealedClaims.push(new RevealedClaimState(claim));
+    }
+    this.state.claimAwards.clear();
+    for (const award of publicState.claimAwards) {
+      this.state.claimAwards.push(new ClaimAwardState(award));
+    }
+    this.state.discardedCards.clear();
+    for (const card of publicState.discardedCards) {
+      this.state.discardedCards.push(new PublicCardState(card));
+    }
     for (const participant of publicState.participants) {
       const seat = this.state.seats[participant.seatIndex];
       if (!seat || seat.participantId !== participant.participantId) {
@@ -452,11 +540,14 @@ export class GameRoom extends Room<{
     }
     this.state.contestRounds.clear();
     this.state.playEvents.clear();
+    this.state.claimEvents.clear();
     for (const event of publicState.events) {
       if (event.type === "point_contest_round") {
         this.state.contestRounds.push(new PointContestRoundState(event));
-      } else {
+      } else if (event.type === "cards_played") {
         this.state.playEvents.push(new PlayEventState(event));
+      } else {
+        this.state.claimEvents.push(new ClaimsResolvedEventState(event));
       }
     }
   }

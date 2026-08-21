@@ -17,6 +17,7 @@ const GameSchema = preload("res://schema/schema.gd")
 const LOBBY_ROOM_TYPE := "lobby"
 const GAME_ROOM_TYPE := "game"
 const ROOM_SEAT_COUNT := 4
+const MAX_DECK_CARD_COUNT := 104
 
 var _client: Variant
 var _lobby_room: Variant
@@ -129,6 +130,10 @@ func start_match() -> void:
 
 func play_cards(card_ids: Array[String]) -> void:
 	_send_game_room_message("play_cards", {"cardIds": card_ids.duplicate()})
+
+
+func claim_card(card_id: Variant) -> void:
+	_send_game_room_message("claim", {"cardId": card_id})
 
 
 func _exit_tree() -> void:
@@ -489,6 +494,11 @@ func _normalize_game_room_state(raw_state: Variant, room: Variant) -> Dictionary
 		"played_category": _normalize_combination_category(raw_state.get("playedCategory", "")),
 		"played_score": maxi(0, int(raw_state.get("playedScore", 0))),
 		"play_events": _normalize_play_events(raw_state.get("playEvents", [])),
+		"claim_commit_count": clampi(int(raw_state.get("claimCommitCount", 0)), 0, 3),
+		"revealed_claims": _normalize_revealed_claims(raw_state.get("revealedClaims", [])),
+		"claim_awards": _normalize_claim_awards(raw_state.get("claimAwards", [])),
+		"discarded_cards": _normalize_public_cards(raw_state.get("discardedCards", []), MAX_DECK_CARD_COUNT),
+		"claim_events": _normalize_claim_events(raw_state.get("claimEvents", [])),
 		"seats": seats,
 		"contest_rounds": _normalize_contest_rounds(raw_state.get("contestRounds", [])),
 	}
@@ -628,6 +638,90 @@ func _normalize_play_events(raw_events: Variant) -> Array[Dictionary]:
 	return result
 
 
+func _normalize_revealed_claims(raw_claims: Variant) -> Array[Dictionary]:
+	var claims_by_seat: Dictionary = {}
+	if not raw_claims is Array:
+		return []
+	for raw_claim: Variant in raw_claims:
+		raw_claim = _dictionary_from_schema(raw_claim)
+		if not raw_claim is Dictionary:
+			continue
+		var seat_index := int(raw_claim.get("seatIndex", -1))
+		if seat_index < 0 or seat_index >= ROOM_SEAT_COUNT:
+			continue
+		var passed := bool(raw_claim.get("passed", false))
+		var card_id := str(raw_claim.get("cardId", ""))
+		if not passed and card_id.is_empty():
+			continue
+		claims_by_seat[seat_index] = {
+			"seat_index": seat_index,
+			"card_id": null if passed else card_id,
+		}
+	var result: Array[Dictionary] = []
+	var seat_indexes := claims_by_seat.keys()
+	seat_indexes.sort()
+	for seat_index: Variant in seat_indexes:
+		result.append(claims_by_seat[seat_index])
+	return result
+
+
+func _normalize_claim_awards(raw_awards: Variant) -> Array[Dictionary]:
+	var awards_by_seat: Dictionary = {}
+	if not raw_awards is Array:
+		return []
+	for raw_award: Variant in raw_awards:
+		raw_award = _dictionary_from_schema(raw_award)
+		if not raw_award is Dictionary:
+			continue
+		var seat_index := int(raw_award.get("seatIndex", -1))
+		var source := str(raw_award.get("source", ""))
+		var card := _normalize_card(raw_award.get("card", {}))
+		if (
+			seat_index < 0
+			or seat_index >= ROOM_SEAT_COUNT
+			or source not in ["unique", "collision"]
+			or card.is_empty()
+		):
+			continue
+		awards_by_seat[seat_index] = {
+			"seat_index": seat_index,
+			"card": card,
+			"source": source,
+		}
+	var result: Array[Dictionary] = []
+	var seat_indexes := awards_by_seat.keys()
+	seat_indexes.sort()
+	for seat_index: Variant in seat_indexes:
+		result.append(awards_by_seat[seat_index])
+	return result
+
+
+func _normalize_claim_events(raw_events: Variant) -> Array[Dictionary]:
+	var events_by_turn: Dictionary = {}
+	if not raw_events is Array:
+		return []
+	for raw_event: Variant in raw_events:
+		raw_event = _dictionary_from_schema(raw_event)
+		if not raw_event is Dictionary:
+			continue
+		var turn_number := int(raw_event.get("turnNumber", 0))
+		var claims := _normalize_revealed_claims(raw_event.get("claims", []))
+		if turn_number <= 0 or claims.size() != 3:
+			continue
+		events_by_turn[turn_number] = {
+			"turn_number": turn_number,
+			"claims": claims,
+			"awards": _normalize_claim_awards(raw_event.get("awards", [])),
+			"discarded_cards": _normalize_public_cards(raw_event.get("discardedCards", []), 3),
+		}
+	var result: Array[Dictionary] = []
+	var turn_numbers := events_by_turn.keys()
+	turn_numbers.sort()
+	for turn_number: Variant in turn_numbers:
+		result.append(events_by_turn[turn_number])
+	return result
+
+
 func _normalize_match_private_state(raw_state: Variant, room: Variant) -> Dictionary:
 	raw_state = _dictionary_from_schema(raw_state)
 	if not raw_state is Dictionary:
@@ -641,6 +735,9 @@ func _normalize_match_private_state(raw_state: Variant, room: Variant) -> Dictio
 	var raw_hand: Variant = raw_state.get("hand", null)
 	if not raw_hand is Array:
 		return {}
+	var claim_card_id: Variant = raw_state.get("claimCardId", null)
+	if claim_card_id != null and not claim_card_id is String:
+		return {}
 	var hand: Array[Dictionary] = []
 	var card_ids: Dictionary = {}
 	for raw_card: Variant in raw_hand:
@@ -653,6 +750,8 @@ func _normalize_match_private_state(raw_state: Variant, room: Variant) -> Dictio
 		"participant_id": participant_id,
 		"seat_index": seat_index,
 		"hand": hand,
+		"claim_committed": bool(raw_state.get("claimCommitted", false)),
+		"claim_card_id": claim_card_id,
 	}
 
 

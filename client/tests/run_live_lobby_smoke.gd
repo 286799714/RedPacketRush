@@ -37,6 +37,9 @@ var _actor_played_card_ids: Array[String] = []
 var _actor_play_requested := false
 var _claim_commit_observed := false
 var _actor_replacement_observed := false
+var _claim_requests: Dictionary = {}
+var _claim_confirmations: Dictionary = {}
+var _claim_reveals_by_adapter: Dictionary = {}
 var _failure := ""
 
 
@@ -63,7 +66,8 @@ func _run() -> void:
 				"timed out waiting for native actor-play flow "
 				+ "(connected=%d, initial=%s, listed=%s, joined=%d, state=%s, "
 				+ "four_participants=%s, ready=%s, point_contest=%s, opening=%s, "
-				+ "private_hands=%d, actor=%d, play=%s, claim_commit=%s, replacement=%s)"
+				+ "private_hands=%d, actor=%d, play=%s, claim_commit=%s, replacement=%s, "
+				+ "claim_requests=%d, confirmations=%d, reveals=%d)"
 			)
 			% [
 				_connected_participants.size(),
@@ -80,6 +84,9 @@ func _run() -> void:
 				_actor_play_requested,
 				_claim_commit_observed,
 				_actor_replacement_observed,
+				_claim_requests.size(),
+				_claim_confirmations.size(),
+				_claim_reveals_by_adapter.size(),
 			]
 		)
 
@@ -201,9 +208,12 @@ func _on_game_room_state_changed(state: Dictionary, participant_index: int) -> v
 			return
 
 	if state.get("status", "") == "started":
+		if state.get("phase", "") == "claim_reveal":
+			_observe_claim_reveal(state, participant_index)
 		if participant_index == 0:
 			_observe_started_host_state(state, seats)
 		_try_request_actor_play()
+		_try_request_claims()
 		return
 
 	_observe_waiting_state(seats, participant_index, local_participant_id)
@@ -296,6 +306,9 @@ func _observe_started_host_state(state: Dictionary, seats: Array) -> void:
 				_fail("public played cards did not match the actor intention")
 				return
 			_claim_commit_observed = true
+			_try_request_claims()
+		"claim_reveal":
+			pass
 		_:
 			_fail("started room published an unexpected phase: %s" % phase)
 
@@ -311,15 +324,26 @@ func _on_match_private_state_changed(state: Dictionary, participant_index: int) 
 		_fail("participant %d received another participant's private hand" % participant_index)
 		return
 
-	var message_count := int(_private_message_counts.get(participant_index, 0)) + 1
-	_private_message_counts[participant_index] = message_count
-	if message_count == 1:
+	_private_message_counts[participant_index] = int(_private_message_counts.get(participant_index, 0)) + 1
+	if not _opening_hands_by_adapter.has(participant_index):
 		_opening_hands_by_adapter[participant_index] = hand.duplicate(true)
 		_private_hand_observed = _opening_hands_by_adapter.size() == PARTICIPANT_NAMES.size()
 		_try_request_actor_play()
 		return
+	if bool(state.get("claim_committed", false)):
+		if participant_index == _actor_adapter_index:
+			_fail("the actor received a private claim confirmation")
+			return
+		if not _claim_requests.has(participant_index):
+			_fail("participant %d received another participant's claim confirmation" % participant_index)
+			return
+		if state.get("claim_card_id", "not-null") != null:
+			_fail("participant %d pass confirmation exposed a card id" % participant_index)
+			return
+		_claim_confirmations[participant_index] = true
+		return
 	if participant_index != _actor_adapter_index:
-		_fail("a non-actor received an unexpected replacement hand")
+		_fail("participant %d received an unexpected private match snapshot" % participant_index)
 		return
 	var replacement_ids := _card_ids(hand)
 	for played_card_id in _actor_played_card_ids:
@@ -327,6 +351,7 @@ func _on_match_private_state_changed(state: Dictionary, participant_index: int) 
 			_fail("actor replacement hand retained a played card")
 			return
 	_actor_replacement_observed = true
+	_try_request_claims()
 
 
 func _try_request_actor_play() -> void:
@@ -362,6 +387,60 @@ func _try_request_actor_play() -> void:
 	_fail("public actor did not map to a connected Native SDK adapter")
 
 
+func _try_request_claims() -> void:
+	if (
+		not _claim_commit_observed
+		or _actor_adapter_index < 0
+		or not _claim_requests.is_empty()
+	):
+		return
+	for participant_index in range(PARTICIPANT_NAMES.size()):
+		if participant_index == _actor_adapter_index:
+			continue
+		_claim_requests[participant_index] = true
+		_adapters[participant_index].claim_card(null)
+
+
+func _observe_claim_reveal(state: Dictionary, participant_index: int) -> void:
+	if int(state.get("claim_commit_count", -1)) != 3:
+		_fail("participant %d decoded claim_reveal without three commits" % participant_index)
+		return
+	var revealed_claims: Variant = state.get("revealed_claims", [])
+	if not revealed_claims is Array or revealed_claims.size() != 3:
+		_fail("participant %d decoded an incomplete public claim reveal" % participant_index)
+		return
+	for raw_claim: Variant in revealed_claims:
+		if not raw_claim is Dictionary or raw_claim.get("card_id", "not-null") != null:
+			_fail("participant %d decoded a non-Pass claim in the all-Pass smoke" % participant_index)
+			return
+	var claim_awards: Variant = state.get("claim_awards", [])
+	if not claim_awards is Array or not claim_awards.is_empty():
+		_fail("participant %d decoded an award in the all-Pass smoke" % participant_index)
+		return
+	var discarded_cards: Variant = state.get("discarded_cards", [])
+	if not discarded_cards is Array or discarded_cards.size() != 3:
+		_fail("participant %d did not decode three public discarded cards" % participant_index)
+		return
+	var claim_events: Variant = state.get("claim_events", [])
+	if not claim_events is Array or claim_events.size() != 1:
+		_fail("participant %d did not decode the claims_resolved history" % participant_index)
+		return
+	var claim_event: Variant = claim_events[0]
+	if (
+		not claim_event is Dictionary
+		or int(claim_event.get("turn_number", 0)) != 1
+		or claim_event.get("claims", []).size() != 3
+		or not claim_event.get("awards", []).is_empty()
+		or claim_event.get("discarded_cards", []).size() != 3
+	):
+		_fail("participant %d decoded malformed claims_resolved history" % participant_index)
+		return
+	if not state.get("played_cards", []).is_empty():
+		_fail("participant %d retained played cards after claim resolution" % participant_index)
+		return
+	_claim_reveals_by_adapter[participant_index] = true
+
+
 func _card_ids(raw_cards: Array) -> Array[String]:
 	var result: Array[String] = []
 	for raw_card: Variant in raw_cards:
@@ -391,6 +470,9 @@ func _is_complete() -> bool:
 		and _actor_play_requested
 		and _claim_commit_observed
 		and _actor_replacement_observed
+		and _claim_requests.size() == PARTICIPANT_NAMES.size() - 1
+		and _claim_confirmations.size() == PARTICIPANT_NAMES.size() - 1
+		and _claim_reveals_by_adapter.size() == PARTICIPANT_NAMES.size()
 	)
 
 
@@ -417,8 +499,8 @@ func _finish() -> void:
 		print(
 			(
 				"PASS: four Native SDK participants joined and readied room %s, "
-				+ "actor seat %d played three targeted private cards, public state entered "
-				+ "claim_commit at turn 1, and the actor received eight replacement cards"
+				+ "actor seat %d played three targeted private cards, three non-actors privately "
+				+ "confirmed Pass, and all clients decoded claim_reveal with claimEvents/discards"
 			) % [_listed_room_id, _actor_seat_index]
 		)
 		quit(0)

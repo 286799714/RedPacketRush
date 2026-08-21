@@ -17,12 +17,19 @@ var draw_pile_count := 0
 var turn_number := 0
 var played_category := ""
 var played_score := 0
+var claim_commit_count := 0
+var claim_committed := false
+var claim_card_id: Variant = null
 
 var _adapter: Object
 var _participants: Array[Dictionary] = []
 var _contest_rounds: Array[Dictionary] = []
 var _played_cards: Array[Dictionary] = []
 var _play_events: Array[Dictionary] = []
+var _claim_events: Array[Dictionary] = []
+var _revealed_claims: Array[Dictionary] = []
+var _claim_awards: Array[Dictionary] = []
+var _discarded_cards: Array[Dictionary] = []
 var _local_hand: Array[Dictionary] = []
 var _activated := false
 
@@ -66,6 +73,34 @@ func get_play_events() -> Array[Dictionary]:
 	return result
 
 
+func get_claim_events() -> Array[Dictionary]:
+	var result: Array[Dictionary] = []
+	for claim_event in _claim_events:
+		result.append(claim_event.duplicate(true))
+	return result
+
+
+func get_revealed_claims() -> Array[Dictionary]:
+	var result: Array[Dictionary] = []
+	for claim in _revealed_claims:
+		result.append(claim.duplicate(true))
+	return result
+
+
+func get_claim_awards() -> Array[Dictionary]:
+	var result: Array[Dictionary] = []
+	for award in _claim_awards:
+		result.append(award.duplicate(true))
+	return result
+
+
+func get_discarded_cards() -> Array[Dictionary]:
+	var result: Array[Dictionary] = []
+	for card in _discarded_cards:
+		result.append(card.duplicate(true))
+	return result
+
+
 func get_local_hand() -> Array[Dictionary]:
 	var result: Array[Dictionary] = []
 	for card in _local_hand:
@@ -75,6 +110,10 @@ func get_local_hand() -> Array[Dictionary]:
 
 func play_cards(card_ids: Array[String]) -> void:
 	_adapter.play_cards(card_ids.duplicate())
+
+
+func claim_card(card_id: Variant) -> void:
+	_adapter.claim_card(card_id)
 
 
 func _on_game_room_state_changed(snapshot: Dictionary) -> void:
@@ -87,6 +126,7 @@ func _on_game_room_state_changed(snapshot: Dictionary) -> void:
 	turn_number = int(snapshot.get("turn_number", 0))
 	played_category = str(snapshot.get("played_category", ""))
 	played_score = int(snapshot.get("played_score", 0))
+	claim_commit_count = clampi(int(snapshot.get("claim_commit_count", 0)), 0, 3)
 
 	_participants.clear()
 	var raw_seats: Variant = snapshot.get("seats", [])
@@ -124,6 +164,34 @@ func _on_game_room_state_changed(snapshot: Dictionary) -> void:
 			if raw_event is Dictionary:
 				_play_events.append(raw_event.duplicate(true))
 
+	_claim_events.clear()
+	var raw_claim_events: Variant = snapshot.get("claim_events", [])
+	if raw_claim_events is Array:
+		for raw_event: Variant in raw_claim_events:
+			if raw_event is Dictionary:
+				_claim_events.append(raw_event.duplicate(true))
+
+	_revealed_claims.clear()
+	var raw_revealed_claims: Variant = snapshot.get("revealed_claims", [])
+	if raw_revealed_claims is Array:
+		for raw_claim: Variant in raw_revealed_claims:
+			if raw_claim is Dictionary:
+				_revealed_claims.append(raw_claim.duplicate(true))
+
+	_claim_awards.clear()
+	var raw_claim_awards: Variant = snapshot.get("claim_awards", [])
+	if raw_claim_awards is Array:
+		for raw_award: Variant in raw_claim_awards:
+			if raw_award is Dictionary:
+				_claim_awards.append(raw_award.duplicate(true))
+
+	_discarded_cards.clear()
+	var raw_discarded_cards: Variant = snapshot.get("discarded_cards", [])
+	if raw_discarded_cards is Array:
+		for raw_card: Variant in raw_discarded_cards:
+			if raw_card is Dictionary:
+				_discarded_cards.append(raw_card.duplicate(true))
+
 	state_changed.emit()
 	if status == "started" and not _activated:
 		_activated = true
@@ -143,6 +211,8 @@ func _on_match_private_state_changed(snapshot: Dictionary) -> void:
 	for raw_card: Variant in raw_hand:
 		if raw_card is Dictionary:
 			_local_hand.append(raw_card.duplicate(true))
+	claim_committed = bool(snapshot.get("claim_committed", false))
+	claim_card_id = snapshot.get("claim_card_id", null)
 	private_state_changed.emit()
 
 
@@ -164,10 +234,17 @@ func _on_game_room_left(code: int, reason: String) -> void:
 	turn_number = 0
 	played_category = ""
 	played_score = 0
+	claim_commit_count = 0
+	claim_committed = false
+	claim_card_id = null
 	_participants.clear()
 	_contest_rounds.clear()
 	_played_cards.clear()
 	_play_events.clear()
+	_claim_events.clear()
+	_revealed_claims.clear()
+	_claim_awards.clear()
+	_discarded_cards.clear()
 	_local_hand.clear()
 	_activated = false
 	state_changed.emit()

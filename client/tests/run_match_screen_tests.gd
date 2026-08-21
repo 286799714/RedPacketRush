@@ -13,16 +13,25 @@ class FakeMatchStore extends RefCounted:
 	var phase := "actor_play"
 	var actor_seat_index := 2
 	var draw_pile_count := 20
+	var room_id := "room-a"
 	var local_participant_id := "human-a"
 	var turn_number := 0
 	var played_category := ""
 	var played_score := 0
+	var claim_commit_count := 0
+	var claim_committed := false
+	var claim_card_id: Variant = null
 	var _participants: Array[Dictionary] = []
 	var _contest_rounds: Array[Dictionary] = []
 	var _played_cards: Array[Dictionary] = []
 	var _play_events: Array[Dictionary] = []
+	var _claim_events: Array[Dictionary] = []
+	var _revealed_claims: Array[Dictionary] = []
+	var _claim_awards: Array[Dictionary] = []
+	var _discarded_cards: Array[Dictionary] = []
 	var _local_hand: Array[Dictionary] = []
 	var play_requests: Array[Array] = []
+	var claim_requests: Array[Variant] = []
 
 	func get_participants() -> Array[Dictionary]:
 		return _participants
@@ -39,8 +48,23 @@ class FakeMatchStore extends RefCounted:
 	func get_play_events() -> Array[Dictionary]:
 		return _play_events
 
+	func get_claim_events() -> Array[Dictionary]:
+		return _claim_events
+
+	func get_revealed_claims() -> Array[Dictionary]:
+		return _revealed_claims
+
+	func get_claim_awards() -> Array[Dictionary]:
+		return _claim_awards
+
+	func get_discarded_cards() -> Array[Dictionary]:
+		return _discarded_cards
+
 	func play_cards(card_ids: Array[String]) -> void:
 		play_requests.append(card_ids.duplicate())
+
+	func claim_card(card_id: Variant) -> void:
+		claim_requests.append(card_id)
 
 	func publish() -> void:
 		state_changed.emit()
@@ -102,7 +126,18 @@ func _run() -> void:
 	_test_local_hand_is_readable_and_private(screen)
 	await _test_only_local_actor_can_select_exactly_three_and_play(screen, store)
 	await _test_claim_commit_shows_played_combination(screen, store)
+	await _test_actor_only_sees_claim_waiting_state(screen, store)
+	await _test_non_actor_can_choose_one_claim_or_pass(screen, store)
+	await _test_selected_claim_submits_physical_id_and_stays_pending(screen, store)
+	await _test_private_claim_confirmation_shows_waiting_state(screen, store)
+	await _test_pass_submits_null_and_enters_pending(screen, store)
+	await _test_claim_reveal_shows_simultaneous_outcomes_and_public_history(screen, store)
+	await _test_collision_outcome_moves_once_without_resizing(screen, store)
+	await _test_new_room_replays_collision_motion(screen, store)
+	await _test_public_history_is_chronological(screen, store)
+	await _test_rejected_claim_reenables_controls_without_moving_layout(screen, store)
 	await _test_action_error_is_visible_without_moving_controls(screen, store)
+	await _test_unbinding_store_clears_pending_claim_controls(screen, store)
 	_test_key_regions_do_not_overlap(screen, Vector2(960, 540))
 	screen.size = Vector2(1280, 720)
 	await process_frame
@@ -254,6 +289,324 @@ func _test_claim_commit_shows_played_combination(
 		_expect(card_control is Button and card_control.disabled, "抢牌阶段本地手牌只读")
 
 
+func _test_actor_only_sees_claim_waiting_state(
+	screen: MatchScreen,
+	store: FakeMatchStore
+) -> void:
+	store.claim_commit_count = 2
+	store.publish()
+	await process_frame
+	await process_frame
+	_expect(screen.find_child("ClaimCard0", true, false) == null, "行动者不显示抢牌选择控件")
+	var submit_button := screen.find_child("SubmitClaimButton", true, false) as Button
+	var pass_button := screen.find_child("PassClaimButton", true, false) as Button
+	_expect(submit_button != null and not submit_button.visible, "行动者不显示抢牌按钮")
+	_expect(pass_button != null and not pass_button.visible, "行动者不显示 Pass 按钮")
+	_expect(screen._action_prompt_label.text.contains("2/3"), "行动者等待状态显示公开提交进度")
+	store.claim_commit_count = 0
+	store.publish()
+	await process_frame
+	await process_frame
+
+
+func _test_non_actor_can_choose_one_claim_or_pass(
+	screen: MatchScreen,
+	store: FakeMatchStore
+) -> void:
+	store.actor_seat_index = 1
+	store.publish()
+	await process_frame
+	await process_frame
+
+	var pass_button := screen.find_child("PassClaimButton", true, false) as Button
+	_expect(pass_button != null and pass_button.visible and not pass_button.disabled, "非行动者可以选择不抢")
+	for index in range(3):
+		var claim_card := screen.find_child("ClaimCard%d" % index, true, false) as Button
+		_expect(claim_card != null and not claim_card.disabled, "非行动者可以选择公开牌 %d" % index)
+	var first_card := screen.find_child("ClaimCard0", true, false) as Button
+	var second_card := screen.find_child("ClaimCard1", true, false) as Button
+	if first_card != null and second_card != null:
+		first_card.button_pressed = true
+		second_card.button_pressed = true
+		_expect(not first_card.button_pressed, "选择另一张牌会取消原选择")
+		_expect(second_card.button_pressed, "最后选择的牌保持选中")
+	store.actor_seat_index = 0
+	store.publish()
+	await process_frame
+	await process_frame
+
+
+func _test_selected_claim_submits_physical_id_and_stays_pending(
+	screen: MatchScreen,
+	store: FakeMatchStore
+) -> void:
+	store.actor_seat_index = 1
+	store.publish()
+	await process_frame
+	await process_frame
+	var selected_card := screen.find_child("ClaimCard1", true, false) as Button
+	var submit_button := screen.find_child("SubmitClaimButton", true, false) as Button
+	if selected_card == null or submit_button == null:
+		_failures.append("抢牌阶段应提供选牌提交控件")
+	else:
+		selected_card.button_pressed = true
+		_expect(not submit_button.disabled, "选择一张公开牌后可以提交")
+		submit_button.pressed.emit()
+		_expect_equal(store.claim_requests, ["played-king"], "抢牌提交使用物理牌标识")
+		_expect(submit_button.disabled and selected_card.disabled, "提交后立即禁用抢牌控件")
+		_expect(screen._action_prompt_label.text.contains("提交中"), "私有确认前显示稳定提交状态")
+		store.publish()
+		await process_frame
+		await process_frame
+		var refreshed_submit := screen.find_child("SubmitClaimButton", true, false) as Button
+		var refreshed_card := screen.find_child("ClaimCard1", true, false) as Button
+		_expect(refreshed_submit != null and refreshed_submit.disabled, "公开刷新不重新启用提交")
+		_expect(refreshed_card != null and refreshed_card.disabled, "公开刷新不重新启用选牌")
+	store.actor_seat_index = 0
+	store.publish()
+	await process_frame
+	await process_frame
+
+
+func _test_private_claim_confirmation_shows_waiting_state(
+	screen: MatchScreen,
+	store: FakeMatchStore
+) -> void:
+	store.actor_seat_index = 1
+	store.claim_commit_count = 1
+	store.claim_committed = true
+	store.claim_card_id = "played-king"
+	store.private_state_changed.emit()
+	await process_frame
+	await process_frame
+
+	var submit_button := screen.find_child("SubmitClaimButton", true, false) as Button
+	var selected_card := screen.find_child("ClaimCard1", true, false) as Button
+	_expect(submit_button != null and submit_button.disabled, "私有确认后提交控件保持禁用")
+	_expect(selected_card != null and selected_card.disabled, "私有确认后公开牌保持只读")
+	_expect(screen._action_prompt_label.text.contains("已提交"), "私有确认后显示已提交")
+	_expect(screen._action_prompt_label.text.contains("1/3"), "等待状态显示公开提交进度")
+	store.actor_seat_index = 0
+	store.publish()
+	await process_frame
+	await process_frame
+
+
+func _test_pass_submits_null_and_enters_pending(
+	screen: MatchScreen,
+	store: FakeMatchStore
+) -> void:
+	store.phase = "actor_play"
+	store.actor_seat_index = 0
+	store.claim_commit_count = 0
+	store.claim_committed = false
+	store.claim_card_id = null
+	store.publish()
+	store.private_state_changed.emit()
+	await process_frame
+	await process_frame
+	store.phase = "claim_commit"
+	store.actor_seat_index = 1
+	store.publish()
+	await process_frame
+	await process_frame
+
+	var pass_button := screen.find_child("PassClaimButton", true, false) as Button
+	if pass_button == null:
+		_failures.append("抢牌阶段应提供不抢按钮")
+	else:
+		pass_button.pressed.emit()
+		_expect_equal(store.claim_requests, ["played-king", null], "不抢提交空牌标识")
+		_expect(pass_button.disabled, "不抢提交后立即禁用抢牌控件")
+		_expect(screen._action_prompt_label.text.contains("提交中"), "不抢后显示稳定提交状态")
+	store.actor_seat_index = 0
+	store.publish()
+	await process_frame
+	await process_frame
+
+
+func _test_claim_reveal_shows_simultaneous_outcomes_and_public_history(
+	screen: MatchScreen,
+	store: FakeMatchStore
+) -> void:
+	var queen := _card("played-queen", 12, "hearts", 0)
+	var king := _card("played-king", 13, "hearts", 0)
+	var ace := _card("played-ace", 14, "hearts", 0)
+	store.phase = "claim_reveal"
+	store.turn_number = 2
+	store.actor_seat_index = 0
+	store._played_cards = []
+	store._revealed_claims = [
+		{"seat_index": 1, "card_id": "played-ace"},
+		{"seat_index": 2, "card_id": "played-queen"},
+		{"seat_index": 3, "card_id": "played-queen"},
+	]
+	store._claim_awards = [
+		{"seat_index": 1, "card": ace, "source": "unique"},
+		{"seat_index": 2, "card": king, "source": "collision"},
+		{"seat_index": 3, "card": queen, "source": "collision"},
+	]
+	store._discarded_cards = []
+	store._claim_events = [
+		{
+			"turn_number": 1,
+			"claims": [
+				{"seat_index": 1, "card_id": null},
+				{"seat_index": 2, "card_id": null},
+				{"seat_index": 3, "card_id": null},
+			],
+			"awards": [],
+			"discarded_cards": [queen, king, ace],
+		},
+		{
+			"turn_number": 2,
+			"claims": store._revealed_claims.duplicate(true),
+			"awards": store._claim_awards.duplicate(true),
+			"discarded_cards": [],
+		},
+	]
+	store.publish()
+	await process_frame
+	await process_frame
+
+	var reveal_list := screen.find_child("ClaimRevealList", true, false) as VBoxContainer
+	_expect(reveal_list != null and reveal_list.get_child_count() == 3, "三名非行动者的选择同时揭晓")
+	var reveal_text := _node_text(screen.find_child("PlayedCombinationPanel", true, false))
+	_expect(reveal_text.contains("乙") and reveal_text.contains("独得"), "唯一抢牌显示参与者和原牌")
+	_expect(reveal_text.contains("机器人丙") and reveal_text.contains("撞车"), "撞车显示参与者和盲抽结果")
+	_expect(reveal_text.contains("K") and reveal_text.contains("Q"), "撞车结果显示实际获得牌")
+	var history_text := _node_text(screen._history_list)
+	_expect(history_text.contains("第 1 回合 · 抢牌揭晓"), "历史保留旧抢牌回合")
+	_expect(history_text.contains("不抢 +1 分"), "历史记录 Pass 得分")
+	_expect(history_text.contains("弃置"), "历史记录公共弃牌")
+	_expect(history_text.contains("第 2 回合 · 抢牌揭晓"), "历史追加当前抢牌结果")
+
+
+func _test_collision_outcome_moves_once_without_resizing(
+	screen: MatchScreen,
+	store: FakeMatchStore
+) -> void:
+	var next_event: Dictionary = store._claim_events[1].duplicate(true)
+	next_event["turn_number"] = 3
+	store._claim_events.append(next_event)
+	store.turn_number = 3
+	store.publish()
+
+	var unique_row := screen.find_child("ClaimOutcomeSeat1", true, false) as Label
+	var collision_row := screen.find_child("ClaimOutcomeSeat2", true, false) as Label
+	if unique_row == null or collision_row == null:
+		_failures.append("抢牌揭晓应提供稳定的席位结果行")
+		return
+	_expect(is_equal_approx(unique_row.scale.x, 1.0), "独得结果不播放撞车动效")
+	_expect(collision_row.scale.x >= 0.94 and collision_row.scale.x < 1.0, "撞车结果播放克制的一次性动效")
+	await process_frame
+	var layout_size := collision_row.size
+	await create_timer(0.3).timeout
+	_expect(is_equal_approx(collision_row.scale.x, 1.0), "撞车动效短暂并归位")
+	_expect_equal(collision_row.size, layout_size, "撞车动效不改变布局尺寸")
+	store.publish()
+	await process_frame
+	await process_frame
+	var refreshed_collision := screen.find_child("ClaimOutcomeSeat2", true, false) as Label
+	_expect(refreshed_collision != null and is_equal_approx(refreshed_collision.scale.x, 1.0), "同回合状态更新不重播撞车动效")
+	_expect(refreshed_collision != null and refreshed_collision.size == layout_size, "重复刷新不改变撞车行布局")
+
+
+func _test_new_room_replays_collision_motion(
+	screen: MatchScreen,
+	store: FakeMatchStore
+) -> void:
+	store.room_id = "room-b"
+	store.publish()
+	var collision_row := screen.find_child("ClaimOutcomeSeat2", true, false) as Label
+	_expect(
+		collision_row != null and collision_row.scale.x >= 0.94 and collision_row.scale.x < 1.0,
+		"新房间的相同回合重新播放撞车动效"
+	)
+	await create_timer(0.3).timeout
+
+
+func _test_public_history_is_chronological(
+	screen: MatchScreen,
+	store: FakeMatchStore
+) -> void:
+	for turn_number in [2, 3]:
+		var play_event: Dictionary = store._play_events[0].duplicate(true)
+		play_event["turn_number"] = turn_number
+		store._play_events.append(play_event)
+	store.publish()
+	await process_frame
+	await process_frame
+
+	var item_names: Array[String] = []
+	for item in screen._history_list.get_children():
+		item_names.append(item.name)
+	_expect_equal(item_names, [
+		"ContestRound0",
+		"ContestRound1",
+		"PlayEvent1",
+		"ClaimEvent1",
+		"PlayEvent2",
+		"ClaimEvent2",
+		"PlayEvent3",
+		"ClaimEvent3",
+	], "公共历史按回合交错显示出牌与抢牌揭晓")
+
+
+func _test_rejected_claim_reenables_controls_without_moving_layout(
+	screen: MatchScreen,
+	store: FakeMatchStore
+) -> void:
+	store.phase = "actor_play"
+	store.actor_seat_index = 0
+	store.claim_committed = false
+	store.claim_card_id = null
+	store.private_state_changed.emit()
+	store.publish()
+	await process_frame
+	await process_frame
+	store.phase = "claim_commit"
+	store.actor_seat_index = 1
+	store.turn_number = 4
+	store._played_cards = [
+		_card("retry-queen", 12, "hearts", 0),
+		_card("retry-king", 13, "hearts", 0),
+		_card("retry-ace", 14, "hearts", 0),
+	]
+	store.publish()
+	await process_frame
+	await process_frame
+
+	var first_card := screen.find_child("ClaimCard0", true, false) as Button
+	var submit_button := screen.find_child("SubmitClaimButton", true, false) as Button
+	var pass_button := screen.find_child("PassClaimButton", true, false) as Button
+	if first_card == null or submit_button == null or pass_button == null:
+		_failures.append("抢牌重试测试缺少稳定控件")
+		return
+	first_card.button_pressed = true
+	submit_button.pressed.emit()
+	var action_rect_before := screen._action_bar.get_global_rect()
+	var pass_rect_before := pass_button.get_global_rect()
+	store.action_failed.emit("invalid_claim", "该牌已不能抢，请重新选择")
+	await process_frame
+	await process_frame
+
+	var refreshed_first := screen.find_child("ClaimCard0", true, false) as Button
+	_expect(refreshed_first != null and not refreshed_first.disabled, "抢牌失败后重新启用公开牌")
+	_expect(refreshed_first != null and not refreshed_first.button_pressed, "抢牌失败后清空旧选择")
+	_expect(not pass_button.disabled, "抢牌失败后可以改为不抢")
+	_expect(submit_button.disabled, "清空旧选择后等待重新选牌")
+	_expect(screen._action_error_label.text.contains("请重新选择"), "抢牌失败原因保持可见")
+	_expect_equal(screen._action_bar.get_global_rect(), action_rect_before, "抢牌失败不移动行动栏")
+	_expect_equal(pass_button.get_global_rect(), pass_rect_before, "抢牌失败不移动 Pass 按钮")
+	refreshed_first.button_pressed = true
+	_expect(not submit_button.disabled, "抢牌失败后可以重新选择并提交")
+	store.actor_seat_index = 0
+	store.publish()
+	await process_frame
+	await process_frame
+
+
 func _test_action_error_is_visible_without_moving_controls(
 	screen: MatchScreen,
 	store: FakeMatchStore
@@ -277,6 +630,51 @@ func _test_action_error_is_visible_without_moving_controls(
 	_expect(error_rect.position.x >= action_rect.position.x, "错误文本不越出行动栏左侧")
 	_expect(error_rect.end.x <= action_rect.end.x, "错误文本不越出行动栏右侧")
 	_expect(not error_rect.intersects(play_button.get_global_rect()), "错误文本不遮挡出牌按钮")
+
+
+func _test_unbinding_store_clears_pending_claim_controls(
+	screen: MatchScreen,
+	store: FakeMatchStore
+) -> void:
+	store.phase = "claim_commit"
+	store.actor_seat_index = 1
+	store.claim_committed = false
+	store.claim_card_id = null
+	store._played_cards = [
+		_card("unbind-queen", 12, "hearts", 0),
+		_card("unbind-king", 13, "hearts", 0),
+		_card("unbind-ace", 14, "hearts", 0),
+	]
+	store.publish()
+	await process_frame
+	await process_frame
+	var first_card := screen.find_child("ClaimCard0", true, false) as Button
+	var submit_button := screen.find_child("SubmitClaimButton", true, false) as Button
+	var pass_button := screen.find_child("PassClaimButton", true, false) as Button
+	if first_card == null or submit_button == null or pass_button == null:
+		_failures.append("解绑回归测试缺少抢牌控件")
+		return
+	first_card.button_pressed = true
+	submit_button.pressed.emit()
+	_expect(first_card.disabled and pass_button.disabled, "解绑前处于抢牌 pending")
+
+	screen.set_match_store(null)
+	await process_frame
+	await process_frame
+	_expect(not submit_button.visible and not pass_button.visible, "解除状态源后隐藏抢牌按钮")
+	_expect(not screen._played_panel.visible, "解除状态源后隐藏公开抢牌区域")
+	screen.set_match_store(store)
+	await process_frame
+	await process_frame
+	var rebound_first := screen.find_child("ClaimCard0", true, false) as Button
+	_expect(rebound_first != null and not rebound_first.disabled, "重新绑定后清除旧 pending")
+	_expect(rebound_first != null and not rebound_first.button_pressed, "重新绑定后清除旧抢牌选择")
+	_expect(pass_button.visible and not pass_button.disabled, "重新绑定后 Pass 恢复可用")
+	_expect(submit_button.disabled, "重新绑定后等待新的选牌")
+	store.actor_seat_index = 0
+	store.publish()
+	await process_frame
+	await process_frame
 
 
 func _test_key_regions_do_not_overlap(screen: MatchScreen, viewport_size: Vector2) -> void:

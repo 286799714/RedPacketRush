@@ -16,9 +16,14 @@ func _run() -> void:
 	_test_new_attempt_detaches_old_pending_room()
 	_test_null_retry_preserves_active_room()
 	_test_play_cards_intention_is_sent_to_active_room()
+	_test_claim_intentions_are_sent_to_active_room()
 	_test_match_public_state_is_normalized_without_private_fields()
 	_test_public_play_state_is_normalized_from_whitelisted_fields()
+	_test_public_claim_reveal_is_normalized_from_whitelisted_fields()
+	_test_public_discard_history_is_not_truncated_to_one_turn()
+	_test_claim_event_history_is_normalized_from_whitelisted_fields()
 	_test_only_local_match_private_state_is_normalized()
+	_test_local_claim_confirmation_is_normalized_privately()
 
 	if _failures.is_empty():
 		print("PASS: realtime adapter lifecycle tests")
@@ -152,6 +157,28 @@ func _test_play_cards_intention_is_sent_to_active_room() -> void:
 		"type": "play_cards",
 		"data": {"cardIds": ["card-c", "card-a", "card-b"]},
 	}], "出牌意图应发送物理牌标识")
+	adapter.queue_free()
+
+
+func _test_claim_intentions_are_sent_to_active_room() -> void:
+	var adapter := _new_adapter()
+	var client := FakeColyseusClient.new()
+	adapter._client = client
+	var room := client.queue_join_room("match-room")
+	adapter.join_game_room("match-room", "甲")
+	room.emit_joined()
+	if not adapter.has_method("claim_card"):
+		_failures.append("Adapter 应公开 claim_card 意图")
+		adapter.queue_free()
+		return
+
+	adapter.claim_card("played-hearts-a")
+	adapter.claim_card(null)
+
+	_expect_equal(room.sent_messages, [
+		{"type": "claim", "data": {"cardId": "played-hearts-a"}},
+		{"type": "claim", "data": {"cardId": null}},
+	], "抢牌与不抢意图应保留实体牌标识或 null")
 	adapter.queue_free()
 
 
@@ -334,7 +361,174 @@ func _test_only_local_match_private_state_is_normalized() -> void:
 			"suit": "clubs",
 			"copy_index": 0,
 		}],
+		"claim_committed": false,
+		"claim_card_id": null,
 	}], "仅规范化本地参与者私有手牌")
+	adapter.queue_free()
+
+
+func _test_local_claim_confirmation_is_normalized_privately() -> void:
+	var adapter := _new_adapter()
+	var client := FakeColyseusClient.new()
+	adapter._client = client
+	var observed: Array[Dictionary] = []
+	adapter.match_private_state_changed.connect(
+		func(snapshot: Dictionary): observed.append(snapshot)
+	)
+	var room := client.queue_join_room("private-room")
+	adapter.join_game_room("private-room", "甲")
+	room.emit_joined()
+	room.message_received.emit("match_private_state", {
+		"participantId": "session-a",
+		"seatIndex": 0,
+		"hand": [],
+		"claimCommitted": true,
+		"claimCardId": "copy-0:hearts:14",
+		"otherClaim": "must-not-pass",
+	})
+	room.message_received.emit("match_private_state", {
+		"participantId": "session-b",
+		"seatIndex": 1,
+		"hand": [],
+		"claimCommitted": true,
+		"claimCardId": "copy-0:spades:13",
+	})
+
+	_expect_equal(observed, [{
+		"participant_id": "session-a",
+		"seat_index": 0,
+		"hand": [],
+		"claim_committed": true,
+		"claim_card_id": "copy-0:hearts:14",
+	}], "只规范化本地抢牌确认且不泄露额外字段")
+	adapter.queue_free()
+
+
+func _test_public_claim_reveal_is_normalized_from_whitelisted_fields() -> void:
+	var adapter := _new_adapter()
+	var client := FakeColyseusClient.new()
+	adapter._client = client
+	var observed := {"snapshot": {}}
+	adapter.game_room_state_changed.connect(
+		func(snapshot: Dictionary): observed["snapshot"] = snapshot
+	)
+	var room := client.queue_join_room("claim-room")
+	adapter.join_game_room("claim-room", "甲")
+	room.emit_joined()
+	var collision_card := _raw_card("played-queen", 12, "hearts", 0)
+	var unique_card := _raw_card("played-ace", 14, "hearts", 0)
+	var discarded_card := _raw_card("played-king", 13, "hearts", 0)
+	room.emit_state({
+		"status": "started",
+		"phase": "claim_reveal",
+		"claimCommitCount": 3,
+		"revealedClaims": [
+			{"seatIndex": 3, "passed": true, "cardId": "", "privateChoice": "drop-me"},
+			{"seatIndex": 1, "passed": false, "cardId": "played-ace"},
+			{"seatIndex": 2, "passed": false, "cardId": "played-queen"},
+			{"seatIndex": 2, "passed": false, "cardId": "played-queen"},
+		],
+		"claimAwards": [
+			{"seatIndex": 2, "card": collision_card, "source": "collision"},
+			{"seatIndex": 1, "card": unique_card, "source": "unique"},
+			{"seatIndex": 1, "card": unique_card, "source": "unique"},
+		],
+		"discardedCards": [discarded_card, discarded_card],
+		"claimChoices": {"must": "not pass"},
+	})
+
+	var snapshot: Dictionary = observed["snapshot"]
+	_expect_equal(snapshot.get("claim_commit_count"), 3, "公开提交计数规范化")
+	_expect_equal(snapshot.get("revealed_claims"), [
+		{"seat_index": 1, "card_id": "played-ace"},
+		{"seat_index": 2, "card_id": "played-queen"},
+		{"seat_index": 3, "card_id": null},
+	], "同时揭晓选择按席位规范化并去重")
+	_expect_equal(snapshot.get("claim_awards"), [
+		{"seat_index": 1, "card": _card("played-ace", 14, "hearts", 0), "source": "unique"},
+		{"seat_index": 2, "card": _card("played-queen", 12, "hearts", 0), "source": "collision"},
+	], "公开抢牌结果按席位规范化并去重")
+	_expect_equal(snapshot.get("discarded_cards"), [
+		_card("played-king", 13, "hearts", 0),
+	], "公共弃牌按实体牌去重")
+	_expect_equal(snapshot.has("claim_choices"), false, "未揭晓选择不进入应用快照")
+	adapter.queue_free()
+
+
+func _test_public_discard_history_is_not_truncated_to_one_turn() -> void:
+	var adapter := _new_adapter()
+	var client := FakeColyseusClient.new()
+	adapter._client = client
+	var observed := {"snapshot": {}}
+	adapter.game_room_state_changed.connect(
+		func(snapshot: Dictionary): observed["snapshot"] = snapshot
+	)
+	var room := client.queue_join_room("discard-history-room")
+	adapter.join_game_room("discard-history-room", "甲")
+	room.emit_joined()
+	room.emit_state({
+		"status": "started",
+		"discardedCards": [
+			_raw_card("discard-2", 2, "clubs", 0),
+			_raw_card("discard-3", 3, "spades", 0),
+			_raw_card("discard-4", 4, "diamonds", 0),
+			_raw_card("discard-5", 5, "hearts", 0),
+			_raw_card("discard-6", 6, "clubs", 0),
+		],
+	})
+
+	_expect_equal(observed["snapshot"].get("discarded_cards"), [
+		_card("discard-2", 2, "clubs", 0),
+		_card("discard-3", 3, "spades", 0),
+		_card("discard-4", 4, "diamonds", 0),
+		_card("discard-5", 5, "hearts", 0),
+		_card("discard-6", 6, "clubs", 0),
+	], "公共弃牌历史保留多个回合")
+	adapter.queue_free()
+
+
+func _test_claim_event_history_is_normalized_from_whitelisted_fields() -> void:
+	var adapter := _new_adapter()
+	var client := FakeColyseusClient.new()
+	adapter._client = client
+	var observed := {"snapshot": {}}
+	adapter.game_room_state_changed.connect(
+		func(snapshot: Dictionary): observed["snapshot"] = snapshot
+	)
+	var room := client.queue_join_room("claim-history-room")
+	adapter.join_game_room("claim-history-room", "甲")
+	room.emit_joined()
+	room.emit_state({
+		"status": "started",
+		"claimEvents": [{
+			"turnNumber": 2,
+			"claims": [
+				{"seatIndex": 3, "passed": true, "cardId": ""},
+				{"seatIndex": 1, "passed": false, "cardId": "played-ace"},
+				{"seatIndex": 2, "passed": false, "cardId": "played-queen"},
+			],
+			"awards": [
+				{"seatIndex": 2, "card": _raw_card("collision-king", 13, "hearts", 0), "source": "collision"},
+				{"seatIndex": 1, "card": _raw_card("played-ace", 14, "hearts", 0), "source": "unique"},
+			],
+			"discardedCards": [_raw_card("discarded-queen", 12, "hearts", 0)],
+			"privateChoices": "drop-me",
+		}],
+	})
+
+	_expect_equal(observed["snapshot"].get("claim_events"), [{
+		"turn_number": 2,
+		"claims": [
+			{"seat_index": 1, "card_id": "played-ace"},
+			{"seat_index": 2, "card_id": "played-queen"},
+			{"seat_index": 3, "card_id": null},
+		],
+		"awards": [
+			{"seat_index": 1, "card": _card("played-ace", 14, "hearts", 0), "source": "unique"},
+			{"seat_index": 2, "card": _card("collision-king", 13, "hearts", 0), "source": "collision"},
+		],
+		"discarded_cards": [_card("discarded-queen", 12, "hearts", 0)],
+	}], "抢牌结果历史按回合规范化且只保留公开字段")
 	adapter.queue_free()
 
 

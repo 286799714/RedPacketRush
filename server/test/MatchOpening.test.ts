@@ -126,6 +126,10 @@ describe("match opening", () => {
       playedCategory: null,
       playedScore: 0,
       turnNumber: 0,
+      claimCommitCount: 0,
+      revealedClaims: [],
+      claimAwards: [],
+      discardedCards: [],
       participants: [
         { ...PARTICIPANTS[0], score: 0, handCount: 8 },
         { ...PARTICIPANTS[1], score: 0, handCount: 8 },
@@ -172,6 +176,8 @@ describe("match opening", () => {
         { id: "copy-0:diamonds:3", rank: 3, suit: "diamonds", copyIndex: 0 },
         { id: "copy-0:spades:12", rank: 12, suit: "spades", copyIndex: 0 },
       ],
+      claimCommitted: false,
+      claimCardId: null,
     });
 
     engine.completePointContest();
@@ -314,6 +320,8 @@ describe("match opening", () => {
         "seatIndex",
         "participantId",
         "hand",
+        "claimCommitted",
+        "claimCardId",
       ]);
     }
     assert.deepStrictEqual(Object.keys(publicState), [
@@ -325,6 +333,10 @@ describe("match opening", () => {
       "playedCategory",
       "playedScore",
       "turnNumber",
+      "claimCommitCount",
+      "revealedClaims",
+      "claimAwards",
+      "discardedCards",
       "participants",
       "events",
     ]);

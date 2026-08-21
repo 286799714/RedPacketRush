@@ -14,8 +14,12 @@ func _run() -> void:
 	_test_started_snapshot_activates_match_once()
 	_test_public_collections_are_sanitized_deep_copies()
 	_test_public_play_state_is_retained_deep_copied_and_cleared()
+	_test_public_claim_state_is_retained_deep_copied_and_cleared()
+	_test_public_claim_event_history_is_retained_deep_copied_and_cleared()
 	_test_play_cards_intention_is_forwarded_without_optimistic_state()
+	_test_claim_intention_is_forwarded_without_optimistic_state()
 	_test_only_targeted_private_hand_is_retained()
+	_test_only_targeted_private_claim_confirmation_is_retained()
 	_test_room_errors_and_connection_changes_are_exposed()
 	_test_leave_clears_match_and_allows_next_room_activation()
 
@@ -136,6 +140,87 @@ func _test_public_play_state_is_retained_deep_copied_and_cleared() -> void:
 	_expect_equal(match_store.played_score, 0, "新回合快照清空旧得分")
 
 
+func _test_public_claim_state_is_retained_deep_copied_and_cleared() -> void:
+	var adapter := FakeRealtimeAdapter.new()
+	var match_store := MatchStore.new(adapter)
+	if (
+		not match_store.has_method("get_revealed_claims")
+		or not match_store.has_method("get_claim_awards")
+		or not match_store.has_method("get_discarded_cards")
+	):
+		_failures.append("MatchStore 应公开抢牌揭晓结果的只读副本")
+		return
+	var commit_snapshot := _started_snapshot("room-a", "human-a", 17)
+	commit_snapshot["phase"] = "claim_commit"
+	commit_snapshot["claim_commit_count"] = 2
+	adapter.publish_game_room_state(commit_snapshot)
+	_expect_equal(match_store.get("claim_commit_count"), 2, "保存公开抢牌提交数量")
+	_expect_equal(match_store.get_revealed_claims(), [], "提交阶段不提前揭晓选择")
+
+	var reveal_snapshot := commit_snapshot.duplicate(true)
+	reveal_snapshot["phase"] = "claim_reveal"
+	reveal_snapshot["claim_commit_count"] = 3
+	reveal_snapshot["revealed_claims"] = [
+		{"seat_index": 1, "card_id": "played-ace"},
+		{"seat_index": 2, "card_id": "played-queen"},
+		{"seat_index": 3, "card_id": null},
+	]
+	reveal_snapshot["claim_awards"] = [
+		{"seat_index": 1, "card": _card("played-ace", 14, "hearts", 0), "source": "unique"},
+		{"seat_index": 2, "card": _card("played-queen", 12, "hearts", 0), "source": "collision"},
+	]
+	reveal_snapshot["discarded_cards"] = [_card("played-king", 13, "hearts", 0)]
+	adapter.publish_game_room_state(reveal_snapshot)
+
+	var revealed_claims: Array[Dictionary] = match_store.get_revealed_claims()
+	revealed_claims[0]["card_id"] = "tampered"
+	var claim_awards: Array[Dictionary] = match_store.get_claim_awards()
+	claim_awards[0]["card"]["rank"] = 2
+	var discarded_cards: Array[Dictionary] = match_store.get_discarded_cards()
+	discarded_cards.clear()
+	_expect_equal(match_store.get_revealed_claims(), reveal_snapshot["revealed_claims"], "揭晓选择深拷贝")
+	_expect_equal(match_store.get_claim_awards(), reveal_snapshot["claim_awards"], "抢牌结果嵌套深拷贝")
+	_expect_equal(match_store.get_discarded_cards(), reveal_snapshot["discarded_cards"], "公共弃牌深拷贝")
+
+	adapter.publish_game_room_state(_started_snapshot("room-a", "human-a", 17))
+	_expect_equal(match_store.get("claim_commit_count"), 0, "新回合清空抢牌提交数量")
+	_expect_equal(match_store.get_revealed_claims(), [], "新回合清空揭晓选择")
+	_expect_equal(match_store.get_claim_awards(), [], "新回合清空抢牌结果")
+	_expect_equal(match_store.get_discarded_cards(), [], "新回合清空公共弃牌")
+
+
+func _test_public_claim_event_history_is_retained_deep_copied_and_cleared() -> void:
+	var adapter := FakeRealtimeAdapter.new()
+	var match_store := MatchStore.new(adapter)
+	if not match_store.has_method("get_claim_events"):
+		_failures.append("MatchStore 应公开抢牌结果历史的只读副本")
+		return
+	var snapshot := _started_snapshot("room-a", "human-a", 17)
+	snapshot["claim_events"] = [{
+		"turn_number": 2,
+		"claims": [
+			{"seat_index": 1, "card_id": "played-ace"},
+			{"seat_index": 2, "card_id": "played-queen"},
+			{"seat_index": 3, "card_id": null},
+		],
+		"awards": [
+			{"seat_index": 1, "card": _card("played-ace", 14, "hearts", 0), "source": "unique"},
+			{"seat_index": 2, "card": _card("collision-king", 13, "hearts", 0), "source": "collision"},
+		],
+		"discarded_cards": [_card("discarded-queen", 12, "hearts", 0)],
+	}]
+	adapter.publish_game_room_state(snapshot)
+
+	var returned_events: Array[Dictionary] = match_store.get_claim_events()
+	returned_events[0]["claims"][0]["card_id"] = "tampered"
+	returned_events[0]["awards"][0]["card"]["rank"] = 2
+	returned_events[0]["discarded_cards"].clear()
+	_expect_equal(match_store.get_claim_events(), snapshot["claim_events"], "抢牌结果历史嵌套深拷贝")
+
+	adapter.publish_game_room_state(_started_snapshot("room-b", "human-z", 18))
+	_expect_equal(match_store.get_claim_events(), [], "新房间快照清空旧抢牌历史")
+
+
 func _test_play_cards_intention_is_forwarded_without_optimistic_state() -> void:
 	var adapter := FakeRealtimeAdapter.new()
 	var match_store := MatchStore.new(adapter)
@@ -163,6 +248,33 @@ func _test_play_cards_intention_is_forwarded_without_optimistic_state() -> void:
 	_expect_equal(match_store.get_local_hand(), local_hand, "发送后等待权威私有手牌")
 	_expect_equal(match_store.get_played_cards(), [], "发送后等待权威公开出牌")
 	_expect_equal(match_store.played_score, 0, "发送后不乐观加分")
+
+
+func _test_claim_intention_is_forwarded_without_optimistic_state() -> void:
+	var adapter := FakeRealtimeAdapter.new()
+	var match_store := MatchStore.new(adapter)
+	if not match_store.has_method("claim_card"):
+		_failures.append("MatchStore 应公开 claim_card 意图")
+		return
+	var snapshot := _started_snapshot("room-a", "human-a", 17)
+	snapshot["phase"] = "claim_commit"
+	snapshot["actor_seat_index"] = 2
+	snapshot["played_cards"] = [
+		_card("played-queen", 12, "hearts", 0),
+		_card("played-king", 13, "hearts", 0),
+		_card("played-ace", 14, "hearts", 0),
+	]
+	adapter.publish_game_room_state(snapshot)
+
+	match_store.claim_card("played-ace")
+	match_store.claim_card(null)
+
+	_expect_equal(adapter.room_requests, [
+		{"type": "claim", "payload": {"cardId": "played-ace"}},
+		{"type": "claim", "payload": {"cardId": null}},
+	], "抢牌与不抢意图转发到 adapter")
+	_expect_equal(match_store.get_played_cards(), snapshot["played_cards"], "发送后等待权威抢牌揭晓")
+	_expect_equal(match_store.phase, "claim_commit", "发送后不乐观推进阶段")
 
 
 func _test_only_targeted_private_hand_is_retained() -> void:
@@ -195,6 +307,44 @@ func _test_only_targeted_private_hand_is_retained() -> void:
 	returned_hand[0]["rank"] = 2
 	returned_hand.clear()
 	_expect_equal(match_store.get_local_hand(), [local_card], "本地手牌深拷贝")
+
+
+func _test_only_targeted_private_claim_confirmation_is_retained() -> void:
+	var adapter := FakeRealtimeAdapter.new()
+	var match_store := MatchStore.new(adapter)
+	var public_snapshot := _started_snapshot("room-a", "human-a", 17)
+	public_snapshot["phase"] = "claim_commit"
+	public_snapshot["claim_committed"] = true
+	public_snapshot["claim_card_id"] = "public-leak"
+	adapter.publish_game_room_state(public_snapshot)
+
+	_expect_equal(match_store.get("claim_committed"), false, "公共快照不能确认本地抢牌")
+	_expect_equal(match_store.get("claim_card_id"), null, "公共快照不能写入本地抢牌选择")
+	adapter.publish_match_private_state({
+		"participant_id": "human-b",
+		"hand": [],
+		"claim_committed": true,
+		"claim_card_id": "other-choice",
+	})
+	_expect_equal(match_store.get("claim_committed"), false, "忽略其他参与者抢牌确认")
+
+	adapter.publish_match_private_state({
+		"participant_id": "human-a",
+		"hand": [],
+		"claim_committed": true,
+		"claim_card_id": "played-ace",
+	})
+	_expect_equal(match_store.get("claim_committed"), true, "保存本地定向抢牌确认")
+	_expect_equal(match_store.get("claim_card_id"), "played-ace", "保存本地定向抢牌选择")
+
+	adapter.publish_match_private_state({
+		"participant_id": "human-a",
+		"hand": [],
+		"claim_committed": false,
+		"claim_card_id": null,
+	})
+	_expect_equal(match_store.get("claim_committed"), false, "权威私信重置抢牌确认")
+	_expect_equal(match_store.get("claim_card_id"), null, "权威私信清空抢牌选择")
 
 
 func _test_room_errors_and_connection_changes_are_exposed() -> void:

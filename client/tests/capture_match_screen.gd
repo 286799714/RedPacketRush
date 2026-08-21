@@ -11,14 +11,22 @@ class VisualMatchStore extends RefCounted:
 	var phase := "actor_play"
 	var actor_seat_index := 0
 	var draw_pile_count := 17
+	var room_id := "visual-room"
 	var local_participant_id := "human-a"
 	var turn_number := 1
 	var played_category := ""
 	var played_score := 0
+	var claim_commit_count := 0
+	var claim_committed := false
+	var claim_card_id: Variant = null
 	var participants: Array[Dictionary] = []
 	var contest_rounds: Array[Dictionary] = []
 	var played_cards: Array[Dictionary] = []
 	var play_events: Array[Dictionary] = []
+	var claim_events: Array[Dictionary] = []
+	var revealed_claims: Array[Dictionary] = []
+	var claim_awards: Array[Dictionary] = []
+	var discarded_cards: Array[Dictionary] = []
 	var local_hand: Array[Dictionary] = []
 
 	func get_participants() -> Array[Dictionary]:
@@ -33,10 +41,25 @@ class VisualMatchStore extends RefCounted:
 	func get_play_events() -> Array[Dictionary]:
 		return play_events
 
+	func get_claim_events() -> Array[Dictionary]:
+		return claim_events
+
+	func get_revealed_claims() -> Array[Dictionary]:
+		return revealed_claims
+
+	func get_claim_awards() -> Array[Dictionary]:
+		return claim_awards
+
+	func get_discarded_cards() -> Array[Dictionary]:
+		return discarded_cards
+
 	func get_local_hand() -> Array[Dictionary]:
 		return local_hand
 
 	func play_cards(_card_ids: Array[String]) -> void:
+		pass
+
+	func claim_card(_card_id: Variant) -> void:
 		pass
 
 
@@ -57,6 +80,9 @@ func _run() -> void:
 			quit(1)
 			return
 		if not await _capture_state("claim_commit", viewport_size, output_directory):
+			quit(1)
+			return
+		if not await _capture_state("claim_reveal", viewport_size, output_directory):
 			quit(1)
 			return
 
@@ -93,6 +119,17 @@ func _capture_state(
 				return false
 			card_button.button_pressed = true
 		await process_frame
+	elif phase == "claim_commit":
+		var claim_card := screen.find_child("ClaimCard1", true, false) as Button
+		if claim_card == null:
+			push_error("claim-commit capture could not find a selectable played card")
+			viewport.queue_free()
+			await process_frame
+			return false
+		claim_card.button_pressed = true
+		await process_frame
+	elif phase == "claim_reveal":
+		await create_timer(0.25).timeout
 
 	for frame in range(3):
 		await process_frame
@@ -142,7 +179,9 @@ func _make_store(phase: String) -> VisualMatchStore:
 		_card("local-k", 13, "spades", 0),
 		_card("local-a", 14, "hearts", 0),
 	]
-	if phase == "claim_commit":
+	if phase in ["claim_commit", "claim_reveal"]:
+		store.actor_seat_index = 1
+		store.turn_number = 2
 		store.played_cards = [
 			_card("played-q", 12, "hearts", 0),
 			_card("played-k", 13, "hearts", 0),
@@ -151,12 +190,48 @@ func _make_store(phase: String) -> VisualMatchStore:
 		store.played_category = "straight_flush"
 		store.played_score = 10
 		store.play_events = [{
-			"turn_number": 1,
-			"actor_seat_index": 0,
+			"turn_number": 2,
+			"actor_seat_index": 1,
 			"cards": store.played_cards.duplicate(true),
 			"category": "straight_flush",
 			"score": 10,
 		}]
+	if phase == "claim_reveal":
+		var queen: Dictionary = store.played_cards[0]
+		var king: Dictionary = store.played_cards[1]
+		var ace: Dictionary = store.played_cards[2]
+		store.claim_commit_count = 3
+		store.claim_committed = true
+		store.claim_card_id = "played-a"
+		store.revealed_claims = [
+			{"seat_index": 0, "card_id": "played-a"},
+			{"seat_index": 2, "card_id": "played-q"},
+			{"seat_index": 3, "card_id": "played-q"},
+		]
+		store.claim_awards = [
+			{"seat_index": 0, "card": ace, "source": "unique"},
+			{"seat_index": 2, "card": king, "source": "collision"},
+			{"seat_index": 3, "card": queen, "source": "collision"},
+		]
+		store.claim_events = [
+			{
+				"turn_number": 1,
+				"claims": [
+					{"seat_index": 0, "card_id": null},
+					{"seat_index": 2, "card_id": null},
+					{"seat_index": 3, "card_id": null},
+				],
+				"awards": [],
+				"discarded_cards": [queen, king, ace],
+			},
+			{
+				"turn_number": 2,
+				"claims": store.revealed_claims.duplicate(true),
+				"awards": store.claim_awards.duplicate(true),
+				"discarded_cards": [],
+			},
+		]
+		store.played_cards = []
 	return store
 
 
@@ -164,7 +239,7 @@ func _read_output_directory() -> String:
 	for argument in OS.get_cmdline_user_args():
 		if argument.begins_with("--output-dir="):
 			return argument.trim_prefix("--output-dir=")
-	return ProjectSettings.globalize_path("res://.godot/visual-qa/ticket04")
+	return ProjectSettings.globalize_path("res://.godot/visual-qa/ticket05")
 
 
 func _has_pixel_variation(image: Image) -> bool:
