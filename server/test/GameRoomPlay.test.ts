@@ -224,7 +224,7 @@ describe("game room actor play", () => {
     });
     await handled;
     await waitUntil(() => serverRoom.state.phase === "claim_commit");
-    await waitUntil(() => replacementMessages[actorSeatIndex].length === 1);
+    await waitUntil(() => replacementMessages.every((messages) => messages.length === 1));
     await waitUntil(() => participants.every(
       (participant) => participant.state.phase === "claim_commit",
     ));
@@ -259,7 +259,12 @@ describe("game room actor play", () => {
       5,
     );
     for (let seatIndex = 0; seatIndex < participants.length; seatIndex += 1) {
-      assert.strictEqual(replacementMessages[seatIndex].length, seatIndex === actorSeatIndex ? 1 : 0);
+      assert.strictEqual(replacementMessages[seatIndex].length, 1);
+      const [privateState] = replacementMessages[seatIndex];
+      assert.strictEqual(privateState.actionId, serverRoom.state.actionId);
+      if (seatIndex !== actorSeatIndex) {
+        assert.deepStrictEqual(privateState.hand, openingStates[seatIndex].hand);
+      }
     }
 
     await Promise.all(participants.map((participant) => participant.leave()));

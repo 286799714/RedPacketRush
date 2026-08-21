@@ -63,16 +63,15 @@ async function startClaimCommit(colyseus: ColyseusTestServer<typeof appConfig>) 
   assert.strictEqual(serverRoom.state.phase, "actor_play");
 
   const actorSeatIndex = serverRoom.state.actorSeatIndex;
-  const replacementStateReceived = participants[actorSeatIndex].waitForMessage(
-    "match_private_state",
-    2000,
-  );
+  const replacementStatesReceived = participants.map((participant) => (
+    participant.waitForMessage("match_private_state", 2000)
+  ));
   handled = serverRoom.waitForMessage("play_cards");
   participants[actorSeatIndex].send("play_cards", {
     cardIds: openingStates[actorSeatIndex].hand.slice(0, 3).map((card) => card.id),
     actionId: serverRoom.state.actionId,
   });
-  await Promise.all([handled, replacementStateReceived]);
+  await Promise.all([handled, ...replacementStatesReceived]);
   assert.strictEqual(serverRoom.state.phase, "claim_commit");
 
   return { participants, serverRoom, actorSeatIndex };

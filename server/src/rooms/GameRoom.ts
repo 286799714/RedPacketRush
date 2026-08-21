@@ -548,7 +548,6 @@ export class GameRoom extends Room<{
       }
       throw error;
     }
-    this.sendPrivateMatchState(client);
   }
 
   private commitClaim(client: Client, message: unknown): void {
@@ -704,6 +703,7 @@ export class GameRoom extends Room<{
   ): void {
     matchEngine.playCards(seatIndex, cardIds);
     this.enterMatchPhase(matchEngine, matchEngine.view(seatIndex).publicState);
+    this.sendPrivateMatchStates();
   }
 
   private submitClaim(

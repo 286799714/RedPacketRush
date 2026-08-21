@@ -75,17 +75,17 @@ async function startFinalCommit(colyseus: ColyseusTestServer<typeof appConfig>) 
 
   for (let turn = 0; turn < 6; turn += 1) {
     const actorSeatIndex = serverRoom.state.actorSeatIndex;
-    const actorUpdate = participants[actorSeatIndex].waitForMessage(
+    const playUpdates = participants.map((participant) => participant.waitForMessage(
       "match_private_state",
       1000,
-    ) as Promise<PrivateMatchState>;
+    ) as Promise<PrivateMatchState>);
     let handled = serverRoom.waitForMessage("play_cards");
     participants[actorSeatIndex].send("play_cards", {
       cardIds: privateStates[actorSeatIndex].hand.slice(0, 3).map((card) => card.id),
       actionId: serverRoom.state.actionId,
     });
-    const [, actorPrivateState] = await Promise.all([handled, actorUpdate]);
-    privateStates[actorSeatIndex] = actorPrivateState;
+    const [, ...updatedPrivateStates] = await Promise.all([handled, ...playUpdates]);
+    privateStates = updatedPrivateStates;
 
     const claimantSeats = participants
       .map((_, seatIndex) => seatIndex)

@@ -13,6 +13,18 @@ interface PrivateMatchState {
   actionId: number;
 }
 
+interface UntypedMessageRoom {
+  onMessage(type: string, callback: (payload: unknown) => void): () => void;
+}
+
+function onRoomMessage(
+  participant: unknown,
+  type: string,
+  callback: (payload: unknown) => void,
+): () => void {
+  return (participant as UntypedMessageRoom).onMessage(type, callback);
+}
+
 function tickClock(serverRoom: GameRoom, elapsedMilliseconds: number): void {
   serverRoom.clock.currentTime -= elapsedMilliseconds;
   serverRoom.clock.tick();
@@ -182,13 +194,15 @@ describe("game room action continuity", () => {
   it("keeps one action id and deadline while claim commits are still partial", async () => {
     const { participants, serverRoom, privateStates } = await startActorPlay(colyseus);
     const actorSeatIndex = serverRoom.state.actorSeatIndex;
-    const actorUpdate = participants[actorSeatIndex].waitForMessage("match_private_state", 1000);
+    const playUpdates = participants.map((participant) => (
+      participant.waitForMessage("match_private_state", 1000)
+    ));
     let handled = serverRoom.waitForMessage("play_cards");
     participants[actorSeatIndex].send("play_cards", {
       cardIds: privateStates[actorSeatIndex].hand.slice(0, 3).map((card) => card.id),
       actionId: serverRoom.state.actionId,
     });
-    await Promise.all([handled, actorUpdate]);
+    await Promise.all([handled, ...playUpdates]);
     assert.strictEqual(serverRoom.state.phase, "claim_commit");
     const claimActionId = serverRoom.state.actionId;
     const claimDeadline = serverRoom.state.actionDeadlineAtUnixMs;
@@ -211,6 +225,70 @@ describe("game room action continuity", () => {
     assert.strictEqual(serverRoom.state.actionDeadlineAtUnixMs, claimDeadline);
 
     await Promise.all(participants.map((participant) => participant.leave()));
+  });
+
+  it("sends every human the new private action id after a human actor plays", async () => {
+    const { participants, serverRoom, privateStates } = await startActorPlay(colyseus);
+    const actorSeatIndex = serverRoom.state.actorSeatIndex;
+    const received = participants.map((): PrivateMatchState[] => []);
+    const unsubscribe = participants.map((participant, seatIndex) => onRoomMessage(
+      participant,
+      "match_private_state",
+      (payload) => received[seatIndex].push(payload as PrivateMatchState),
+    ));
+    const updates = participants.map((participant) => participant.waitForMessage(
+      "match_private_state",
+      1000,
+    ) as Promise<PrivateMatchState>);
+    const handled = serverRoom.waitForMessage("play_cards");
+    participants[actorSeatIndex].send("play_cards", {
+      cardIds: privateStates[actorSeatIndex].hand.slice(0, 3).map((card) => card.id),
+      actionId: serverRoom.state.actionId,
+    });
+    await handled;
+    const snapshots = await Promise.all(updates);
+
+    assert.strictEqual(serverRoom.state.phase, "claim_commit");
+    assert.ok(snapshots.every((snapshot) => snapshot.actionId === serverRoom.state.actionId));
+    assert.deepStrictEqual(
+      snapshots.map((snapshot) => snapshot.participantId),
+      participants.map((participant) => participant.sessionId),
+    );
+    assert.deepStrictEqual(received.map((messages) => messages.length), [1, 1, 1, 1]);
+    unsubscribe.forEach((removeListener) => removeListener());
+    await Promise.all(participants.map((participant) => participant.leave()));
+  });
+
+  it("sends every connected human the new private action id after a bot actor plays", async () => {
+    const { participants, serverRoom } = await startActorPlay(colyseus);
+    const actorSeatIndex = serverRoom.state.actorSeatIndex;
+    const connectedParticipants = participants.filter(
+      (_, seatIndex) => seatIndex !== actorSeatIndex,
+    );
+    const received = connectedParticipants.map((): PrivateMatchState[] => []);
+    const unsubscribe = connectedParticipants.map((participant, index) => onRoomMessage(
+      participant,
+      "match_private_state",
+      (payload) => received[index].push(payload as PrivateMatchState),
+    ));
+    const updates = connectedParticipants.map((participant) => participant.waitForMessage(
+      "match_private_state",
+      1000,
+    ) as Promise<PrivateMatchState>);
+
+    await participants[actorSeatIndex].leave();
+    drainImmediateTasks(serverRoom);
+    const snapshots = await Promise.all(updates);
+
+    assert.strictEqual(serverRoom.state.phase, "claim_commit");
+    assert.ok(snapshots.every((snapshot) => snapshot.actionId === serverRoom.state.actionId));
+    assert.deepStrictEqual(
+      snapshots.map((snapshot) => snapshot.participantId),
+      connectedParticipants.map((participant) => participant.sessionId),
+    );
+    assert.deepStrictEqual(received.map((messages) => messages.length), [1, 1, 1]);
+    unsubscribe.forEach((removeListener) => removeListener());
+    await Promise.all(connectedParticipants.map((participant) => participant.leave()));
   });
 
   it("runs bot plays and claims through zero-delay room clock tasks", async () => {
