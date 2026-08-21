@@ -14,6 +14,8 @@ import {
   CardDiscardedEventState,
   ClaimAwardState,
   ClaimsResolvedEventState,
+  FinalResultState,
+  FinalSettlementEventState,
   GameRoomState,
   PlayEventState,
   PointContestRoundState,
@@ -56,6 +58,7 @@ const ROOM_ERRORS = {
   invalidCommandPayload: { code: "invalid_payload", message: "该命令不接受参数" },
   invalidClaimPayload: { code: "invalid_payload", message: "抢牌参数必须包含牌标识或空值" },
   invalidDiscardPayload: { code: "invalid_payload", message: "弃牌参数必须包含牌标识" },
+  invalidFinalSelectionPayload: { code: "invalid_payload", message: "最终结算参数无效" },
   invalidPlayPayload: { code: "invalid_payload", message: "出牌参数必须是牌标识数组" },
   invalidReady: { code: "invalid_ready", message: "准备状态必须是布尔值" },
   invalidSettings: { code: "invalid_settings", message: "房间设置无效" },
@@ -64,6 +67,7 @@ const ROOM_ERRORS = {
   playPhase: { code: "invalid_phase", message: "当前阶段不能出牌" },
   claimPhase: { code: "invalid_phase", message: "当前阶段不能抢牌" },
   discardPhase: { code: "invalid_phase", message: "当前阶段不能弃牌" },
+  finalSelectionPhase: { code: "invalid_phase", message: "当前阶段不能提交最终组合" },
   readyPhase: { code: "invalid_phase", message: "房间当前不能修改准备状态" },
   startFailed: { code: "start_failed", message: "对局启动失败，请重试" },
   startInProgress: { code: "start_in_progress", message: "对局正在启动" },
@@ -71,6 +75,7 @@ const ROOM_ERRORS = {
 
 const POINT_CONTEST_DISPLAY_MILLISECONDS = 900;
 const CLAIM_REVEAL_DISPLAY_MILLISECONDS = 900;
+const FINAL_REVEAL_DISPLAY_MILLISECONDS = 900;
 
 function isRecordLike(value: unknown): value is RecordLike {
   return typeof value === "object" && value !== null && !Array.isArray(value);
@@ -162,6 +167,7 @@ export class GameRoom extends Room<{
   private claimDeadlineTimer: { clear(): void } | null = null;
   private claimRevealTimer: { clear(): void } | null = null;
   private discardDeadlineTimer: { clear(): void } | null = null;
+  private finalRevealTimer: { clear(): void } | null = null;
   private startInProgress = false;
 
   public override async setPrivate(isPrivate = true, persist = true): Promise<void> {
@@ -192,6 +198,9 @@ export class GameRoom extends Room<{
     });
     this.onMessage("discard", (client, message: unknown) => {
       this.discardCard(client, message);
+    });
+    this.onMessage("final_selection", (client, message: unknown) => {
+      this.commitFinalSelection(client, message);
     });
   }
 
@@ -610,6 +619,91 @@ export class GameRoom extends Room<{
     this.discardDeadlineTimer = null;
   }
 
+  private commitFinalSelection(client: Client, message: unknown): void {
+    if (!this.matchEngine) {
+      this.sendRoomError(client, ROOM_ERRORS.finalSelectionPhase);
+      return;
+    }
+    if (!isRecordLike(message) || (message.mode !== "manual" && message.mode !== "best")) {
+      this.sendRoomError(client, ROOM_ERRORS.invalidFinalSelectionPayload);
+      return;
+    }
+    if (
+      message.mode === "manual"
+      && (
+        !Array.isArray(message.groups)
+        || message.groups.length !== 2
+        || !Array.from(message.groups).every((group) => (
+          Array.isArray(group)
+          && group.length === 3
+          && Array.from(group).every((cardId) => (
+            typeof cardId === "string" && cardId.length > 0
+          ))
+        ))
+      )
+    ) {
+      this.sendRoomError(client, ROOM_ERRORS.invalidFinalSelectionPayload);
+      return;
+    }
+    const seatIndex = client.userData?.seatIndex;
+    if (typeof seatIndex !== "number") {
+      this.sendRoomError(client, ROOM_ERRORS.noSeat);
+      return;
+    }
+
+    try {
+      if (message.mode === "best") {
+        this.matchEngine.commitBestFinalSelection(seatIndex);
+      } else {
+        this.matchEngine.commitFinalSelection(
+          seatIndex,
+          message.groups as readonly (readonly string[])[],
+        );
+      }
+    } catch (error) {
+      if (error instanceof MatchCommandError) {
+        this.sendRoomError(client, { code: error.code, message: error.message });
+        return;
+      }
+      throw error;
+    }
+
+    const publicState = this.matchEngine.view(seatIndex).publicState;
+    this.applyPublicMatchState(publicState);
+    if (publicState.phase === "final_commit") {
+      this.sendPrivateMatchState(client);
+    } else {
+      this.sendPrivateMatchStates();
+      this.scheduleFinalReveal(this.matchEngine);
+    }
+  }
+
+  private scheduleFinalReveal(matchEngine: MatchEngine): void {
+    this.clearFinalReveal();
+    const timer = this.clock.setTimeout(() => {
+      if (this.finalRevealTimer !== timer) {
+        return;
+      }
+      this.finalRevealTimer = null;
+      if (
+        this.matchEngine !== matchEngine
+        || this.state.phase !== "final_reveal"
+      ) {
+        return;
+      }
+
+      matchEngine.completeFinalReveal();
+      this.applyPublicMatchState(matchEngine.view(0).publicState);
+      this.sendPrivateMatchStates();
+    }, FINAL_REVEAL_DISPLAY_MILLISECONDS);
+    this.finalRevealTimer = timer;
+  }
+
+  private clearFinalReveal(): void {
+    this.finalRevealTimer?.clear();
+    this.finalRevealTimer = null;
+  }
+
   private applyPublicMatchState(publicState: PublicMatchState): void {
     this.state.phase = publicState.phase;
     this.state.actorSeatIndex = publicState.actorSeatIndex;
@@ -637,6 +731,12 @@ export class GameRoom extends Room<{
     this.state.sealedCardCount = publicState.sealedCardCount;
     this.state.pendingDiscardSeatIndexes.clear();
     this.state.pendingDiscardSeatIndexes.push(...publicState.pendingDiscardSeatIndexes);
+    this.state.finalResults.clear();
+    for (const result of publicState.finalResults) {
+      this.state.finalResults.push(new FinalResultState(result));
+    }
+    this.state.winnerSeatIndexes.clear();
+    this.state.winnerSeatIndexes.push(...publicState.winnerSeatIndexes);
     for (const participant of publicState.participants) {
       const seat = this.state.seats[participant.seatIndex];
       if (!seat || seat.participantId !== participant.participantId) {
@@ -649,6 +749,7 @@ export class GameRoom extends Room<{
     this.state.playEvents.clear();
     this.state.claimEvents.clear();
     this.state.discardEvents.clear();
+    this.state.finalEvents.clear();
     for (const event of publicState.events) {
       if (event.type === "point_contest_round") {
         this.state.contestRounds.push(new PointContestRoundState(event));
@@ -656,8 +757,10 @@ export class GameRoom extends Room<{
         this.state.playEvents.push(new PlayEventState(event));
       } else if (event.type === "claims_resolved") {
         this.state.claimEvents.push(new ClaimsResolvedEventState(event));
-      } else {
+      } else if (event.type === "card_discarded") {
         this.state.discardEvents.push(new CardDiscardedEventState(event));
+      } else {
+        this.state.finalEvents.push(new FinalSettlementEventState(event));
       }
     }
   }

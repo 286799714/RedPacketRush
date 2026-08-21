@@ -7,9 +7,12 @@ import type {
   CardsPlayedEvent,
   ClaimAward,
   ClaimsResolvedEvent,
+  FinalResult,
+  FinalSettlementEvent,
   PointContestRoundEvent,
   RevealedClaim,
 } from "../../match/MatchEngine.js";
+import type { FinalCombination } from "../../match/finalSettlement.js";
 import type { GameRoomMetadata, GameRoomStatus } from "../GameRoom.js";
 
 export const ROOM_SEAT_COUNT = 4;
@@ -203,6 +206,71 @@ export class CardDiscardedEventState extends Schema {
   }
 }
 
+export class FinalCombinationState extends Schema {
+  @type([PublicCardState])
+  public cards = new ArraySchema<PublicCardState>();
+
+  @type("string")
+  public category = "";
+
+  @type("uint8")
+  public score = 0;
+
+  public constructor(group?: FinalCombination) {
+    super();
+    if (!group) {
+      return;
+    }
+    for (const card of group.cards) {
+      this.cards.push(new PublicCardState(card));
+    }
+    this.category = group.category;
+    this.score = group.score;
+  }
+}
+
+export class FinalResultState extends Schema {
+  @type("uint8")
+  public seatIndex = 0;
+
+  @type([FinalCombinationState])
+  public groups = new ArraySchema<FinalCombinationState>();
+
+  @type("uint8")
+  public totalScore = 0;
+
+  public constructor(result?: FinalResult) {
+    super();
+    if (!result) {
+      return;
+    }
+    this.seatIndex = result.seatIndex;
+    for (const group of result.groups) {
+      this.groups.push(new FinalCombinationState(group));
+    }
+    this.totalScore = result.totalScore;
+  }
+}
+
+export class FinalSettlementEventState extends Schema {
+  @type([FinalResultState])
+  public results = new ArraySchema<FinalResultState>();
+
+  @type(["uint8"])
+  public winnerSeatIndexes = new ArraySchema<number>();
+
+  public constructor(event?: FinalSettlementEvent) {
+    super();
+    if (!event) {
+      return;
+    }
+    for (const result of event.results) {
+      this.results.push(new FinalResultState(result));
+    }
+    this.winnerSeatIndexes.push(...event.winnerSeatIndexes);
+  }
+}
+
 export class ParticipantSeat extends Schema {
   @type("uint8")
   public seatIndex = 0;
@@ -304,6 +372,12 @@ export class GameRoomState extends Schema {
   @type(["uint8"])
   public pendingDiscardSeatIndexes = new ArraySchema<number>();
 
+  @type([FinalResultState])
+  public finalResults = new ArraySchema<FinalResultState>();
+
+  @type(["uint8"])
+  public winnerSeatIndexes = new ArraySchema<number>();
+
   @type([ParticipantSeat])
   public seats = new ArraySchema<ParticipantSeat>();
 
@@ -318,6 +392,9 @@ export class GameRoomState extends Schema {
 
   @type([CardDiscardedEventState])
   public discardEvents = new ArraySchema<CardDiscardedEventState>();
+
+  @type([FinalSettlementEventState])
+  public finalEvents = new ArraySchema<FinalSettlementEventState>();
 
   public constructor(metadata?: GameRoomMetadata) {
     super();

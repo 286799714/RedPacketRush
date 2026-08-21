@@ -8,6 +8,12 @@ import {
   classifyCombination,
   type CombinationCategory,
 } from "./combinations.js";
+import {
+  evaluateFinalSelection,
+  findBestFinalSelection,
+  type EvaluatedFinalSelection,
+  type FinalCombination,
+} from "./finalSettlement.js";
 import type { RandomSource } from "./random.js";
 
 export const ACTION_DEADLINES = [15, 30, 60] as const;
@@ -18,7 +24,9 @@ export type MatchPhase =
   | "claim_commit"
   | "claim_reveal"
   | "award_discard"
-  | "final_commit";
+  | "final_commit"
+  | "final_reveal"
+  | "finished";
 export type MatchCommandErrorCode =
   | "invalid_phase"
   | "not_actor"
@@ -31,7 +39,9 @@ export type MatchCommandErrorCode =
   | "invalid_discard"
   | "discard_not_required"
   | "awarded_card_protected"
-  | "stale_turn";
+  | "stale_turn"
+  | "invalid_final_selection"
+  | "final_selection_already_committed";
 
 export class MatchCommandError extends Error {
   public constructor(
@@ -108,11 +118,24 @@ export interface CardDiscardedEvent {
   readonly card: PhysicalCard;
 }
 
+export interface FinalResult {
+  readonly seatIndex: number;
+  readonly groups: readonly FinalCombination[];
+  readonly totalScore: number;
+}
+
+export interface FinalSettlementEvent {
+  readonly type: "final_settlement";
+  readonly results: readonly FinalResult[];
+  readonly winnerSeatIndexes: readonly number[];
+}
+
 export type PublicMatchEvent =
   | PointContestRoundEvent
   | CardsPlayedEvent
   | ClaimsResolvedEvent
-  | CardDiscardedEvent;
+  | CardDiscardedEvent
+  | FinalSettlementEvent;
 
 export interface PublicMatchState {
   readonly phase: MatchPhase;
@@ -128,6 +151,8 @@ export interface PublicMatchState {
   readonly discardedCards: readonly PhysicalCard[];
   readonly sealedCardCount: number;
   readonly pendingDiscardSeatIndexes: readonly number[];
+  readonly finalResults: readonly FinalResult[];
+  readonly winnerSeatIndexes: readonly number[];
   readonly participants: readonly PublicMatchParticipant[];
   readonly events: readonly PublicMatchEvent[];
 }
@@ -138,6 +163,8 @@ export interface PrivateMatchState {
   readonly hand: readonly PhysicalCard[];
   readonly claimCommitted: boolean;
   readonly claimCardId: string | null;
+  readonly finalCommitted: boolean;
+  readonly finalGroups: readonly (readonly string[])[];
 }
 
 export interface MatchView {
@@ -172,6 +199,9 @@ export class MatchEngine {
   private sealedCards: PhysicalCard[] = [];
   private pendingDiscardSeatIndexes = new Set<number>();
   private protectedAwardCardIds = new Map<number, string>();
+  private finalSelections = new Map<number, EvaluatedFinalSelection>();
+  private finalResults: FinalResult[] = [];
+  private winnerSeatIndexes: number[] = [];
   private configuredCardCount = 0;
 
   public constructor(random: RandomSource) {
@@ -380,6 +410,54 @@ export class MatchEngine {
     this.openNextTurn();
   }
 
+  public commitFinalSelection(
+    seatIndex: number,
+    groups: readonly (readonly string[])[],
+  ): void {
+    const participant = this.finalCommitParticipant(seatIndex);
+    let selection: EvaluatedFinalSelection;
+    try {
+      selection = evaluateFinalSelection(participant.hand, groups);
+    } catch {
+      throw new MatchCommandError(
+        "invalid_final_selection",
+        "final selection must contain two disjoint owned three-card groups",
+      );
+    }
+    this.commitEvaluatedFinalSelection(seatIndex, selection);
+  }
+
+  public commitBestFinalSelection(seatIndex: number): void {
+    const participant = this.finalCommitParticipant(seatIndex);
+    this.commitEvaluatedFinalSelection(
+      seatIndex,
+      findBestFinalSelection(participant.hand),
+    );
+  }
+
+  public resolveFinalSelectionsAtDeadline(): void {
+    if (this.participants === null || this.phase !== "final_commit") {
+      throw new MatchCommandError("invalid_phase", "final selection commit is not active");
+    }
+    const selections = new Map(this.finalSelections);
+    for (const participant of this.participants) {
+      if (!selections.has(participant.seatIndex)) {
+        selections.set(
+          participant.seatIndex,
+          findBestFinalSelection(participant.hand),
+        );
+      }
+    }
+    this.revealFinalSelections(selections);
+  }
+
+  public completeFinalReveal(): void {
+    if (this.participants === null || this.phase !== "final_reveal") {
+      throw new MatchCommandError("invalid_phase", "final settlement reveal is not active");
+    }
+    this.phase = "finished";
+  }
+
   public view(seatIndex: number): MatchView {
     if (
       this.participants === null
@@ -418,6 +496,8 @@ export class MatchEngine {
       discardedCards: Object.freeze([...this.discardedCards]),
       sealedCardCount: this.sealedCards.length,
       pendingDiscardSeatIndexes: Object.freeze([...this.pendingDiscardSeatIndexes]),
+      finalResults: Object.freeze([...this.finalResults]),
+      winnerSeatIndexes: Object.freeze([...this.winnerSeatIndexes]),
       participants: Object.freeze(publicParticipants),
       events: Object.freeze([...this.events]),
     });
@@ -427,6 +507,12 @@ export class MatchEngine {
       hand: Object.freeze([...participant.hand]),
       claimCommitted: this.claimChoices.has(seatIndex),
       claimCardId: this.claimChoices.get(seatIndex) ?? null,
+      finalCommitted: this.finalSelections.has(seatIndex),
+      finalGroups: Object.freeze(
+        this.finalSelections.get(seatIndex)?.groups.map((group) => (
+          Object.freeze(group.cards.map((card) => card.id))
+        )) ?? [],
+      ),
     });
     return Object.freeze({ publicState, privateState });
   }
@@ -581,6 +667,82 @@ export class MatchEngine {
       throw new MatchCommandError("discard_not_required", "seat does not participate in this match");
     }
     return participant;
+  }
+
+  private finalCommitParticipant(seatIndex: number): ParticipantState {
+    if (this.participants === null || this.phase !== "final_commit") {
+      throw new MatchCommandError("invalid_phase", "final selection commit is not active");
+    }
+    const participant = this.participants.find((candidate) => candidate.seatIndex === seatIndex);
+    if (!participant) {
+      throw new MatchCommandError(
+        "invalid_final_selection",
+        "seat does not participate in final settlement",
+      );
+    }
+    if (this.finalSelections.has(seatIndex)) {
+      throw new MatchCommandError(
+        "final_selection_already_committed",
+        "final selection has already been committed",
+      );
+    }
+    return participant;
+  }
+
+  private commitEvaluatedFinalSelection(
+    seatIndex: number,
+    selection: EvaluatedFinalSelection,
+  ): void {
+    if (this.participants === null) {
+      throw new Error("cannot commit final selection before the match starts");
+    }
+    const selections = new Map(this.finalSelections);
+    selections.set(seatIndex, selection);
+    if (selections.size === this.participants.length) {
+      this.revealFinalSelections(selections);
+    } else {
+      this.finalSelections = selections;
+    }
+  }
+
+  private revealFinalSelections(
+    selections: ReadonlyMap<number, EvaluatedFinalSelection>,
+  ): void {
+    if (this.participants === null || this.phase !== "final_commit") {
+      throw new MatchCommandError("invalid_phase", "final selection commit is not active");
+    }
+    const results = this.participants.map((participant) => {
+      const selection = selections.get(participant.seatIndex);
+      if (!selection) {
+        throw new Error("every participant requires a final selection before reveal");
+      }
+      return Object.freeze({
+        seatIndex: participant.seatIndex,
+        groups: selection.groups,
+        totalScore: selection.totalScore,
+      });
+    });
+    const finalScores = this.participants.map((participant, index) => (
+      participant.score + results[index].totalScore
+    ));
+    const highestScore = Math.max(...finalScores);
+    const winnerSeatIndexes = this.participants
+      .filter((_, index) => finalScores[index] === highestScore)
+      .map((participant) => participant.seatIndex);
+    const event: FinalSettlementEvent = Object.freeze({
+      type: "final_settlement",
+      results: Object.freeze([...results]),
+      winnerSeatIndexes: Object.freeze([...winnerSeatIndexes]),
+    });
+
+    this.participants.forEach((participant, index) => {
+      participant.score = finalScores[index];
+    });
+    this.finalSelections = new Map(selections);
+    this.finalResults = results;
+    this.winnerSeatIndexes = winnerSeatIndexes;
+    this.events.push(event);
+    this.phase = "final_reveal";
   }
 
   private recordDiscard(participant: ParticipantState, card: PhysicalCard): void {
