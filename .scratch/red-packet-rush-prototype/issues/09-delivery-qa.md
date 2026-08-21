@@ -4,7 +4,7 @@
 
 **Blocked by:** 08 - Keep timed and disconnected matches moving.
 
-**Status:** ready-for-agent
+**Status:** claimed
 
 - [ ] Lobby, waiting room, match, final results, disconnected, empty, loading, validation, and retry states use one coherent visual system.
 - [ ] Card rank and suit remain readable without relying on color alone; interactive and disabled states are distinct.
