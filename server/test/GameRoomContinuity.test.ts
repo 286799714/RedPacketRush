@@ -2,16 +2,15 @@ import assert from "assert";
 import { ColyseusTestServer } from "@colyseus/testing";
 
 import appConfig from "../src/app.config.js";
-import type { PhysicalCard } from "../src/match/cards.js";
 import { GameRoom } from "../src/rooms/GameRoom.js";
+import {
+  drainImmediateTasks,
+  type PrivateMatchState,
+  startActorPlay,
+  tickClock,
+  waitForCondition,
+} from "./gameRoomTestDriver.js";
 import { getTestServer } from "./testServer.js";
-
-interface PrivateMatchState {
-  seatIndex: number;
-  participantId: string;
-  hand: PhysicalCard[];
-  actionId: number;
-}
 
 interface UntypedMessageRoom {
   onMessage(type: string, callback: (payload: unknown) => void): () => void;
@@ -25,53 +24,6 @@ function onRoomMessage(
   return (participant as UntypedMessageRoom).onMessage(type, callback);
 }
 
-function tickClock(serverRoom: GameRoom, elapsedMilliseconds: number): void {
-  serverRoom.clock.currentTime -= elapsedMilliseconds;
-  serverRoom.clock.tick();
-}
-
-async function waitForCondition(condition: () => boolean, attempts = 100): Promise<void> {
-  for (let attempt = 0; attempt < attempts; attempt += 1) {
-    if (condition()) {
-      return;
-    }
-    await new Promise<void>((resolve) => setImmediate(resolve));
-  }
-  throw new Error("condition was not reached");
-}
-
-async function startActorPlay(colyseus: ColyseusTestServer<typeof appConfig>) {
-  const host = await colyseus.sdk.create("game", {
-    nickname: "甲",
-    displayName: "行动时序测试",
-    deckMode: "one",
-    actionDeadlineSeconds: 15,
-  });
-  const participants = [
-    host,
-    await colyseus.sdk.joinById(host.roomId, { nickname: "乙" }),
-    await colyseus.sdk.joinById(host.roomId, { nickname: "丙" }),
-    await colyseus.sdk.joinById(host.roomId, { nickname: "丁" }),
-  ];
-  const serverRoom = colyseus.getRoomById<GameRoom>(host.roomId);
-  for (const participant of participants) {
-    const handled = serverRoom.waitForMessage("set_ready");
-    participant.send("set_ready", { ready: true });
-    await handled;
-  }
-  const privateStatePromises = participants.map((participant) => (
-    participant.waitForMessage("match_private_state", 2000) as Promise<PrivateMatchState>
-  ));
-  const handled = serverRoom.waitForMessage("start");
-  host.send("start", null);
-  await handled;
-  assert.strictEqual(serverRoom.state.phase, "point_contest");
-  assert.strictEqual(serverRoom.state.actionDeadlineAtUnixMs, 0);
-  tickClock(serverRoom, 900);
-  const privateStates = await Promise.all(privateStatePromises);
-  assert.strictEqual(serverRoom.state.phase, "actor_play");
-  return { participants, serverRoom, privateStates };
-}
 
 async function startBotAssistedActorPlay(colyseus: ColyseusTestServer<typeof appConfig>) {
   const host = await colyseus.sdk.create("game", {
@@ -98,12 +50,6 @@ async function startBotAssistedActorPlay(colyseus: ColyseusTestServer<typeof app
   const privateState = await privateStatePromise;
   assert.strictEqual(serverRoom.state.phase, "actor_play");
   return { host, serverRoom, privateState };
-}
-
-function drainImmediateTasks(serverRoom: GameRoom): void {
-  for (let attempt = 0; attempt < 8; attempt += 1) {
-    tickClock(serverRoom, 0);
-  }
 }
 
 function advanceCurrentPhase(serverRoom: GameRoom): void {
@@ -341,7 +287,7 @@ describe("game room action continuity", () => {
     await host.leave();
   });
 
-  it("restores a dropped human to the same seat with fresh private state", async () => {
+  it("restores a dropped human with fresh public and private state", async () => {
     const { participants, serverRoom } = await startActorPlay(colyseus);
     const seatIndex = serverRoom.state.actorSeatIndex;
     const dropped = participants[seatIndex];
@@ -360,6 +306,9 @@ describe("game room action continuity", () => {
       1000,
     ) as PrivateMatchState;
     await waitForCondition(() => serverRoom.state.seats[seatIndex].connected === true);
+    await waitForCondition(() => (
+      reconnected.state.toJSON().seats?.[seatIndex]?.connected === true
+    ));
 
     assert.strictEqual(reconnected.sessionId, sessionId);
     assert.strictEqual(
@@ -371,6 +320,7 @@ describe("game room action continuity", () => {
     assert.strictEqual(privateState.seatIndex, seatIndex);
     assert.strictEqual(privateState.actionId, serverRoom.state.actionId);
     assert.strictEqual(privateState.hand.length, 8);
+    assert.deepStrictEqual(reconnected.state.toJSON(), serverRoom.state.toJSON());
     assert.strictEqual(serverRoom.clients.length, 4);
     assert.strictEqual(new Set(serverRoom.clients.map((client) => client.sessionId)).size, 4);
     assert.strictEqual(
@@ -424,7 +374,7 @@ describe("game room action continuity", () => {
     assert.strictEqual(botClaim?.cardId, serverRoom.state.claimEvents[0].claims.find(
       (claim) => claim.seatIndex === droppedSeatIndex,
     )?.cardId);
-    assert.notStrictEqual(botClaim?.cardId, "");
+    assert.ok(botClaim);
     await assert.rejects(() => colyseus.sdk.reconnect(reconnectionToken));
 
     await Promise.all(participants

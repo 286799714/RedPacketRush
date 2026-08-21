@@ -2,71 +2,15 @@ import assert from "assert";
 import { ColyseusTestServer } from "@colyseus/testing";
 
 import appConfig from "../src/app.config.js";
-import type { PhysicalCard } from "../src/match/cards.js";
 import { GameRoom } from "../src/rooms/GameRoom.js";
+import {
+  drainImmediateTasks,
+  type PrivateMatchState,
+  startActorPlay,
+  tickClock,
+  waitForCondition,
+} from "./gameRoomTestDriver.js";
 import { getTestServer } from "./testServer.js";
-
-interface PrivateMatchState {
-  seatIndex: number;
-  participantId: string;
-  hand: PhysicalCard[];
-  actionId: number;
-}
-
-function tickClock(serverRoom: GameRoom, elapsedMilliseconds: number): void {
-  serverRoom.clock.currentTime -= elapsedMilliseconds;
-  serverRoom.clock.tick();
-}
-
-async function waitForCondition(condition: () => boolean, attempts = 100): Promise<void> {
-  for (let attempt = 0; attempt < attempts; attempt += 1) {
-    if (condition()) {
-      return;
-    }
-    await new Promise<void>((resolve) => setImmediate(resolve));
-  }
-  throw new Error("condition was not reached");
-}
-
-async function startActorPlay(
-  colyseus: ColyseusTestServer<typeof appConfig>,
-  actionDeadlineSeconds: 15 | 60 = 15,
-) {
-  const host = await colyseus.sdk.create("game", {
-    nickname: "甲",
-    displayName: "重连竞态测试",
-    deckMode: "one",
-    actionDeadlineSeconds,
-  });
-  const participants = [
-    host,
-    await colyseus.sdk.joinById(host.roomId, { nickname: "乙" }),
-    await colyseus.sdk.joinById(host.roomId, { nickname: "丙" }),
-    await colyseus.sdk.joinById(host.roomId, { nickname: "丁" }),
-  ];
-  const serverRoom = colyseus.getRoomById<GameRoom>(host.roomId);
-  for (const participant of participants) {
-    const handled = serverRoom.waitForMessage("set_ready");
-    participant.send("set_ready", { ready: true });
-    await handled;
-  }
-  const privateStatePromises = participants.map((participant) => (
-    participant.waitForMessage("match_private_state", 2000) as Promise<PrivateMatchState>
-  ));
-  const handled = serverRoom.waitForMessage("start");
-  host.send("start", null);
-  await handled;
-  tickClock(serverRoom, 900);
-  const privateStates = await Promise.all(privateStatePromises);
-  assert.strictEqual(serverRoom.state.phase, "actor_play");
-  return { participants, serverRoom, privateStates };
-}
-
-function drainImmediateTasks(serverRoom: GameRoom): void {
-  for (let attempt = 0; attempt < 8; attempt += 1) {
-    tickClock(serverRoom, 0);
-  }
-}
 
 async function reconnectBeforeDeadline(
   colyseus: ColyseusTestServer<typeof appConfig>,

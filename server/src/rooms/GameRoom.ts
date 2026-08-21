@@ -10,8 +10,13 @@ import {
   type MatchPhase,
   type PublicMatchState,
 } from "../match/MatchEngine.js";
-import { chooseBotCommand, type BotCommand } from "../match/botPolicy.js";
-import { SeededRandomSource } from "../match/random.js";
+import {
+  chooseAutomaticPlayCardIds,
+  chooseBotCommand,
+  eligibleBotCommandType,
+  type BotCommand,
+} from "../match/botPolicy.js";
+import { SeededRandomSource, type RandomSource } from "../match/random.js";
 import {
   CardDiscardedEventState,
   ClaimAwardState,
@@ -179,6 +184,7 @@ export class GameRoom extends Room<{
   public maxClients = 4;
   private matchmakingPrivate = false;
   private matchEngine: MatchEngine | null = null;
+  private botRandom: RandomSource | null = null;
   private botTimer: { clear(): void } | null = null;
   private pendingReconnections = new Map<string, PendingReconnection>();
   private phaseTimer: { clear(): void } | null = null;
@@ -571,6 +577,7 @@ export class GameRoom extends Room<{
       const matchEngine = new MatchEngine(new SeededRandomSource(
         randomInt(1, 0x1_0000_0000),
       ));
+      const botRandom = new SeededRandomSource(randomInt(1, 0x1_0000_0000));
       matchEngine.start(
         startingSeats,
         {
@@ -612,6 +619,7 @@ export class GameRoom extends Room<{
 
         this.matchmakingPrivate = true;
         this.matchEngine = matchEngine;
+        this.botRandom = botRandom;
         this.state.status = "started";
         this.autoDispose = false;
         this.enterMatchPhase(matchEngine, publicMatchState);
@@ -916,7 +924,7 @@ export class GameRoom extends Room<{
   }
 
   private scheduleBotAction(matchEngine: MatchEngine): void {
-    if (this.botTimer !== null) {
+    if (this.botTimer !== null || this.botRandom === null) {
       return;
     }
     const seatIndex = this.nextBotSeatIndex(matchEngine);
@@ -938,7 +946,7 @@ export class GameRoom extends Room<{
       ) {
         return;
       }
-      const command = chooseBotCommand(matchEngine.view(seatIndex));
+      const command = chooseBotCommand(matchEngine.view(seatIndex), this.botRandom!);
       if (command === null) {
         return;
       }
@@ -949,27 +957,11 @@ export class GameRoom extends Room<{
   }
 
   private nextBotSeatIndex(matchEngine: MatchEngine): number | null {
-    if (this.state.phase === "actor_play") {
-      const actorSeat = this.state.seats[this.state.actorSeatIndex];
-      return actorSeat?.bot ? actorSeat.seatIndex : null;
-    }
     for (const seat of this.state.seats) {
       if (seat.participantId === "" || !seat.bot) {
         continue;
       }
-      const privateState = matchEngine.view(seat.seatIndex).privateState;
-      if (
-        (
-          this.state.phase === "claim_commit"
-          && seat.seatIndex !== this.state.actorSeatIndex
-          && !privateState.claimCommitted
-        )
-        || (
-          this.state.phase === "award_discard"
-          && this.state.pendingDiscardSeatIndexes.includes(seat.seatIndex)
-        )
-        || (this.state.phase === "final_commit" && !privateState.finalCommitted)
-      ) {
+      if (eligibleBotCommandType(matchEngine.view(seat.seatIndex)) !== null) {
         return seat.seatIndex;
       }
     }
@@ -1008,9 +1000,10 @@ export class GameRoom extends Room<{
       matchEngine.completePointContest();
     } else if (phase === "actor_play") {
       const actorSeatIndex = matchEngine.view(0).publicState.actorSeatIndex;
-      const cardIds = matchEngine.view(actorSeatIndex).privateState.hand
-        .slice(0, 3)
-        .map((card) => card.id);
+      const cardIds = chooseAutomaticPlayCardIds(matchEngine.view(actorSeatIndex));
+      if (cardIds === null) {
+        throw new Error("actor deadline has no legal automatic play");
+      }
       matchEngine.playCards(actorSeatIndex, cardIds);
     } else if (phase === "claim_commit") {
       matchEngine.resolveClaimsAtDeadline();
