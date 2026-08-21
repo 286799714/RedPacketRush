@@ -17,6 +17,7 @@
 
 ## Review
 
+- TDD: `1d2596e` through `bed9625` added combinatorics, engine, room, store, screen, and adapter slices for exhaustion, private commits, optimal grouping, reveal, scoring, and co-winners.
 - Standards: 0 findings (`7ad6975...bed9625`).
 - Spec: 0 findings (`7ad6975...bed9625`).
 - Verification: server 95 tests, TypeScript build, seven Godot runners, Native four-client smoke, and GPU visual checks at 960x540 and 1280x720 all passed. Existing Godot ObjectDB/resource exit warnings remain non-fatal.

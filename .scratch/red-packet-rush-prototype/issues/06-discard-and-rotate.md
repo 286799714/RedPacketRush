@@ -17,6 +17,7 @@
 
 ## Review
 
+- TDD: `86794f2`, `3b2c814`, `b07373b`, and `ec9edcc` added engine, room, store, screen, and adapter regressions for protected discards, stale intents, actor rotation, and hand invariants.
 - Standards: 0 findings after repair (`51e1e88...ec9edcc`).
 - Spec: 0 findings after repair (`51e1e88...ec9edcc`).
 - Verification: server 84 tests, TypeScript build, seven Godot runners, and Native four-client smoke all passed. Existing Godot ObjectDB/resource exit warnings remain non-fatal.

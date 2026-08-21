@@ -12,3 +12,10 @@
 - [x] The SDK version and generated-schema workflow are pinned and reproducible.
 - [x] Generated caches, build output, secrets, and editor-local files are ignored by Git.
 - [x] An automated integration check proves that a newly created room appears and a locked room disappears.
+
+## Review
+
+- TDD: `5386db5` added `LiveLobby.test.ts`, the lobby-store runner, and the Native SDK smoke together with the lobby implementation; `a4d2a99` then applied the review vocabulary repair.
+- Standards: 0 hard findings after documenting the implementation-ticket lifecycle. One Data Clumps judgement call is accepted for the prototype: SDK room summaries remain normalized dictionaries at the realtime-adapter boundary instead of adding a second DTO layer (`a354f6d...a4d2a99`).
+- Spec: 0 findings (`a354f6d...a4d2a99`).
+- Verification: the completion audit's clean checkout passed 129 server tests, TypeScript build, all eight Godot runners, the delivery matrix, and the real four-client Native SDK smoke; the lobby listing integration and lobby-store coverage are included.

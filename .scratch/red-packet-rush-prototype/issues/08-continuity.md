@@ -17,6 +17,7 @@
 
 ## Review
 
+- TDD: `e3bcc47` through `8d5e58b` added deterministic bot, deadline, full-match, disconnect, reconnect, takeover, and four-phase race regressions alongside the implementation and its review repairs.
 - Standards: 0 findings after repair (`a8cdef8...8d5e58b`).
 - Spec: 0 findings after repair (`a8cdef8...8d5e58b`).
 - Verification: server 129 tests, TypeScript build, seven Godot runners, Native four-client SDK smoke, driver-level matchmaking race gates, and GPU visual checks at 960x540 and 1280x720 all passed. Existing Godot ObjectDB/resource exit warnings remain non-fatal.

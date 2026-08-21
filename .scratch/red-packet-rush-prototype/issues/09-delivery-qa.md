@@ -17,6 +17,7 @@
 
 ## Review
 
+- TDD: `cf7864d` through `33e6c99` added lobby/room/match UI runners, the 17-state capture matrix, clean-checkout gates, and observable UI assertions across the delivery and review slices; `scripts/verify.ps1` integrated the existing real Native SDK smoke into clean-checkout verification.
 - Standards: 0 findings after repair (`2bac80c...33e6c99`).
 - Spec: 0 findings after repair (`2bac80c...33e6c99`).
 - Verification: a content-clean checkout completed `npm ci`, 129 server tests, TypeScript build, Godot editor parse, eight Godot headless runners, the 17-state delivery matrix, tracked-artifact hygiene, and a real four-client Native SDK smoke covering matchmaking, private hand delivery, a player intent, and synchronized public claim reveal.

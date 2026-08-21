@@ -16,6 +16,7 @@
 
 ## Review
 
+- TDD: `16928b4`, `368a6c4`, and `d05fbd6` added pure claim-resolution, room privacy, match-store, match-screen, adapter, and Native SDK smoke coverage with each implementation and review slice.
 - Standards: 0 findings (`8e71eea...d05fbd6`).
 - Spec: 0 findings (`8e71eea...d05fbd6`).
 - Verification: server 72 tests, TypeScript build, seven Godot runners, and Native four-client smoke all passed. Existing Godot ObjectDB/resource exit warnings remain non-fatal.
