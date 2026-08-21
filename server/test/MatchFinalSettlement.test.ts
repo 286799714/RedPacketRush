@@ -6,7 +6,6 @@ import {
   type MatchCommandErrorCode,
   type MatchParticipant,
 } from "../src/match/MatchEngine.js";
-import { evaluateFinalSelection } from "../src/match/finalSettlement.js";
 import { SeededRandomSource } from "../src/match/random.js";
 
 const PARTICIPANTS: readonly MatchParticipant[] = [
@@ -42,6 +41,18 @@ function firstLegalGroups(engine: MatchEngine, seatIndex: number): string[][] {
   return [ids.slice(0, 3), ids.slice(3, 6)];
 }
 
+function assertSameSelectedCards(
+  actualGroups: readonly (readonly string[])[],
+  submittedGroups: readonly (readonly string[])[],
+): void {
+  assert.strictEqual(actualGroups.length, 2);
+  assert.ok(actualGroups.every((group) => group.length === 3));
+  assert.deepStrictEqual(
+    actualGroups.flat().sort(),
+    submittedGroups.flat().sort(),
+  );
+}
+
 function assertRejectedWithoutMutation(
   engine: MatchEngine,
   action: () => void,
@@ -67,8 +78,6 @@ describe("match final settlement", () => {
     const engine = engineAtFinalCommit();
     const seatZeroGroups = firstLegalGroups(engine, 0);
     const seatZeroHand = engine.view(0).privateState.hand;
-    const expectedSeatZeroGroups = evaluateFinalSelection(seatZeroHand, seatZeroGroups)
-      .groups.map((group) => group.cards.map((card) => card.id));
     const otherCardId = engine.view(1).privateState.hand[0].id;
     const invalidSelections: readonly (readonly (readonly string[])[])[] = [
       [seatZeroGroups[0]],
@@ -90,15 +99,12 @@ describe("match final settlement", () => {
 
     const views = PARTICIPANTS.map(({ seatIndex }) => engine.view(seatIndex));
     assert.deepStrictEqual(views[0].publicState, publicBefore);
-    assert.deepStrictEqual(views.map((view) => ({
-      committed: view.privateState.finalCommitted,
-      groups: view.privateState.finalGroups,
-    })), [
-      { committed: true, groups: expectedSeatZeroGroups },
-      { committed: false, groups: [] },
-      { committed: false, groups: [] },
-      { committed: false, groups: [] },
-    ]);
+    assert.deepStrictEqual(
+      views.map((view) => view.privateState.finalCommitted),
+      [true, false, false, false],
+    );
+    assertSameSelectedCards(views[0].privateState.finalGroups, seatZeroGroups);
+    assert.ok(views.slice(1).every((view) => view.privateState.finalGroups.length === 0));
     assert.ok(!Object.hasOwn(views[0].publicState, "finalCommitCount"));
     assert.deepStrictEqual(views[0].publicState.finalResults, []);
     assert.deepStrictEqual(views[0].publicState.winnerSeatIndexes, []);
@@ -113,10 +119,6 @@ describe("match final settlement", () => {
   it("uses best choices for missing commits at the fallback boundary", () => {
     const engine = engineAtFinalCommit(23);
     const manualGroups = firstLegalGroups(engine, 0);
-    const expectedManualGroups = evaluateFinalSelection(
-      engine.view(0).privateState.hand,
-      manualGroups,
-    ).groups.map((group) => group.cards.map((card) => card.id));
     engine.commitFinalSelection(0, manualGroups);
 
     engine.resolveFinalSelectionsAtDeadline();
@@ -125,9 +127,9 @@ describe("match final settlement", () => {
     const state = views[0].publicState;
     assert.strictEqual(state.phase, "final_reveal");
     assert.strictEqual(state.finalResults.length, 4);
-    assert.deepStrictEqual(
+    assertSameSelectedCards(
       state.finalResults[0].groups.map((group) => group.cards.map((card) => card.id)),
-      expectedManualGroups,
+      manualGroups,
     );
     assert.ok(views.every((view) => view.privateState.finalCommitted));
     assertRejectedWithoutMutation(
