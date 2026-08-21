@@ -4,7 +4,7 @@
 
 **Blocked by:** 07 - Complete final settlement.
 
-**Status:** ready-for-agent
+**Status:** claimed
 
 - [ ] Every actionable phase publishes one server deadline and performs a legal deterministic fallback exactly once when it expires.
 - [ ] Bots submit legal plays, claims or passes, required discards, and optimal final combinations through the same rule boundary as humans.
