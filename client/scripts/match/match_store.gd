@@ -27,6 +27,9 @@ var _contest_rounds: Array[Dictionary] = []
 var _played_cards: Array[Dictionary] = []
 var _play_events: Array[Dictionary] = []
 var _claim_events: Array[Dictionary] = []
+var _discard_events: Array[Dictionary] = []
+var _sealed_cards: Array[Dictionary] = []
+var _pending_discard_seat_indexes: Array[int] = []
 var _local_hand: Array[Dictionary] = []
 var _activated := false
 
@@ -62,6 +65,18 @@ func get_claim_events() -> Array[Dictionary]:
 	return _duplicate_dictionary_array(_claim_events)
 
 
+func get_discard_events() -> Array[Dictionary]:
+	return _duplicate_dictionary_array(_discard_events)
+
+
+func get_sealed_cards() -> Array[Dictionary]:
+	return _duplicate_dictionary_array(_sealed_cards)
+
+
+func get_pending_discard_seat_indexes() -> Array[int]:
+	return _pending_discard_seat_indexes.duplicate()
+
+
 func get_local_hand() -> Array[Dictionary]:
 	return _duplicate_dictionary_array(_local_hand)
 
@@ -79,6 +94,10 @@ func play_cards(card_ids: Array[String]) -> void:
 
 func claim_card(card_id: Variant) -> void:
 	_adapter.claim_card(card_id)
+
+
+func discard_card(card_id: String, expected_turn_number: int) -> void:
+	_adapter.discard_card(card_id, expected_turn_number)
 
 
 func _on_game_room_state_changed(snapshot: Dictionary) -> void:
@@ -136,6 +155,26 @@ func _on_game_room_state_changed(snapshot: Dictionary) -> void:
 			if raw_event is Dictionary:
 				_claim_events.append(raw_event.duplicate(true))
 
+	_discard_events.clear()
+	var raw_discard_events: Variant = snapshot.get("discard_events", [])
+	if raw_discard_events is Array:
+		for raw_event: Variant in raw_discard_events:
+			if raw_event is Dictionary:
+				_discard_events.append(raw_event.duplicate(true))
+
+	_sealed_cards.clear()
+	var raw_sealed_cards: Variant = snapshot.get("sealed_cards", [])
+	if raw_sealed_cards is Array:
+		for raw_card: Variant in raw_sealed_cards:
+			if raw_card is Dictionary:
+				_sealed_cards.append(raw_card.duplicate(true))
+
+	_pending_discard_seat_indexes.clear()
+	var raw_pending_discard_seats: Variant = snapshot.get("pending_discard_seat_indexes", [])
+	if raw_pending_discard_seats is Array:
+		for raw_seat_index: Variant in raw_pending_discard_seats:
+			_pending_discard_seat_indexes.append(int(raw_seat_index))
+
 	state_changed.emit()
 	if status == "started" and not _activated:
 		_activated = true
@@ -186,6 +225,9 @@ func _on_game_room_left(code: int, reason: String) -> void:
 	_played_cards.clear()
 	_play_events.clear()
 	_claim_events.clear()
+	_discard_events.clear()
+	_sealed_cards.clear()
+	_pending_discard_seat_indexes.clear()
 	_local_hand.clear()
 	_activated = false
 	state_changed.emit()

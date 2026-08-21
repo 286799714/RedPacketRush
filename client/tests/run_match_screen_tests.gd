@@ -26,9 +26,13 @@ class FakeMatchStore extends RefCounted:
 	var _played_cards: Array[Dictionary] = []
 	var _play_events: Array[Dictionary] = []
 	var _claim_events: Array[Dictionary] = []
+	var _discard_events: Array[Dictionary] = []
+	var _sealed_cards: Array[Dictionary] = []
+	var _pending_discard_seat_indexes: Array[int] = []
 	var _local_hand: Array[Dictionary] = []
 	var play_requests: Array[Array] = []
 	var claim_requests: Array[Variant] = []
+	var discard_requests: Array[Dictionary] = []
 
 	func get_participants() -> Array[Dictionary]:
 		return _participants
@@ -48,11 +52,23 @@ class FakeMatchStore extends RefCounted:
 	func get_claim_events() -> Array[Dictionary]:
 		return _claim_events
 
+	func get_discard_events() -> Array[Dictionary]:
+		return _discard_events
+
+	func get_sealed_cards() -> Array[Dictionary]:
+		return _sealed_cards
+
+	func get_pending_discard_seat_indexes() -> Array[int]:
+		return _pending_discard_seat_indexes
+
 	func play_cards(card_ids: Array[String]) -> void:
 		play_requests.append(card_ids.duplicate())
 
 	func claim_card(card_id: Variant) -> void:
 		claim_requests.append(card_id)
+
+	func discard_card(card_id: String, turn_number: int) -> void:
+		discard_requests.append({"card_id": card_id, "turn_number": turn_number})
 
 	func apply_public_snapshot(snapshot: Dictionary) -> void:
 		if snapshot.has("room_id"):
@@ -78,6 +94,14 @@ class FakeMatchStore extends RefCounted:
 		_apply_dictionary_array(snapshot, "played_cards", _played_cards)
 		_apply_dictionary_array(snapshot, "play_events", _play_events)
 		_apply_dictionary_array(snapshot, "claim_events", _claim_events)
+		_apply_dictionary_array(snapshot, "discard_events", _discard_events)
+		_apply_dictionary_array(snapshot, "sealed_cards", _sealed_cards)
+		if snapshot.has("pending_discard_seat_indexes"):
+			_pending_discard_seat_indexes.clear()
+			var raw_pending_seats: Variant = snapshot["pending_discard_seat_indexes"]
+			if raw_pending_seats is Array:
+				for raw_seat_index: Variant in raw_pending_seats:
+					_pending_discard_seat_indexes.append(int(raw_seat_index))
 		state_changed.emit()
 
 	func apply_private_snapshot(snapshot: Dictionary) -> void:
@@ -176,6 +200,8 @@ func _run() -> void:
 	await _test_new_room_replays_collision_motion(screen, store)
 	await _test_public_history_is_chronological(screen, store)
 	await _test_two_deck_physical_cards_are_distinguishable_at_960(screen, store)
+	await _test_award_recipient_discards_an_original_card(screen, store)
+	await _test_discard_rejection_and_non_recipient_waiting(screen, store)
 	await _test_rejected_claim_reenables_controls_without_moving_layout(screen, store)
 	await _test_action_error_is_visible_without_moving_controls(screen, store)
 	await _test_unbinding_store_clears_pending_claim_controls(screen, store)
@@ -652,6 +678,218 @@ func _test_two_deck_physical_cards_are_distinguishable_at_960(
 	})
 
 
+func _test_award_recipient_discards_an_original_card(
+	screen: MatchScreen,
+	store: FakeMatchStore
+) -> void:
+	var awarded_card := _card("award-hearts-a-copy-1", 14, "hearts", 1)
+	var original_hand := [
+		_card("original-clubs-2", 2, "clubs", 0),
+		_card("original-spades-3", 3, "spades", 0),
+		_card("original-diamonds-4", 4, "diamonds", 0),
+		_card("original-hearts-5", 5, "hearts", 0),
+		_card("original-clubs-6", 6, "clubs", 0),
+		_card("original-spades-7", 7, "spades", 0),
+		_card("original-diamonds-8", 8, "diamonds", 0),
+		_card("original-hearts-9", 9, "hearts", 0),
+	]
+	var nine_card_hand := original_hand.duplicate(true)
+	nine_card_hand.insert(2, awarded_card)
+	store.apply_public_snapshot({
+		"deck_mode": "two",
+		"phase": "award_discard",
+		"actor_seat_index": 1,
+		"turn_number": 6,
+		"pending_discard_seat_indexes": [0, 2],
+		"claim_events": [{
+			"turn_number": 6,
+			"claims": [
+				{"seat_index": 0, "card_id": awarded_card["id"]},
+				{"seat_index": 2, "card_id": "other-award"},
+				{"seat_index": 3, "card_id": null},
+			],
+			"awards": [
+				{"seat_index": 0, "card": awarded_card, "source": "unique"},
+				{
+					"seat_index": 2,
+					"card": _card("other-award", 13, "spades", 0),
+					"source": "collision",
+				},
+			],
+			"discarded_cards": [],
+		}],
+		"discard_events": [],
+	})
+	store.apply_private_snapshot({"hand": nine_card_hand})
+	await process_frame
+	await process_frame
+
+	_expect(_find_visible_label_containing(screen, "阶段：弃牌") != null, "领取牌后进入可见弃牌阶段")
+	_expect(_find_visible_label_containing(screen, "我的手牌（9）") != null, "领取者在弃牌前显示九张手牌")
+	var protected_card := _find_visible_button_with_content(screen, "本轮获得")
+	_expect(protected_card != null and protected_card.disabled, "本轮获得的牌明确标记且不可弃")
+	if protected_card != null:
+		var protected_text := _node_text(protected_card)
+		_expect(protected_text.contains("A") and protected_text.contains("#2"), "受保护牌显示两副牌实体编号")
+	var original_two := _find_visible_button_with_content(screen, "2")
+	var original_three := _find_visible_button_with_content(screen, "3")
+	var discard_button := _find_visible_button(screen, "弃牌")
+	if original_two == null or original_three == null or discard_button == null:
+		_failures.append("领取者应看到原手牌选择与弃牌按钮")
+		return
+	_expect(not original_two.disabled and not original_three.disabled, "领取者可以选择原手牌")
+	_expect(discard_button.disabled, "未选牌时不能提交弃牌")
+	original_two.button_pressed = true
+	_expect(not discard_button.disabled, "选中一张原手牌后可以提交弃牌")
+	original_three.button_pressed = true
+	_expect(not original_two.button_pressed and original_three.button_pressed, "弃牌模式始终只选择一张牌")
+	screen.size = Vector2(1280, 720)
+	await process_frame
+	await process_frame
+	var wide_discard_button := _find_visible_button(screen, "弃牌")
+	_expect(wide_discard_button != null, "宽屏弃牌模式保留命令")
+	var previous_card_rect := Rect2()
+	for card_button in _find_visible_card_buttons(screen):
+		var card_rect := card_button.get_global_rect()
+		_expect(card_rect.position.x >= 0.0 and card_rect.end.x <= 1280.0, "宽屏九张手牌不越界")
+		if previous_card_rect.size != Vector2.ZERO:
+			_expect(not previous_card_rect.intersects(card_rect), "宽屏手牌互不重叠")
+		previous_card_rect = card_rect
+	screen.size = Vector2(960, 540)
+	await process_frame
+	await process_frame
+	discard_button = _find_visible_button(screen, "弃牌")
+	var discard_rect := discard_button.get_global_rect()
+	discard_button.pressed.emit()
+	await process_frame
+	_expect_equal(store.discard_requests, [{
+		"card_id": "original-spades-3",
+		"turn_number": 6,
+	}], "弃牌提交原手牌物理标识和当前回合")
+	_expect(discard_button.disabled and original_three.disabled, "提交后等待权威状态并禁用重复操作")
+	_expect(_find_visible_label_containing(screen, "弃牌提交中") != null, "权威确认前显示稳定提交状态")
+	_expect_equal(discard_button.get_global_rect(), discard_rect, "提交中弃牌按钮不发生布局位移")
+
+	store.apply_private_snapshot({"hand": original_hand})
+	store.apply_public_snapshot({
+		"deck_mode": "one",
+		"phase": "actor_play",
+		"actor_seat_index": 2,
+		"turn_number": 7,
+		"pending_discard_seat_indexes": [],
+		"discard_events": [{
+			"turn_number": 6,
+			"seat_index": 0,
+			"card": _card("original-spades-3", 3, "spades", 0),
+		}],
+		"sealed_cards": [_card("original-spades-3", 3, "spades", 0)],
+	})
+	await process_frame
+	await process_frame
+	_expect(_find_visible_button(screen, "弃牌") == null, "弃牌完成后隐藏提交命令")
+	_expect(_find_visible_label_containing(screen, "行动者：机器人丙") != null, "下一回合显示权威行动者")
+	_expect(_find_visible_label_containing(screen, "甲 弃置") != null, "公开历史显示领取者弃掉的牌")
+
+
+func _test_discard_rejection_and_non_recipient_waiting(
+	screen: MatchScreen,
+	store: FakeMatchStore
+) -> void:
+	var awarded_card := _card("retry-award-hearts-a", 14, "hearts", 0)
+	var hand := [
+		_card("retry-original-clubs-2", 2, "clubs", 0),
+		_card("retry-original-spades-3", 3, "spades", 0),
+		awarded_card,
+		_card("retry-original-diamonds-4", 4, "diamonds", 0),
+		_card("retry-original-hearts-5", 5, "hearts", 0),
+		_card("retry-original-clubs-6", 6, "clubs", 0),
+		_card("retry-original-spades-7", 7, "spades", 0),
+		_card("retry-original-diamonds-8", 8, "diamonds", 0),
+		_card("retry-original-hearts-9", 9, "hearts", 0),
+	]
+	store.apply_public_snapshot({
+		"phase": "award_discard",
+		"actor_seat_index": 1,
+		"turn_number": 8,
+		"pending_discard_seat_indexes": [0],
+		"claim_events": [{
+			"turn_number": 8,
+			"claims": [
+				{"seat_index": 0, "card_id": awarded_card["id"]},
+				{"seat_index": 2, "card_id": null},
+				{"seat_index": 3, "card_id": null},
+			],
+			"awards": [{"seat_index": 0, "card": awarded_card, "source": "unique"}],
+			"discarded_cards": [],
+		}],
+	})
+	store.apply_private_snapshot({"hand": hand})
+	await process_frame
+	await process_frame
+
+	var original_two := _find_visible_button_with_content(screen, "2")
+	var discard_button := _find_visible_button(screen, "弃牌")
+	if original_two == null or discard_button == null:
+		_failures.append("弃牌失败恢复测试缺少可见控件")
+		return
+	original_two.button_pressed = true
+	discard_button.pressed.emit()
+	var discard_rect := discard_button.get_global_rect()
+	store.reject_action("protected_card", "本轮获得的牌不能弃置，请重新选择")
+	await process_frame
+	await process_frame
+	var retry_two := _find_visible_button_with_content(screen, "2")
+	var protected_card := _find_visible_button_with_content(screen, "本轮获得")
+	_expect(retry_two != null and not retry_two.disabled, "弃牌失败后恢复原手牌选择")
+	_expect(retry_two != null and not retry_two.button_pressed, "弃牌失败后清空旧选择")
+	_expect(protected_card != null and protected_card.disabled, "弃牌失败后获奖牌仍受保护")
+	_expect(discard_button.disabled, "弃牌失败后等待重新选牌")
+	_expect(_find_visible_label_containing(screen, "请重新选择") != null, "弃牌失败原因保持可见")
+	_expect_equal(discard_button.get_global_rect(), discard_rect, "弃牌失败不移动提交按钮")
+
+	store.apply_private_snapshot({"hand": hand.slice(0, 8)})
+	store.apply_public_snapshot({
+		"phase": "award_discard",
+		"pending_discard_seat_indexes": [2],
+		"claim_events": [{
+			"turn_number": 8,
+			"claims": [
+				{"seat_index": 0, "card_id": null},
+				{"seat_index": 2, "card_id": "other-award"},
+				{"seat_index": 3, "card_id": null},
+			],
+			"awards": [{
+				"seat_index": 2,
+				"card": _card("other-award", 13, "spades", 0),
+				"source": "unique",
+			}],
+			"discarded_cards": [],
+		}],
+	})
+	await process_frame
+	await process_frame
+	_expect(_find_visible_button(screen, "弃牌") == null, "非领取者不显示弃牌命令")
+	_expect(_find_visible_label_containing(screen, "等待获得牌的参与者弃牌") != null, "非领取者看到等待状态")
+	var waiting_card := _find_visible_button_with_content(screen, "2")
+	_expect(waiting_card != null and waiting_card.disabled, "非领取者的手牌保持只读")
+	store.apply_public_snapshot({
+		"phase": "final_commit",
+		"actor_seat_index": -1,
+		"pending_discard_seat_indexes": [],
+	})
+	await process_frame
+	await process_frame
+	_expect(_find_visible_label_containing(screen, "阶段：最终结算") != null, "牌堆耗尽后显示最终选择阶段")
+	_expect(_find_visible_label_containing(screen, "选择两组不重叠") != null, "最终选择阶段显示下一步状态")
+	_expect(_find_visible_button(screen, "弃牌") == null, "最终选择阶段不残留弃牌命令")
+	store.apply_public_snapshot({
+		"phase": "actor_play",
+		"actor_seat_index": 0,
+		"pending_discard_seat_indexes": [],
+		"claim_events": [],
+	})
+
+
 func _test_rejected_claim_reenables_controls_without_moving_layout(
 	screen: MatchScreen,
 	store: FakeMatchStore
@@ -932,6 +1170,21 @@ func _find_visible_button(root_node: Node, text: String) -> Button:
 		if node is Button and node.is_visible_in_tree() and node.text == text:
 			return node
 	return null
+
+
+func _find_visible_button_with_content(root_node: Node, fragment: String) -> Button:
+	for node in root_node.find_children("*", "Button", true, false):
+		if node is Button and node.is_visible_in_tree() and _node_text(node).contains(fragment):
+			return node
+	return null
+
+
+func _find_visible_card_buttons(root_node: Node) -> Array[Button]:
+	var result: Array[Button] = []
+	for node in root_node.find_children("*", "Button", true, false):
+		if node is Button and node.is_visible_in_tree() and not _node_text(node).is_empty():
+			result.append(node)
+	return result
 
 
 func _expect(condition: bool, context: String) -> void:

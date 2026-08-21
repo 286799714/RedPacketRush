@@ -58,6 +58,7 @@ var _action_bar: PanelContainer
 var _action_prompt_label: Label
 var _action_error_label: Label
 var _play_button: Button
+var _discard_button: Button
 var _submit_claim_button: Button
 var _pass_claim_button: Button
 
@@ -71,6 +72,7 @@ var _selected_card_ids: Array[String] = []
 var _claim_choice_group := ButtonGroup.new()
 var _selected_claim_card_id := ""
 var _claim_submission_pending := false
+var _discard_submission_pending := false
 var _animated_collision_turns: Dictionary = {}
 var _match_identity := ""
 
@@ -139,6 +141,10 @@ func _on_action_failed(code: String, message: String) -> void:
 	if _claim_submission_pending and _show_claim_controls():
 		_claim_submission_pending = false
 		_selected_claim_card_id = ""
+		_refresh()
+	elif _discard_submission_pending and _show_discard_controls():
+		_discard_submission_pending = false
+		_selected_card_ids.clear()
 		_refresh()
 
 
@@ -363,6 +369,19 @@ func _build_table_area() -> Control:
 	_play_button.add_theme_stylebox_override("disabled", _style_box(Color("#202426"), COLOR_BORDER, 1, 4))
 	_play_button.pressed.connect(_on_play_pressed)
 	action_row.add_child(_play_button)
+	_discard_button = Button.new()
+	_discard_button.text = "弃牌"
+	_discard_button.custom_minimum_size = Vector2(82, 27)
+	_discard_button.visible = false
+	_discard_button.disabled = true
+	_discard_button.add_theme_font_size_override("font_size", 13)
+	_discard_button.add_theme_color_override("font_color", COLOR_TEXT)
+	_discard_button.add_theme_stylebox_override("normal", _style_box(Color("#2b3334"), COLOR_BORDER, 1, 4))
+	_discard_button.add_theme_stylebox_override("hover", _style_box(Color("#34413d"), COLOR_GREEN, 1, 4))
+	_discard_button.add_theme_stylebox_override("pressed", _style_box(Color("#30362f"), COLOR_GOLD, 2, 4))
+	_discard_button.add_theme_stylebox_override("disabled", _style_box(Color("#202426"), COLOR_BORDER, 1, 4))
+	_discard_button.pressed.connect(_on_discard_pressed)
+	action_row.add_child(_discard_button)
 	_submit_claim_button = Button.new()
 	_submit_claim_button.name = "SubmitClaimButton"
 	_submit_claim_button.text = "抢牌"
@@ -486,6 +505,7 @@ func _build_seat_card(seat_index: int) -> PanelContainer:
 func _refresh() -> void:
 	if _store == null:
 		_claim_submission_pending = false
+		_discard_submission_pending = false
 		_selected_claim_card_id = ""
 		_animated_collision_turns.clear()
 		_match_identity = ""
@@ -493,6 +513,8 @@ func _refresh() -> void:
 		_submit_claim_button.disabled = true
 		_pass_claim_button.visible = false
 		_pass_claim_button.disabled = true
+		_discard_button.visible = false
+		_discard_button.disabled = true
 		_participant_by_seat.clear()
 		_phase_label.text = "阶段：同步中"
 		_actor_label.text = "行动者：等待"
@@ -502,7 +524,7 @@ func _refresh() -> void:
 		_action_error_label.text = ""
 		_action_error_label.tooltip_text = ""
 		_refresh_seats(-1, -1)
-		_refresh_history([], [], [])
+		_refresh_history([], [], [], [])
 		_refresh_played_combination("")
 		_clear_hand()
 		return
@@ -526,6 +548,8 @@ func _refresh() -> void:
 		_selected_claim_card_id = ""
 	elif bool(_store.claim_committed):
 		_claim_submission_pending = false
+	if phase != "award_discard" or not _is_local_discard_pending():
+		_discard_submission_pending = false
 	_phase_label.text = "阶段：%s" % _phase_text(phase)
 	_actor_label.text = "行动者：%s" % _participant_name(actor_seat_index)
 	_deck_label.text = "牌堆：%d" % int(_store.draw_pile_count)
@@ -537,7 +561,10 @@ func _refresh() -> void:
 	var claim_events: Array[Dictionary] = []
 	if _store.has_method("get_claim_events"):
 		claim_events = _store.get_claim_events()
-	_refresh_history(_store.get_contest_rounds(), play_events, claim_events)
+	var discard_events: Array[Dictionary] = []
+	if _store.has_method("get_discard_events"):
+		discard_events = _store.get_discard_events()
+	_refresh_history(_store.get_contest_rounds(), play_events, claim_events, discard_events)
 	_refresh_played_combination(phase)
 	_refresh_hand()
 	_refresh_action_prompt(phase, actor_seat_index, local_seat_index)
@@ -580,11 +607,17 @@ func _refresh_seats(local_seat_index: int, actor_seat_index: int) -> void:
 func _refresh_history(
 	rounds: Array[Dictionary],
 	play_events: Array[Dictionary],
-	claim_events: Array[Dictionary]
+	claim_events: Array[Dictionary],
+	discard_events: Array[Dictionary]
 ) -> void:
 	for child in _history_list.get_children():
 		child.free()
-	if rounds.is_empty() and play_events.is_empty() and claim_events.is_empty():
+	if (
+		rounds.is_empty()
+		and play_events.is_empty()
+		and claim_events.is_empty()
+		and discard_events.is_empty()
+	):
 		var empty := _label("等待公开事件", 12, COLOR_MUTED)
 		empty.name = "HistoryEmpty"
 		empty.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
@@ -607,14 +640,22 @@ func _refresh_history(
 			"kind_order": 1,
 			"data": claim_event,
 		})
+	for discard_event in discard_events:
+		timeline.append({
+			"turn_number": int(discard_event.get("turn_number", 0)),
+			"kind_order": 2,
+			"data": discard_event,
+		})
 	timeline.sort_custom(_public_history_entry_before)
 	for entry in timeline:
 		var data: Dictionary = entry["data"]
-		_history_list.add_child(
-			_build_play_history_item(data)
-			if int(entry["kind_order"]) == 0
-			else _build_claim_history_item(data)
-		)
+		match int(entry["kind_order"]):
+			0:
+				_history_list.add_child(_build_play_history_item(data))
+			1:
+				_history_list.add_child(_build_claim_history_item(data))
+			_:
+				_history_list.add_child(_build_discard_history_item(data))
 	_refresh_latest_contest(rounds[rounds.size() - 1] if not rounds.is_empty() else {})
 
 
@@ -712,6 +753,24 @@ func _build_claim_history_item(claim_event: Dictionary) -> Control:
 		var discarded := _label("弃置：%s" % discarded_text, 11, COLOR_MUTED)
 		discarded.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 		item.add_child(discarded)
+	return item
+
+
+func _build_discard_history_item(discard_event: Dictionary) -> Control:
+	var turn_number := int(discard_event.get("turn_number", 0))
+	var seat_index := int(discard_event.get("seat_index", -1))
+	var item := VBoxContainer.new()
+	item.add_theme_constant_override("separation", 2)
+	var title := _label(
+		"第 %d 回合 · %s 弃置" % [turn_number, _participant_name(seat_index)],
+		12,
+		COLOR_GOLD
+	)
+	title.clip_text = true
+	item.add_child(title)
+	var card := _label(_format_card(discard_event.get("card", {})), 11, COLOR_MUTED)
+	card.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	item.add_child(card)
 	return item
 
 
@@ -943,11 +1002,13 @@ func _discarded_cards_text(raw_cards: Variant) -> String:
 func _refresh_hand() -> void:
 	_clear_hand()
 	var hand: Array[Dictionary] = _store.get_local_hand()
-	var can_select := _can_select_hand()
+	var protected_card_id := _local_awarded_card_id()
 	_hand_title_label.text = "我的手牌（%d）" % hand.size()
 	for index in range(hand.size()):
-		var card := _build_hand_card(hand[index], index)
-		card.disabled = not can_select
+		var card_id := str(hand[index].get("id", ""))
+		var is_protected := not protected_card_id.is_empty() and card_id == protected_card_id
+		var card := _build_hand_card(hand[index], index, is_protected)
+		card.disabled = not _can_select_hand_card(card_id, is_protected)
 		_hand_row.add_child(card)
 		_hand_cards.append(card)
 	if hand.is_empty():
@@ -965,9 +1026,11 @@ func _clear_hand() -> void:
 	_hand_title_label.text = "我的手牌（0）"
 	if _play_button != null:
 		_play_button.disabled = true
+	if _discard_button != null:
+		_discard_button.disabled = true
 
 
-func _build_hand_card(card: Dictionary, index: int) -> Button:
+func _build_hand_card(card: Dictionary, index: int, is_protected: bool) -> Button:
 	var panel := Button.new()
 	panel.name = "HandCard%d" % index
 	panel.custom_minimum_size = Vector2(CARD_WIDTH, CARD_HEIGHT)
@@ -977,7 +1040,15 @@ func _build_hand_card(card: Dictionary, index: int) -> Button:
 	panel.add_theme_stylebox_override("normal", _style_box(COLOR_SURFACE_RAISED, COLOR_BORDER, 1, 4))
 	panel.add_theme_stylebox_override("hover", _style_box(Color("#293032"), COLOR_GREEN, 1, 4))
 	panel.add_theme_stylebox_override("pressed", _style_box(Color("#30362f"), COLOR_GOLD, 3, 4))
-	panel.add_theme_stylebox_override("disabled", _style_box(COLOR_SURFACE, COLOR_BORDER, 1, 4))
+	panel.add_theme_stylebox_override(
+		"disabled",
+		_style_box(COLOR_SURFACE, COLOR_GOLD if is_protected else COLOR_BORDER, 2 if is_protected else 1, 4)
+	)
+	panel.tooltip_text = (
+		"%s · 本轮获得，不可弃" % _format_card(card)
+		if is_protected
+		else _format_card(card)
+	)
 	panel.toggled.connect(_on_hand_card_toggled.bind(str(card.get("id", "")), panel))
 	var margin := MarginContainer.new()
 	margin.mouse_filter = Control.MOUSE_FILTER_IGNORE
@@ -991,17 +1062,30 @@ func _build_hand_card(card: Dictionary, index: int) -> Button:
 	column.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	column.add_theme_constant_override("separation", 0)
 	margin.add_child(column)
+	var rank_row := HBoxContainer.new()
+	rank_row.alignment = BoxContainer.ALIGNMENT_CENTER
+	rank_row.add_theme_constant_override("separation", 3)
+	column.add_child(rank_row)
 	var rank := _label(_rank_text(int(card.get("rank", 0))), 20, COLOR_TEXT)
 	rank.name = "Rank"
 	rank.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	rank.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
 	rank.size_flags_vertical = Control.SIZE_EXPAND_FILL
-	column.add_child(rank)
+	rank_row.add_child(rank)
+	if _store != null and str(_store.deck_mode) == "two":
+		var copy_marker := _label("#%d" % (int(card.get("copy_index", 0)) + 1), 10, COLOR_MUTED)
+		copy_marker.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
+		rank_row.add_child(copy_marker)
 	var suit := _label(_suit_text(card.get("suit", "")), 15, _suit_color(card.get("suit", "")))
 	suit.name = "Suit"
 	suit.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	suit.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
 	column.add_child(suit)
+	if is_protected:
+		var protected_marker := _label("本轮获得", 10, COLOR_GOLD)
+		protected_marker.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+		protected_marker.clip_text = true
+		column.add_child(protected_marker)
 	return panel
 
 
@@ -1012,6 +1096,57 @@ func _can_select_hand() -> bool:
 		and _local_seat_index >= 0
 		and int(_store.actor_seat_index) == _local_seat_index
 	)
+
+
+func _can_select_hand_card(card_id: String, is_protected: bool) -> bool:
+	if _can_select_hand():
+		return true
+	return (
+		_can_discard_hand()
+		and not is_protected
+		and not card_id.is_empty()
+	)
+
+
+func _can_discard_hand() -> bool:
+	return _show_discard_controls() and not _discard_submission_pending
+
+
+func _show_discard_controls() -> bool:
+	return (
+		_store != null
+		and str(_store.phase) == "award_discard"
+		and _is_local_discard_pending()
+	)
+
+
+func _is_local_discard_pending() -> bool:
+	if (
+		_store == null
+		or _local_seat_index < 0
+		or not _store.has_method("get_pending_discard_seat_indexes")
+	):
+		return false
+	var pending_seat_indexes: Array[int] = _store.get_pending_discard_seat_indexes()
+	return pending_seat_indexes.has(_local_seat_index)
+
+
+func _local_awarded_card_id() -> String:
+	if _store == null or _local_seat_index < 0 or str(_store.phase) != "award_discard":
+		return ""
+	var claim_event := _current_claim_event()
+	var raw_awards: Variant = claim_event.get("awards", [])
+	if not raw_awards is Array:
+		return ""
+	for raw_award: Variant in raw_awards:
+		if (
+			raw_award is Dictionary
+			and int(raw_award.get("seat_index", -1)) == _local_seat_index
+		):
+			var card: Variant = raw_award.get("card", {})
+			if card is Dictionary:
+				return str(card.get("id", ""))
+	return ""
 
 
 func _can_choose_claim() -> bool:
@@ -1068,11 +1203,18 @@ func _begin_claim_submission(card_id: Variant) -> void:
 
 
 func _on_hand_card_toggled(pressed: bool, card_id: String, button: Button) -> void:
-	if not _can_select_hand() or card_id.is_empty():
+	var protected_card_id := _local_awarded_card_id()
+	var is_protected := not protected_card_id.is_empty() and card_id == protected_card_id
+	if not _can_select_hand_card(card_id, is_protected):
 		button.set_pressed_no_signal(false)
 		return
 	if pressed:
-		if _selected_card_ids.size() >= 3:
+		if _can_discard_hand():
+			for hand_card in _hand_cards:
+				if hand_card != button:
+					hand_card.set_pressed_no_signal(false)
+			_selected_card_ids.clear()
+		elif _selected_card_ids.size() >= 3:
 			button.set_pressed_no_signal(false)
 			return
 		if not _selected_card_ids.has(card_id):
@@ -1080,6 +1222,7 @@ func _on_hand_card_toggled(pressed: bool, card_id: String, button: Button) -> vo
 	else:
 		_selected_card_ids.erase(card_id)
 	_play_button.disabled = _selected_card_ids.size() != 3
+	_discard_button.disabled = not _can_discard_hand() or _selected_card_ids.size() != 1
 
 
 func _on_play_pressed() -> void:
@@ -1090,9 +1233,26 @@ func _on_play_pressed() -> void:
 	_store.play_cards(_selected_card_ids.duplicate())
 
 
+func _on_discard_pressed() -> void:
+	if not _can_discard_hand() or _selected_card_ids.size() != 1:
+		return
+	_discard_submission_pending = true
+	_action_error_label.text = ""
+	_action_error_label.tooltip_text = ""
+	for hand_card in _hand_cards:
+		hand_card.disabled = true
+	_discard_button.disabled = true
+	_action_prompt_label.text = "弃牌提交中：等待服务器确认"
+	_store.discard_card(_selected_card_ids[0], int(_store.turn_number))
+
+
 func _refresh_action_prompt(phase: String, actor_seat_index: int, local_seat_index: int) -> void:
 	var show_claim_controls := _show_claim_controls()
 	var can_choose_claim := _can_choose_claim()
+	var show_discard_controls := _show_discard_controls()
+	_play_button.visible = phase != "award_discard"
+	_discard_button.visible = show_discard_controls
+	_discard_button.disabled = not _can_discard_hand() or _selected_card_ids.size() != 1
 	_submit_claim_button.visible = show_claim_controls
 	_submit_claim_button.disabled = not can_choose_claim or _selected_claim_card_id.is_empty()
 	_pass_claim_button.visible = show_claim_controls
@@ -1116,7 +1276,16 @@ func _refresh_action_prompt(phase: String, actor_seat_index: int, local_seat_ind
 	elif phase == "claim_reveal":
 		_action_prompt_label.text = "抢牌选择同时揭晓中"
 	elif phase == "award_discard":
-		_action_prompt_label.text = "获得牌的参与者请选择一张原手牌弃置"
+		if _discard_submission_pending and show_discard_controls:
+			_action_prompt_label.text = "弃牌提交中：等待服务器确认"
+		elif show_discard_controls:
+			_action_prompt_label.text = "你获得了 %s：请选择一张原手牌弃置" % _format_card(
+				_current_local_award()
+			)
+		elif not _current_local_award().is_empty():
+			_action_prompt_label.text = "弃牌已完成：等待其他参与者"
+		else:
+			_action_prompt_label.text = "等待获得牌的参与者弃牌"
 	elif phase == "final_commit":
 		_action_prompt_label.text = "最终结算：选择两组不重叠的三张牌"
 	elif phase == "final_reveal":
@@ -1125,6 +1294,23 @@ func _refresh_action_prompt(phase: String, actor_seat_index: int, local_seat_ind
 		_action_prompt_label.text = "对局结束：查看最终排名"
 	else:
 		_action_prompt_label.text = "等待服务器状态"
+
+
+func _current_local_award() -> Dictionary:
+	if _store == null or _local_seat_index < 0:
+		return {}
+	var claim_event := _current_claim_event()
+	var raw_awards: Variant = claim_event.get("awards", [])
+	if not raw_awards is Array:
+		return {}
+	for raw_award: Variant in raw_awards:
+		if (
+			raw_award is Dictionary
+			and int(raw_award.get("seat_index", -1)) == _local_seat_index
+		):
+			var card: Variant = raw_award.get("card", {})
+			return card if card is Dictionary else {}
+	return {}
 
 
 func _on_resized() -> void:

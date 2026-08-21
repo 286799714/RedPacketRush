@@ -87,5 +87,12 @@ func claim_card(card_id: Variant) -> void:
 	})
 
 
+func discard_card(card_id: String, turn_number: int) -> void:
+	room_requests.append({
+		"type": "discard",
+		"payload": {"cardId": card_id, "turnNumber": turn_number},
+	})
+
+
 func leave_game_room() -> void:
 	leave_game_room_requests += 1

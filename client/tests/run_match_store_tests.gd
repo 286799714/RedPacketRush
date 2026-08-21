@@ -17,8 +17,10 @@ func _run() -> void:
 	_test_public_play_state_is_retained_deep_copied_and_cleared()
 	_test_public_claim_progress_is_not_retained()
 	_test_public_claim_event_history_is_retained_deep_copied_and_cleared()
+	_test_public_discard_state_is_retained_deep_copied_and_cleared()
 	_test_play_cards_intention_is_forwarded_without_optimistic_state()
 	_test_claim_intention_is_forwarded_without_optimistic_state()
+	_test_discard_intention_is_forwarded_without_optimistic_state()
 	_test_only_targeted_private_hand_is_retained()
 	_test_only_targeted_private_claim_confirmation_is_retained()
 	_test_room_errors_and_connection_changes_are_exposed()
@@ -208,6 +210,47 @@ func _test_public_claim_event_history_is_retained_deep_copied_and_cleared() -> v
 	_expect_equal(match_store.get_claim_events(), [], "新房间快照清空旧抢牌历史")
 
 
+func _test_public_discard_state_is_retained_deep_copied_and_cleared() -> void:
+	var adapter := FakeRealtimeAdapter.new()
+	var match_store := MatchStore.new(adapter)
+	for method_name in [
+		"get_pending_discard_seat_indexes",
+		"get_sealed_cards",
+		"get_discard_events",
+	]:
+		if not match_store.has_method(method_name):
+			_failures.append("MatchStore 应公开 %s 的只读副本" % method_name)
+			return
+	var discarded_card := _card("original-clubs-2", 2, "clubs", 0)
+	var snapshot := _started_snapshot("room-a", "human-a", 17)
+	snapshot["phase"] = "award_discard"
+	snapshot["pending_discard_seat_indexes"] = [0, 2]
+	snapshot["sealed_cards"] = [discarded_card]
+	snapshot["discard_events"] = [{
+		"turn_number": 2,
+		"seat_index": 2,
+		"card": discarded_card,
+	}]
+	adapter.publish_game_room_state(snapshot)
+
+	var returned_pending: Array[int] = match_store.get_pending_discard_seat_indexes()
+	returned_pending.clear()
+	_expect_equal(match_store.get_pending_discard_seat_indexes(), [0, 2], "待弃牌席位深拷贝")
+	var returned_sealed: Array[Dictionary] = match_store.get_sealed_cards()
+	returned_sealed[0]["rank"] = 14
+	returned_sealed.clear()
+	_expect_equal(match_store.get_sealed_cards(), [discarded_card], "封存牌嵌套深拷贝")
+	var returned_events: Array[Dictionary] = match_store.get_discard_events()
+	returned_events[0]["card"]["rank"] = 14
+	returned_events.clear()
+	_expect_equal(match_store.get_discard_events(), snapshot["discard_events"], "弃牌事件嵌套深拷贝")
+
+	adapter.publish_game_room_state(_started_snapshot("room-b", "human-z", 18))
+	_expect_equal(match_store.get_pending_discard_seat_indexes(), [], "新回合快照清空待弃牌席位")
+	_expect_equal(match_store.get_sealed_cards(), [], "新房间快照清空封存牌")
+	_expect_equal(match_store.get_discard_events(), [], "新房间快照清空弃牌事件")
+
+
 func _test_play_cards_intention_is_forwarded_without_optimistic_state() -> void:
 	var adapter := FakeRealtimeAdapter.new()
 	var match_store := MatchStore.new(adapter)
@@ -262,6 +305,35 @@ func _test_claim_intention_is_forwarded_without_optimistic_state() -> void:
 	], "抢牌与不抢意图转发到 adapter")
 	_expect_equal(match_store.get_played_cards(), snapshot["played_cards"], "发送后等待权威抢牌揭晓")
 	_expect_equal(match_store.phase, "claim_commit", "发送后不乐观推进阶段")
+
+
+func _test_discard_intention_is_forwarded_without_optimistic_state() -> void:
+	var adapter := FakeRealtimeAdapter.new()
+	var match_store := MatchStore.new(adapter)
+	if not match_store.has_method("discard_card"):
+		_failures.append("MatchStore 应公开 discard_card 意图")
+		return
+	var snapshot := _started_snapshot("room-a", "human-a", 17)
+	snapshot["phase"] = "award_discard"
+	snapshot["pending_discard_seat_indexes"] = [0]
+	adapter.publish_game_room_state(snapshot)
+	var hand: Array[Dictionary] = []
+	for rank in range(2, 11):
+		hand.append(_card("local-%d" % rank, rank, "clubs", 0))
+	adapter.publish_match_private_state({
+		"participant_id": "human-a",
+		"hand": hand,
+	})
+
+	match_store.discard_card("local-2", 2)
+
+	_expect_equal(adapter.room_requests, [{
+		"type": "discard",
+		"payload": {"cardId": "local-2", "turnNumber": 2},
+	}], "弃牌意图转发到 adapter")
+	_expect_equal(match_store.get_local_hand(), hand, "发送后等待权威私有手牌")
+	_expect_equal(match_store.get_pending_discard_seat_indexes(), [0], "发送后等待权威待弃席位")
+	_expect_equal(match_store.phase, "award_discard", "发送后不乐观推进阶段")
 
 
 func _test_only_targeted_private_hand_is_retained() -> void:

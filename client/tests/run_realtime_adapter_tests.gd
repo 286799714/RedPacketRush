@@ -17,11 +17,13 @@ func _run() -> void:
 	_test_null_retry_preserves_active_room()
 	_test_play_cards_intention_is_sent_to_active_room()
 	_test_claim_intentions_are_sent_to_active_room()
+	_test_discard_intention_is_sent_to_active_room()
 	_test_match_public_state_is_normalized_without_private_fields()
 	_test_public_play_state_is_normalized_from_whitelisted_fields()
 	_test_public_claim_reveal_is_normalized_from_whitelisted_fields()
 	_test_public_discard_history_is_not_truncated_to_one_turn()
 	_test_claim_event_history_is_normalized_from_whitelisted_fields()
+	_test_public_discard_state_is_normalized_from_whitelisted_fields()
 	_test_only_local_match_private_state_is_normalized()
 	_test_local_claim_confirmation_is_normalized_privately()
 
@@ -179,6 +181,27 @@ func _test_claim_intentions_are_sent_to_active_room() -> void:
 		{"type": "claim", "data": {"cardId": "played-hearts-a"}},
 		{"type": "claim", "data": {"cardId": null}},
 	], "抢牌与不抢意图应保留实体牌标识或 null")
+	adapter.queue_free()
+
+
+func _test_discard_intention_is_sent_to_active_room() -> void:
+	var adapter := _new_adapter()
+	var client := FakeColyseusClient.new()
+	adapter._client = client
+	var room := client.queue_join_room("match-room")
+	adapter.join_game_room("match-room", "甲")
+	room.emit_joined()
+	if not adapter.has_method("discard_card"):
+		_failures.append("Adapter 应公开 discard_card 意图")
+		adapter.queue_free()
+		return
+
+	adapter.discard_card("original-clubs-2", 6)
+
+	_expect_equal(room.sent_messages, [{
+		"type": "discard",
+		"data": {"cardId": "original-clubs-2", "turnNumber": 6},
+	}], "弃牌意图应发送原手牌的物理牌标识")
 	adapter.queue_free()
 
 
@@ -529,6 +552,55 @@ func _test_claim_event_history_is_normalized_from_whitelisted_fields() -> void:
 		],
 		"discarded_cards": [_card("discarded-queen", 12, "hearts", 0)],
 	}], "抢牌结果历史按回合规范化且只保留公开字段")
+	adapter.queue_free()
+
+
+func _test_public_discard_state_is_normalized_from_whitelisted_fields() -> void:
+	var adapter := _new_adapter()
+	var client := FakeColyseusClient.new()
+	adapter._client = client
+	var observed := {"snapshot": {}}
+	adapter.game_room_state_changed.connect(
+		func(snapshot: Dictionary): observed["snapshot"] = snapshot
+	)
+	var room := client.queue_join_room("discard-room")
+	adapter.join_game_room("discard-room", "甲")
+	room.emit_joined()
+	var discarded_two := _raw_card("original-clubs-2", 2, "clubs", 0, "drop-me")
+	var discarded_three := _raw_card("original-spades-3", 3, "spades", 0, "drop-me")
+	room.emit_state({
+		"status": "started",
+		"phase": "award_discard",
+		"pendingDiscardSeatIndexes": [3, 1, 3, 9],
+		"sealedCards": [discarded_two, discarded_three, discarded_two],
+		"discardEvents": [
+			{"turnNumber": 2, "seatIndex": 3, "card": discarded_three, "private": "drop-me"},
+			{"turnNumber": 2, "seatIndex": 1, "card": discarded_two},
+			{"turnNumber": 2, "seatIndex": 1, "card": discarded_two},
+			{"turnNumber": 0, "seatIndex": 0, "card": discarded_two},
+			{"turnNumber": 2, "seatIndex": 8, "card": discarded_two},
+		],
+	})
+
+	var snapshot: Dictionary = observed["snapshot"]
+	_expect_equal(snapshot.get("phase"), "award_discard", "弃牌阶段规范化")
+	_expect_equal(snapshot.get("pending_discard_seat_indexes"), [1, 3], "待弃牌席位规范化并去重")
+	_expect_equal(snapshot.get("sealed_cards"), [
+		_card("original-clubs-2", 2, "clubs", 0),
+		_card("original-spades-3", 3, "spades", 0),
+	], "封存牌按实体标识去重")
+	_expect_equal(snapshot.get("discard_events"), [
+		{
+			"turn_number": 2,
+			"seat_index": 1,
+			"card": _card("original-clubs-2", 2, "clubs", 0),
+		},
+		{
+			"turn_number": 2,
+			"seat_index": 3,
+			"card": _card("original-spades-3", 3, "spades", 0),
+		},
+	], "弃牌事件按回合和席位规范化且只保留公开字段")
 	adapter.queue_free()
 
 

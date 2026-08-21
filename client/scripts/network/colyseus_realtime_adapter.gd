@@ -136,6 +136,13 @@ func claim_card(card_id: Variant) -> void:
 	_send_game_room_message("claim", {"cardId": card_id})
 
 
+func discard_card(card_id: String, turn_number: int) -> void:
+	_send_game_room_message("discard", {
+		"cardId": card_id,
+		"turnNumber": turn_number,
+	})
+
+
 func _exit_tree() -> void:
 	disconnect_game_room()
 	disconnect_lobby(false)
@@ -497,7 +504,12 @@ func _normalize_game_room_state(raw_state: Variant, room: Variant) -> Dictionary
 		"revealed_claims": _normalize_revealed_claims(raw_state.get("revealedClaims", [])),
 		"claim_awards": _normalize_claim_awards(raw_state.get("claimAwards", [])),
 		"discarded_cards": _normalize_public_cards(raw_state.get("discardedCards", []), MAX_DECK_CARD_COUNT),
+		"sealed_cards": _normalize_public_cards(raw_state.get("sealedCards", []), MAX_DECK_CARD_COUNT),
+		"pending_discard_seat_indexes": _normalize_seat_indexes(
+			raw_state.get("pendingDiscardSeatIndexes", [])
+		),
 		"claim_events": _normalize_claim_events(raw_state.get("claimEvents", [])),
+		"discard_events": _normalize_discard_events(raw_state.get("discardEvents", [])),
 		"seats": seats,
 		"contest_rounds": _normalize_contest_rounds(raw_state.get("contestRounds", [])),
 	}
@@ -595,6 +607,19 @@ func _normalize_public_cards(raw_cards: Variant, limit: int) -> Array[Dictionary
 		if cards.size() >= limit:
 			break
 	return cards
+
+
+func _normalize_seat_indexes(raw_seat_indexes: Variant) -> Array[int]:
+	var seat_indexes: Array[int] = []
+	if not raw_seat_indexes is Array:
+		return seat_indexes
+	for raw_seat_index: Variant in raw_seat_indexes:
+		var seat_index := int(raw_seat_index)
+		if seat_index < 0 or seat_index >= ROOM_SEAT_COUNT or seat_indexes.has(seat_index):
+			continue
+		seat_indexes.append(seat_index)
+	seat_indexes.sort()
+	return seat_indexes
 
 
 func _normalize_combination_category(raw_category: Variant) -> String:
@@ -719,6 +744,44 @@ func _normalize_claim_events(raw_events: Variant) -> Array[Dictionary]:
 	for turn_number: Variant in turn_numbers:
 		result.append(events_by_turn[turn_number])
 	return result
+
+
+func _normalize_discard_events(raw_events: Variant) -> Array[Dictionary]:
+	var events_by_turn_and_seat: Dictionary = {}
+	if not raw_events is Array:
+		return []
+	for raw_event: Variant in raw_events:
+		raw_event = _dictionary_from_schema(raw_event)
+		if not raw_event is Dictionary:
+			continue
+		var turn_number := int(raw_event.get("turnNumber", 0))
+		var seat_index := int(raw_event.get("seatIndex", -1))
+		var card := _normalize_card(raw_event.get("card", {}))
+		if (
+			turn_number <= 0
+			or seat_index < 0
+			or seat_index >= ROOM_SEAT_COUNT
+			or card.is_empty()
+		):
+			continue
+		events_by_turn_and_seat["%d:%d" % [turn_number, seat_index]] = {
+			"turn_number": turn_number,
+			"seat_index": seat_index,
+			"card": card,
+		}
+	var result: Array[Dictionary] = []
+	for event: Variant in events_by_turn_and_seat.values():
+		result.append(event)
+	result.sort_custom(_discard_event_before)
+	return result
+
+
+func _discard_event_before(left: Dictionary, right: Dictionary) -> bool:
+	var left_turn := int(left.get("turn_number", 0))
+	var right_turn := int(right.get("turn_number", 0))
+	if left_turn == right_turn:
+		return int(left.get("seat_index", -1)) < int(right.get("seat_index", -1))
+	return left_turn < right_turn
 
 
 func _normalize_match_private_state(raw_state: Variant, room: Variant) -> Dictionary:
