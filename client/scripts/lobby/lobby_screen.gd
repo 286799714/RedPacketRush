@@ -37,6 +37,7 @@ var _room_tree: Tree
 var _empty_label: Label
 var _selection_label: Label
 var _join_button: Button
+var _rooms_state := "disconnected"
 
 
 func set_realtime_adapter(adapter: Object) -> void:
@@ -376,6 +377,7 @@ func _on_room_activated() -> void:
 
 
 func _on_connection_changed(state: String, status_text: String) -> void:
+	_rooms_state = state
 	var status_color := COLOR_MUTED
 	match state:
 		"connecting":
@@ -391,6 +393,7 @@ func _on_connection_changed(state: String, status_text: String) -> void:
 	_connect_button.disabled = state == "connecting"
 	if state == "retryable_error":
 		_show_feedback(status_text, true)
+	_refresh_rooms_surface()
 	_refresh_action_controls()
 
 
@@ -413,11 +416,33 @@ func _on_rooms_changed(rooms: Array[Dictionary]) -> void:
 			_selected_room_id = room_id
 
 	_room_count_label.text = "%d 个房间" % rooms.size()
-	_room_tree.visible = not rooms.is_empty()
-	_empty_label.visible = rooms.is_empty()
+	_refresh_rooms_surface()
 	if _selected_room_id.is_empty():
 		_selection_label.text = "请选择一个房间"
 	_refresh_action_controls()
+
+
+func _refresh_rooms_surface() -> void:
+	if _room_tree == null or _empty_label == null:
+		return
+	var has_rooms := _room_tree.get_root() != null and _room_tree.get_root().get_first_child() != null
+	match _rooms_state:
+		"connecting":
+			_empty_label.text = "正在加载房间列表"
+			_room_tree.visible = false
+			_empty_label.visible = true
+		"retryable_error":
+			_empty_label.text = "房间列表加载失败，请重试"
+			_room_tree.visible = false
+			_empty_label.visible = true
+		"connected":
+			_empty_label.text = "当前没有可加入的房间"
+			_room_tree.visible = has_rooms
+			_empty_label.visible = not has_rooms
+		_:
+			_empty_label.text = "连接大厅后查看房间"
+			_room_tree.visible = false
+			_empty_label.visible = true
 
 
 func _on_game_room_joined(room_id: String) -> void:

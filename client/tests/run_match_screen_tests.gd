@@ -253,6 +253,7 @@ func _run() -> void:
 	await _test_private_claim_confirmation_shows_waiting_state(screen, store)
 	await _test_pass_submits_null_and_enters_pending(screen, store)
 	await _test_claim_reveal_shows_simultaneous_outcomes_and_public_history(screen, store)
+	await _test_reveal_motion_honors_reduced_motion(screen, store)
 	await _test_collision_outcome_moves_once_without_resizing(screen, store)
 	await _test_new_room_replays_collision_motion(screen, store)
 	await _test_public_history_is_chronological(screen, store)
@@ -705,6 +706,46 @@ func _test_claim_reveal_shows_simultaneous_outcomes_and_public_history(
 	_expect(history_text.contains("不抢 +1 分"), "历史记录 Pass 得分")
 	_expect(history_text.contains("弃置"), "历史记录公共弃牌")
 	_expect(history_text.contains("第 2 回合 · 抢牌揭晓"), "历史追加当前抢牌结果")
+
+
+func _test_reveal_motion_honors_reduced_motion(
+	screen: MatchScreen,
+	store: FakeMatchStore
+) -> void:
+	if not screen.has_method("set_reduced_motion"):
+		_failures.append("MatchScreen 应提供 reduced-motion 偏好注入")
+		return
+	screen.set_reduced_motion(false)
+	store.apply_public_snapshot({
+		"room_id": "motion-room",
+		"phase": "claim_reveal",
+		"turn_number": 40,
+		"claim_events": [_collision_claim_event(40)],
+	})
+	await process_frame
+	await process_frame
+	var animated_alpha := screen._played_panel.modulate.a
+	_expect(animated_alpha < 1.0, "抢牌揭晓首次出现播放统一 reveal 动效")
+	await create_timer(0.28).timeout
+	_expect(is_equal_approx(screen._played_panel.modulate.a, 1.0), "reveal 动效结束后恢复不透明")
+	store.apply_public_snapshot({})
+	await process_frame
+	await process_frame
+	_expect(is_equal_approx(screen._played_panel.modulate.a, 1.0), "同回合公开刷新不重播 reveal 动效")
+
+	screen.set_reduced_motion(true)
+	store.apply_public_snapshot({
+		"room_id": "motion-room",
+		"phase": "claim_reveal",
+		"turn_number": 41,
+		"claim_events": [_collision_claim_event(41)],
+	})
+	await process_frame
+	await process_frame
+	_expect(is_equal_approx(screen._played_panel.modulate.a, 1.0), "reduced-motion 下跳过 reveal 动效")
+	var reduced_collision := _find_last_visible_label_containing(screen, "机器人丙 · 抢 Q")
+	_expect(reduced_collision != null and is_equal_approx(reduced_collision.scale.x, 1.0), "reduced-motion 下跳过撞车动效")
+	screen.set_reduced_motion(false)
 
 
 func _test_collision_outcome_moves_once_without_resizing(
@@ -1358,6 +1399,11 @@ func _test_final_reveal_and_finished_ranking_are_authoritative(
 		var fourth_rect := fourth_group.get_global_rect()
 		var reveal_rect := reveal_panel.get_global_rect()
 		_expect(reveal_rect.encloses(fourth_rect), "第四席结算行完整位于中央结算面")
+	screen.size = Vector2(1280, 720)
+	await process_frame
+	await process_frame
+	_expect_equal(screen._seat_role_labels[2].text, "共同胜者", "宽屏终局席位优先显示完整共同胜者角色")
+	_expect(screen._seat_role_labels[2].get_global_rect().size.x >= 70.0, "共同胜者角色保留可读宽度")
 
 	store.apply_public_snapshot({"phase": "finished"})
 	await process_frame

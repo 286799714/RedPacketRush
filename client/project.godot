@@ -14,6 +14,7 @@ config/name="扑克抢红包"
 run/main_scene="res://scenes/app/app_shell.tscn"
 config/features=PackedStringArray("4.7", "Mobile")
 config/icon="res://icon.svg"
+accessibility/reduced_motion=false
 
 [display]
 

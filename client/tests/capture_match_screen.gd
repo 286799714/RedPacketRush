@@ -1,6 +1,11 @@
 extends SceneTree
 
 const MatchScreen = preload("res://scripts/match/match_screen.gd")
+const LobbyScreen = preload("res://scripts/lobby/lobby_screen.gd")
+const RoomScreen = preload("res://scripts/room/room_screen.gd")
+const LobbyStore = preload("res://scripts/lobby/lobby_store.gd")
+const RoomStore = preload("res://scripts/room/room_store.gd")
+const FakeRealtimeAdapter = preload("res://tests/fakes/fake_realtime_adapter.gd")
 
 
 class VisualMatchStore extends RefCounted:
@@ -30,6 +35,8 @@ class VisualMatchStore extends RefCounted:
 	var played_cards: Array[Dictionary] = []
 	var play_events: Array[Dictionary] = []
 	var claim_events: Array[Dictionary] = []
+	var discard_events: Array[Dictionary] = []
+	var pending_discard_seat_indexes: Array[int] = []
 	var final_results: Array[Dictionary] = []
 	var winner_seat_indexes: Array[int] = []
 	var final_events: Array[Dictionary] = []
@@ -61,10 +68,10 @@ class VisualMatchStore extends RefCounted:
 		return final_events
 
 	func get_discard_events() -> Array[Dictionary]:
-		return []
+		return discard_events
 
 	func get_pending_discard_seat_indexes() -> Array[int]:
-		return []
+		return pending_discard_seat_indexes
 
 	func get_local_hand() -> Array[Dictionary]:
 		return local_hand
@@ -99,28 +106,170 @@ func _run() -> void:
 		push_error("could not create screenshot directory: %s" % error_string(error))
 		quit(1)
 		return
+	if not await _capture_lobby_room_states(output_directory):
+		quit(1)
+		return
 
 	for viewport_size in [Vector2i(960, 540), Vector2i(1280, 720)]:
-		if not await _capture_state("actor_play", viewport_size, output_directory):
+		if not await _capture_state("actor_play", viewport_size, output_directory, "actor-play-two-deck"):
 			quit(1)
 			return
-		for visual_state in ["disconnected_human", "bot_takeover", "reconnecting"]:
-			if not await _capture_state("actor_play", viewport_size, output_directory, visual_state):
-				quit(1)
-				return
-		if not await _capture_state("claim_commit", viewport_size, output_directory):
+		if not await _capture_state("claim_commit", viewport_size, output_directory, "claim-commit-selected"):
 			quit(1)
 			return
-		if not await _capture_state("claim_reveal", viewport_size, output_directory):
+		if not await _capture_state("claim_reveal", viewport_size, output_directory, "claim-reveal-collision"):
 			quit(1)
 			return
-		for final_phase in ["final_commit", "final_reveal", "finished"]:
-			if not await _capture_state(final_phase, viewport_size, output_directory):
+		for spec in [
+			{"phase": "award_discard", "label": "award-discard-protected"},
+			{"phase": "actor_play", "label": "match-reconnecting"},
+			{"phase": "actor_play", "label": "match-validation-error"},
+			{"phase": "final_commit", "label": "final-commit"},
+			{"phase": "final_reveal", "label": "final-reveal"},
+			{"phase": "finished", "label": "finished"},
+		]:
+			if not await _capture_state(spec["phase"], viewport_size, output_directory, spec["label"]):
 				quit(1)
 				return
 
 	print("PASS: captured nonblank match screen states in %s" % output_directory)
 	quit(0)
+
+
+func _capture_lobby_room_states(output_directory: String) -> bool:
+	var lobby_labels := [
+		"lobby-loading-empty",
+		"lobby-empty",
+		"lobby-validation-error",
+		"lobby-retry",
+		"lobby-populated-selected",
+	]
+	for viewport_size in [Vector2i(960, 540), Vector2i(1280, 720)]:
+		for label in lobby_labels:
+			if not await _capture_lobby_state(label, viewport_size, output_directory):
+				return false
+		if not await _capture_room_state("room-full-host", viewport_size, output_directory):
+			return false
+	return true
+
+
+func _capture_lobby_state(
+	label: String,
+	viewport_size: Vector2i,
+	output_directory: String
+) -> bool:
+	var viewport := SubViewport.new()
+	viewport.size = viewport_size
+	viewport.render_target_update_mode = SubViewport.UPDATE_ALWAYS
+	root.add_child(viewport)
+	var adapter := FakeRealtimeAdapter.new()
+	var screen := LobbyScreen.new()
+	screen.set_realtime_adapter(adapter)
+	screen.set_anchors_and_offsets_preset(Control.PRESET_TOP_LEFT)
+	screen.size = Vector2(viewport_size)
+	viewport.add_child(screen)
+	await process_frame
+	await process_frame
+	match label:
+		"lobby-loading-empty":
+			adapter.publish_connection_state("connecting")
+		"lobby-empty":
+			adapter.publish_connection_state("connected")
+			adapter.publish_rooms([])
+		"lobby-validation-error":
+			adapter.publish_connection_state("connected")
+			screen._nickname_input.text = "甲"
+			screen._endpoint_input.text = "http://invalid"
+			screen._connect_button.pressed.emit()
+		"lobby-retry":
+			adapter.publish_connection_state("retryable_error", "服务器暂时不可用")
+		"lobby-populated-selected":
+			adapter.publish_connection_state("connected")
+			screen._nickname_input.text = "甲"
+			adapter.publish_rooms([
+				{"room_id": "room-a", "name": "午休局", "participant_count": 3, "seat_capacity": 4, "deck_mode": "one", "action_deadline_seconds": 30},
+				{"room_id": "room-b", "name": "双牌局", "participant_count": 1, "seat_capacity": 4, "deck_mode": "two", "action_deadline_seconds": 60},
+			])
+			await process_frame
+			var root_item := screen._room_tree.get_root()
+			var first_item := root_item.get_first_child() if root_item != null else null
+			if first_item != null:
+				screen._room_tree.set_selected(first_item, 0)
+				screen._on_room_selected()
+	await process_frame
+	await process_frame
+	return await _save_capture(viewport, output_directory, label, viewport_size)
+
+
+func _capture_room_state(
+	label: String,
+	viewport_size: Vector2i,
+	output_directory: String
+) -> bool:
+	var viewport := SubViewport.new()
+	viewport.size = viewport_size
+	viewport.render_target_update_mode = SubViewport.UPDATE_ALWAYS
+	root.add_child(viewport)
+	var adapter := FakeRealtimeAdapter.new()
+	var store := RoomStore.new(adapter)
+	var screen := RoomScreen.new()
+	screen.set_room_store(store)
+	screen.set_anchors_and_offsets_preset(Control.PRESET_TOP_LEFT)
+	screen.size = Vector2(viewport_size)
+	viewport.add_child(screen)
+	await process_frame
+	adapter.publish_game_room_state({
+		"room_id": "room-full",
+		"local_participant_id": "human-a",
+		"status": "waiting",
+		"display_name": "双副牌 · 满员等待",
+		"deck_mode": "two",
+		"action_deadline_seconds": 30,
+		"host_participant_id": "human-a",
+		"seats": [
+			_seat(0, "human-a", "甲", false, 0, 8),
+			_seat(1, "human-b", "乙", false, 0, 8),
+			_seat(2, "bot-c", "机器人丙", true, 0, 8),
+			_seat(3, "bot-d", "机器人丁", true, 0, 8),
+		],
+	})
+	await process_frame
+	await process_frame
+	return await _save_capture(viewport, output_directory, label, viewport_size)
+
+
+func _save_capture(
+	viewport: SubViewport,
+	output_directory: String,
+	label: String,
+	viewport_size: Vector2i
+) -> bool:
+	for frame in range(2):
+		await process_frame
+	var texture: Texture2D = viewport.get_texture()
+	if texture == null:
+		push_error("capture has no viewport texture: %s" % label)
+		viewport.queue_free()
+		await process_frame
+		return false
+	var image: Image = texture.get_image()
+	if image == null:
+		push_error("capture texture has no image: %s" % label)
+		viewport.queue_free()
+		await process_frame
+		return false
+	var output_path := output_directory.path_join("%s-%dx%d.png" % [label, viewport_size.x, viewport_size.y])
+	var save_error := image.save_png(output_path)
+	var nonblank := _has_pixel_variation(image)
+	viewport.queue_free()
+	await process_frame
+	if save_error != OK:
+		push_error("could not save %s: %s" % [output_path, error_string(save_error)])
+		return false
+	if not nonblank:
+		push_error("captured image is blank: %s" % output_path)
+		return false
+	return true
 
 
 func _capture_state(
@@ -142,6 +291,9 @@ func _capture_state(
 	viewport.add_child(screen)
 	await process_frame
 	await process_frame
+	if visual_state == "match-validation-error":
+		screen._on_action_failed("invalid_play", "出牌失败：请选择三张不同的手牌")
+		await process_frame
 
 	if phase == "actor_play":
 		for index in range(3):
@@ -164,6 +316,8 @@ func _capture_state(
 		await process_frame
 	elif phase == "claim_reveal":
 		await create_timer(0.25).timeout
+	elif phase == "award_discard":
+		await process_frame
 	elif phase == "final_commit":
 		for rank in [2, 3, 4]:
 			var card_button := _find_button_with_content(screen, "%d♣" % rank)
@@ -311,6 +465,38 @@ func _make_store(phase: String, visual_state: String = "") -> VisualMatchStore:
 			"winner_seat_indexes": store.winner_seat_indexes,
 		}]
 	match visual_state:
+		"actor-play-two-deck":
+			store.deck_mode = "two"
+		"match-reconnecting":
+			store.connection_state = "reconnecting"
+		"match-validation-error":
+			store.connection_state = "connected"
+		"award-discard-protected":
+			var awarded_card := _card("award-hearts-a-copy-1", 14, "hearts", 1)
+			store.local_hand = [
+				_card("original-clubs-2", 2, "clubs", 0),
+				_card("original-spades-3", 3, "spades", 0),
+				awarded_card,
+				_card("original-diamonds-4", 4, "diamonds", 0),
+				_card("original-hearts-5", 5, "hearts", 0),
+				_card("original-clubs-6", 6, "clubs", 0),
+				_card("original-spades-7", 7, "spades", 0),
+				_card("original-diamonds-8", 8, "diamonds", 0),
+				_card("original-hearts-9", 9, "hearts", 0),
+			]
+			store.deck_mode = "two"
+			store.turn_number = 6
+			store.pending_discard_seat_indexes = [0]
+			store.claim_events = [{
+				"turn_number": 6,
+				"claims": [
+					{"seat_index": 0, "card_id": awarded_card["id"]},
+					{"seat_index": 2, "card_id": null},
+					{"seat_index": 3, "card_id": null},
+				],
+				"awards": [{"seat_index": 0, "card": awarded_card, "source": "unique"}],
+				"discarded_cards": [],
+			}]
 		"disconnected_human":
 			var disconnected_seat := store.participants[1].duplicate(true)
 			disconnected_seat["is_connected"] = false
@@ -329,7 +515,7 @@ func _read_output_directory() -> String:
 	for argument in OS.get_cmdline_user_args():
 		if argument.begins_with("--output-dir="):
 			return argument.trim_prefix("--output-dir=")
-	return ProjectSettings.globalize_path("res://.godot/visual-qa/ticket08")
+	return ProjectSettings.globalize_path("res://../.scratch/ticket09-visuals/match")
 
 
 func _has_pixel_variation(image: Image) -> bool:

@@ -82,6 +82,9 @@ var _final_group_mode := ButtonGroup.new()
 var _active_final_group := 0
 var _final_group_ids: Array = [[], []]
 var _animated_collision_turns: Dictionary = {}
+var _animated_reveal_keys: Dictionary = {}
+var _reduced_motion := false
+var _reveal_tween: Tween
 var _match_identity := ""
 var _last_phase := ""
 var _last_action_id := -1
@@ -107,8 +110,17 @@ func set_time_source(source: Callable) -> void:
 	_refresh_connection_label()
 
 
+func set_reduced_motion(enabled: bool) -> void:
+	_reduced_motion = enabled
+	if enabled:
+		_stop_reveal_motion()
+	elif is_inside_tree():
+		_refresh()
+
+
 func _ready() -> void:
 	_build_ui()
+	_reduced_motion = bool(ProjectSettings.get_setting("application/accessibility/reduced_motion", false))
 	_store = _store_override
 	_bind_store()
 	_refresh()
@@ -572,6 +584,8 @@ func _refresh() -> void:
 		_final_submission_pending = false
 		_selected_claim_card_id = ""
 		_animated_collision_turns.clear()
+		_animated_reveal_keys.clear()
+		_stop_reveal_motion()
 		_match_identity = ""
 		_last_phase = ""
 		_last_action_id = -1
@@ -608,6 +622,8 @@ func _refresh() -> void:
 	var match_identity := "%s|%s" % [str(_store.room_id), str(_store.local_participant_id)]
 	if match_identity != _match_identity:
 		_animated_collision_turns.clear()
+		_animated_reveal_keys.clear()
+		_stop_reveal_motion()
 		_reset_final_editor()
 		_last_phase = ""
 		_last_action_id = -1
@@ -735,18 +751,23 @@ func _refresh_seats(local_seat_index: int, actor_seat_index: int) -> void:
 		var is_actor := seat_index == actor_seat_index
 		var is_winner := winner_seat_indexes.has(seat_index)
 		var role_parts: Array[String] = []
-		if is_local:
-			role_parts.append("本地")
-		if is_actor:
-			role_parts.append("行动中")
 		var is_bot := bool(participant.get("is_bot", false))
 		var is_connected := bool(participant.get("is_connected", true))
-		if is_bot and occupied:
-			role_parts.append("机器人")
-		elif occupied and not is_connected:
-			role_parts.append("断线")
-		if is_winner:
+		var is_terminal_phase := _store != null and str(_store.get("phase")) in ["final_reveal", "finished"]
+		if is_winner and is_terminal_phase:
+			# The settlement role is the primary signal; keep it whole in compact seat headers.
 			role_parts.append("共同胜者" if winner_seat_indexes.size() > 1 else "胜者")
+		else:
+			if is_local:
+				role_parts.append("本地")
+			if is_actor:
+				role_parts.append("行动中")
+			if is_bot and occupied:
+				role_parts.append("机器人")
+			elif occupied and not is_connected:
+				role_parts.append("断线")
+			if is_winner:
+				role_parts.append("共同胜者" if winner_seat_indexes.size() > 1 else "胜者")
 		_seat_position_labels[seat_index].text = _seat_position_text(seat_index, local_seat_index)
 		_seat_name_labels[seat_index].text = str(participant.get("nickname", "等待参与者")) if occupied else "等待参与者"
 		_seat_detail_labels[seat_index].text = (
@@ -1149,6 +1170,7 @@ func _refresh_final_settlement(phase: String, final_results: Array[Dictionary]) 
 				group_label.text_overrun_behavior = TextServer.OVERRUN_TRIM_ELLIPSIS
 				group_label.tooltip_text = group_text
 				row.add_child(group_label)
+	_play_reveal_motion("final|%s|%d" % [phase, int(_store.get("action_id"))])
 
 
 func _final_group_summary(group_index: int, group: Dictionary) -> String:
@@ -1238,11 +1260,15 @@ func _refresh_claim_reveal(claim_event: Dictionary) -> void:
 			_claim_reveal_list.add_child(outcome)
 			var award: Dictionary = awards_by_seat.get(seat_index, {})
 			if animate_collisions and str(award.get("source", "")) == "collision":
-				outcome.scale = Vector2(0.96, 1.0)
-				call_deferred("_animate_collision_outcome", outcome)
+				if _reduced_motion:
+					outcome.scale = Vector2.ONE
+				else:
+					outcome.scale = Vector2(0.96, 1.0)
+					call_deferred("_animate_collision_outcome", outcome)
 				collision_animated = true
 	if collision_animated:
 		_animated_collision_turns[turn_number] = true
+	_play_reveal_motion("claim|%d" % turn_number)
 	_claim_discard_label.text = (
 		"%d/%d 已揭晓" % [claim_count, 3]
 		if _discarded_cards_text(claim_event.get("discarded_cards", [])).is_empty()
@@ -1251,12 +1277,42 @@ func _refresh_claim_reveal(claim_event: Dictionary) -> void:
 
 
 func _animate_collision_outcome(outcome: Label) -> void:
-	if not is_instance_valid(outcome):
+	if _reduced_motion or not is_instance_valid(outcome):
+		if is_instance_valid(outcome):
+			outcome.scale = Vector2.ONE
 		return
 	var tween := create_tween()
 	tween.set_trans(Tween.TRANS_QUAD)
 	tween.set_ease(Tween.EASE_OUT)
 	tween.tween_property(outcome, "scale", Vector2.ONE, 0.18)
+
+
+func _play_reveal_motion(key: String) -> void:
+	if _played_panel == null:
+		return
+	if _reduced_motion or _animated_reveal_keys.has(key):
+		_played_panel.modulate = Color.WHITE
+		return
+	_animated_reveal_keys[key] = true
+	if _reveal_tween != null and _reveal_tween.is_valid():
+		_reveal_tween.kill()
+	_played_panel.modulate = Color(1.0, 1.0, 1.0, 0.72)
+	_reveal_tween = create_tween()
+	_reveal_tween.set_trans(Tween.TRANS_QUAD)
+	_reveal_tween.set_ease(Tween.EASE_OUT)
+	_reveal_tween.tween_property(_played_panel, "modulate", Color.WHITE, 0.22)
+
+
+func _stop_reveal_motion() -> void:
+	if _reveal_tween != null and _reveal_tween.is_valid():
+		_reveal_tween.kill()
+	_reveal_tween = null
+	if _played_panel != null:
+		_played_panel.modulate = Color.WHITE
+	if _claim_reveal_list != null:
+		for child in _claim_reveal_list.get_children():
+			if child is Control:
+				(child as Control).scale = Vector2.ONE
 
 
 func _claim_event_cards_by_id(claim_event: Dictionary) -> Dictionary:

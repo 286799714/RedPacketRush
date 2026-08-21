@@ -70,6 +70,7 @@ func _build_ui() -> void:
 	page_column.add_child(_build_header())
 
 	var workspace := HBoxContainer.new()
+	workspace.name = "RoomWorkspace"
 	workspace.size_flags_vertical = Control.SIZE_EXPAND_FILL
 	workspace.add_theme_constant_override("separation", 12)
 	page_column.add_child(workspace)
@@ -177,6 +178,7 @@ func _build_seat_panel(seat_index: int) -> Control:
 
 func _build_controls_panel() -> Control:
 	var panel := PanelContainer.new()
+	panel.name = "RoomControlsPanel"
 	panel.custom_minimum_size.x = 310
 	panel.add_theme_stylebox_override("panel", _style_box(COLOR_SURFACE, COLOR_BORDER, 1, 5))
 	var margin := MarginContainer.new()
