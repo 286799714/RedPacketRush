@@ -4,6 +4,7 @@ import { Client, Room } from "colyseus";
 import { DECK_MODES, type DeckMode } from "../match/cards.js";
 import {
   ACTION_DEADLINES,
+  MatchCommandError,
   MatchEngine,
   type ActionDeadlineSeconds,
   type PublicMatchState,
@@ -11,7 +12,9 @@ import {
 import { SeededRandomSource } from "../match/random.js";
 import {
   GameRoomState,
+  PlayEventState,
   PointContestRoundState,
+  PublicCardState,
 } from "./schema/GameRoomState.js";
 
 export { ACTION_DEADLINES, DECK_MODES };
@@ -47,10 +50,12 @@ const ROOM_ERRORS = {
   fillBotsPhase: { code: "invalid_phase", message: "房间当前不能添加机器人" },
   hostOnly: { code: "host_only", message: "只有房主可以执行此操作" },
   invalidCommandPayload: { code: "invalid_payload", message: "该命令不接受参数" },
+  invalidPlayPayload: { code: "invalid_payload", message: "出牌参数必须是牌标识数组" },
   invalidReady: { code: "invalid_ready", message: "准备状态必须是布尔值" },
   invalidSettings: { code: "invalid_settings", message: "房间设置无效" },
   noSeat: { code: "not_participant", message: "当前连接没有占用座位" },
   notReady: { code: "not_ready", message: "需要四个已准备座位才能开始" },
+  playPhase: { code: "invalid_phase", message: "当前阶段不能出牌" },
   readyPhase: { code: "invalid_phase", message: "房间当前不能修改准备状态" },
   startFailed: { code: "start_failed", message: "对局启动失败，请重试" },
   startInProgress: { code: "start_in_progress", message: "对局正在启动" },
@@ -166,6 +171,9 @@ export class GameRoom extends Room<{
     });
     this.onMessage("start", async (client, message: unknown) => {
       await this.startMatch(client, message);
+    });
+    this.onMessage("play_cards", (client, message: unknown) => {
+      this.playCards(client, message);
     });
   }
 
@@ -391,11 +399,49 @@ export class GameRoom extends Room<{
     this.sendPrivateMatchStates();
   }
 
+  private playCards(client: Client, message: unknown): void {
+    if (!this.matchEngine) {
+      this.sendRoomError(client, ROOM_ERRORS.playPhase);
+      return;
+    }
+    if (
+      !isRecordLike(message)
+      || !Array.isArray(message.cardIds)
+      || !message.cardIds.every((cardId) => typeof cardId === "string")
+    ) {
+      this.sendRoomError(client, ROOM_ERRORS.invalidPlayPayload);
+      return;
+    }
+    const seatIndex = client.userData?.seatIndex;
+    if (typeof seatIndex !== "number") {
+      throw new Error("cannot play cards without an occupied seat");
+    }
+
+    try {
+      this.matchEngine.playCards(seatIndex, message.cardIds);
+    } catch (error) {
+      if (error instanceof MatchCommandError) {
+        this.sendRoomError(client, { code: error.code, message: error.message });
+        return;
+      }
+      throw error;
+    }
+    this.applyPublicMatchState(this.matchEngine.view(seatIndex).publicState);
+    this.sendPrivateMatchState(client);
+  }
+
   private applyPublicMatchState(publicState: PublicMatchState): void {
     this.state.phase = publicState.phase;
     this.state.actorSeatIndex = publicState.actorSeatIndex;
     this.state.firstActorSeatIndex = publicState.firstActorSeatIndex;
     this.state.drawPileCount = publicState.drawPileCount;
+    this.state.turnNumber = publicState.turnNumber;
+    this.state.playedCards.clear();
+    for (const card of publicState.playedCards) {
+      this.state.playedCards.push(new PublicCardState(card));
+    }
+    this.state.playedCategory = publicState.playedCategory ?? "";
+    this.state.playedScore = publicState.playedScore;
     for (const participant of publicState.participants) {
       const seat = this.state.seats[participant.seatIndex];
       if (!seat || seat.participantId !== participant.participantId) {
@@ -405,8 +451,13 @@ export class GameRoom extends Room<{
       seat.handCount = participant.handCount;
     }
     this.state.contestRounds.clear();
+    this.state.playEvents.clear();
     for (const event of publicState.events) {
-      this.state.contestRounds.push(new PointContestRoundState(event));
+      if (event.type === "point_contest_round") {
+        this.state.contestRounds.push(new PointContestRoundState(event));
+      } else {
+        this.state.playEvents.push(new PlayEventState(event));
+      }
     }
   }
 
@@ -419,12 +470,23 @@ export class GameRoom extends Room<{
       if (typeof seatIndex !== "number") {
         continue;
       }
-      const privateState = this.matchEngine.view(seatIndex).privateState;
-      if (privateState.participantId !== participantClient.sessionId) {
-        throw new Error("private match state does not belong to its recipient");
-      }
-      participantClient.send("match_private_state", privateState);
+      this.sendPrivateMatchState(participantClient);
     }
+  }
+
+  private sendPrivateMatchState(participantClient: Client): void {
+    if (!this.matchEngine) {
+      throw new Error("cannot send private state before the match starts");
+    }
+    const seatIndex = participantClient.userData?.seatIndex;
+    if (typeof seatIndex !== "number") {
+      return;
+    }
+    const privateState = this.matchEngine.view(seatIndex).privateState;
+    if (privateState.participantId !== participantClient.sessionId) {
+      throw new Error("private match state does not belong to its recipient");
+    }
+    participantClient.send("match_private_state", privateState);
   }
 
   private authorizeWaitingHost(client: Client, phaseError: RoomError): boolean {

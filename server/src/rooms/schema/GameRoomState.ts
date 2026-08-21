@@ -1,7 +1,11 @@
 import { ArraySchema, Schema, type } from "@colyseus/schema";
 
 import type { DeckMode, PhysicalCard } from "../../match/cards.js";
-import type { ActionDeadlineSeconds, PointContestRoundEvent } from "../../match/MatchEngine.js";
+import type {
+  ActionDeadlineSeconds,
+  CardsPlayedEvent,
+  PointContestRoundEvent,
+} from "../../match/MatchEngine.js";
 import type { GameRoomMetadata, GameRoomStatus } from "../GameRoom.js";
 
 export const ROOM_SEAT_COUNT = 4;
@@ -70,6 +74,37 @@ export class PointContestRoundState extends Schema {
     }
     this.tiedSeatIndexes.push(...event.tiedSeats);
     this.winnerSeatIndex = event.winnerSeatIndex ?? -1;
+  }
+}
+
+export class PlayEventState extends Schema {
+  @type("uint16")
+  public turnNumber = 0;
+
+  @type("uint8")
+  public actorSeatIndex = 0;
+
+  @type([PublicCardState])
+  public cards = new ArraySchema<PublicCardState>();
+
+  @type("string")
+  public category = "";
+
+  @type("uint8")
+  public score = 0;
+
+  public constructor(event?: CardsPlayedEvent) {
+    super();
+    if (!event) {
+      return;
+    }
+    this.turnNumber = event.turnNumber;
+    this.actorSeatIndex = event.actorSeatIndex;
+    for (const card of event.cards) {
+      this.cards.push(new PublicCardState(card));
+    }
+    this.category = event.category;
+    this.score = event.score;
   }
 }
 
@@ -147,11 +182,26 @@ export class GameRoomState extends Schema {
   @type("uint8")
   public drawPileCount = 0;
 
+  @type("uint16")
+  public turnNumber = 0;
+
+  @type([PublicCardState])
+  public playedCards = new ArraySchema<PublicCardState>();
+
+  @type("string")
+  public playedCategory = "";
+
+  @type("uint8")
+  public playedScore = 0;
+
   @type([ParticipantSeat])
   public seats = new ArraySchema<ParticipantSeat>();
 
   @type([PointContestRoundState])
   public contestRounds = new ArraySchema<PointContestRoundState>();
+
+  @type([PlayEventState])
+  public playEvents = new ArraySchema<PlayEventState>();
 
   public constructor(metadata?: GameRoomMetadata) {
     super();

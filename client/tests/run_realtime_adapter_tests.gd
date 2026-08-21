@@ -15,7 +15,9 @@ func _run() -> void:
 	_test_failed_retry_preserves_active_room()
 	_test_new_attempt_detaches_old_pending_room()
 	_test_null_retry_preserves_active_room()
+	_test_play_cards_intention_is_sent_to_active_room()
 	_test_match_public_state_is_normalized_without_private_fields()
+	_test_public_play_state_is_normalized_from_whitelisted_fields()
 	_test_only_local_match_private_state_is_normalized()
 
 	if _failures.is_empty():
@@ -131,6 +133,28 @@ func _test_null_retry_preserves_active_room() -> void:
 	adapter.queue_free()
 
 
+func _test_play_cards_intention_is_sent_to_active_room() -> void:
+	var adapter := _new_adapter()
+	var client := FakeColyseusClient.new()
+	adapter._client = client
+	var room := client.queue_join_room("match-room")
+	adapter.join_game_room("match-room", "甲")
+	room.emit_joined()
+	var selected_card_ids: Array[String] = ["card-c", "card-a", "card-b"]
+	if not adapter.has_method("play_cards"):
+		_failures.append("Adapter 应公开 play_cards 意图")
+		adapter.queue_free()
+		return
+
+	adapter.play_cards(selected_card_ids)
+
+	_expect_equal(room.sent_messages, [{
+		"type": "play_cards",
+		"data": {"cardIds": ["card-c", "card-a", "card-b"]},
+	}], "出牌意图应发送物理牌标识")
+	adapter.queue_free()
+
+
 func _test_match_public_state_is_normalized_without_private_fields() -> void:
 	var adapter := _new_adapter()
 	var client := FakeColyseusClient.new()
@@ -202,6 +226,67 @@ func _test_match_public_state_is_normalized_without_private_fields() -> void:
 	adapter.queue_free()
 
 
+func _test_public_play_state_is_normalized_from_whitelisted_fields() -> void:
+	var adapter := _new_adapter()
+	var client := FakeColyseusClient.new()
+	adapter._client = client
+	var observed := {"snapshot": {}}
+	adapter.game_room_state_changed.connect(
+		func(snapshot: Dictionary): observed["snapshot"] = snapshot
+	)
+	var room := client.queue_join_room("play-room")
+	adapter.join_game_room("play-room", "甲")
+	room.emit_joined()
+	room.emit_state({
+		"status": "started",
+		"phase": "claim_commit",
+		"turnNumber": 3,
+		"playedCards": [
+			_raw_card("copy-0:hearts:12", 12, "hearts", 0, "drop-me"),
+			_raw_card("copy-0:hearts:13", 13, "hearts", 0, "drop-me"),
+			_raw_card("copy-0:hearts:14", 14, "hearts", 0, "drop-me"),
+		],
+		"playedCategory": "straight_flush",
+		"playedScore": 10,
+		"playEvents": [{
+			"turnNumber": 3,
+			"actorSeatIndex": 2,
+			"cards": [
+				_raw_card("copy-0:hearts:12", 12, "hearts", 0, "drop-me"),
+				_raw_card("copy-0:hearts:13", 13, "hearts", 0, "drop-me"),
+				_raw_card("copy-0:hearts:14", 14, "hearts", 0, "drop-me"),
+			],
+			"category": "straight_flush",
+			"score": 10,
+			"unrevealedClaim": "drop-me",
+		}],
+		"claimCommits": {"session-b": "copy-0:hearts:12"},
+	})
+
+	var snapshot: Dictionary = observed["snapshot"]
+	_expect_equal(snapshot.get("turn_number"), 3, "回合编号规范化")
+	_expect_equal(snapshot.get("played_cards"), [
+		_card("copy-0:hearts:12", 12, "hearts", 0),
+		_card("copy-0:hearts:13", 13, "hearts", 0),
+		_card("copy-0:hearts:14", 14, "hearts", 0),
+	], "公开出牌只保留牌面白名单")
+	_expect_equal(snapshot.get("played_category"), "straight_flush", "公开牌型规范化")
+	_expect_equal(snapshot.get("played_score"), 10, "公开出牌得分规范化")
+	_expect_equal(snapshot.get("play_events"), [{
+		"turn_number": 3,
+		"actor_seat_index": 2,
+		"cards": [
+			_card("copy-0:hearts:12", 12, "hearts", 0),
+			_card("copy-0:hearts:13", 13, "hearts", 0),
+			_card("copy-0:hearts:14", 14, "hearts", 0),
+		],
+		"category": "straight_flush",
+		"score": 10,
+	}], "公开出牌事件只保留可审计白名单")
+	_expect_equal(snapshot.has("claimCommits"), false, "公开快照不透传抢牌秘密")
+	adapter.queue_free()
+
+
 func _test_only_local_match_private_state_is_normalized() -> void:
 	var adapter := _new_adapter()
 	if not adapter.has_signal("match_private_state_changed"):
@@ -270,6 +355,31 @@ func _raw_seat(
 		"score": score,
 		"handCount": hand_count,
 		"hand": [{"id": "must-not-pass"}],
+	}
+
+
+func _raw_card(
+	card_id: String,
+	rank: int,
+	suit: String,
+	copy_index: int,
+	transport_only: String = ""
+) -> Dictionary:
+	return {
+		"id": card_id,
+		"rank": rank,
+		"suit": suit,
+		"copyIndex": copy_index,
+		"transportOnly": transport_only,
+	}
+
+
+func _card(card_id: String, rank: int, suit: String, copy_index: int) -> Dictionary:
+	return {
+		"id": card_id,
+		"rank": rank,
+		"suit": suit,
+		"copy_index": copy_index,
 	}
 
 

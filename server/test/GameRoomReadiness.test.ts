@@ -34,6 +34,10 @@ describe("four-participant room readiness", () => {
       actorSeatIndex: -1,
       firstActorSeatIndex: -1,
       drawPileCount: 0,
+      turnNumber: 0,
+      playedCards: [],
+      playedCategory: "",
+      playedScore: 0,
       seats: [
         {
           seatIndex: 0,
@@ -73,6 +77,7 @@ describe("four-participant room readiness", () => {
         },
       ],
       contestRounds: [],
+      playEvents: [],
     });
 
     await host.leave();

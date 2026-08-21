@@ -18,6 +18,9 @@ Thumbs.db
 # Runtime logs
 *.log
 
+# Regenerable visual QA captures
+.scratch/*-visuals/
+
 # Local environment files may contain credentials.
 **/.env*
 !**/.env.example

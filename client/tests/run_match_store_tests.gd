@@ -13,6 +13,8 @@ func _init() -> void:
 func _run() -> void:
 	_test_started_snapshot_activates_match_once()
 	_test_public_collections_are_sanitized_deep_copies()
+	_test_public_play_state_is_retained_deep_copied_and_cleared()
+	_test_play_cards_intention_is_forwarded_without_optimistic_state()
 	_test_only_targeted_private_hand_is_retained()
 	_test_room_errors_and_connection_changes_are_exposed()
 	_test_leave_clears_match_and_allows_next_room_activation()
@@ -86,6 +88,81 @@ func _test_public_collections_are_sanitized_deep_copies() -> void:
 		14,
 		"拼点嵌套字典深拷贝"
 	)
+
+
+func _test_public_play_state_is_retained_deep_copied_and_cleared() -> void:
+	var adapter := FakeRealtimeAdapter.new()
+	var match_store := MatchStore.new(adapter)
+	if not match_store.has_method("get_played_cards") or not match_store.has_method("get_play_events"):
+		_failures.append("MatchStore 应公开已出牌和历史事件的只读副本")
+		return
+	var snapshot := _started_snapshot("room-a", "human-a", 17)
+	snapshot["phase"] = "claim_commit"
+	snapshot["turn_number"] = 1
+	snapshot["played_cards"] = [
+		_card("play-queen", 12, "hearts", 0),
+		_card("play-king", 13, "hearts", 0),
+		_card("play-ace", 14, "hearts", 0),
+	]
+	snapshot["played_category"] = "straight_flush"
+	snapshot["played_score"] = 10
+	snapshot["play_events"] = [{
+		"turn_number": 1,
+		"actor_seat_index": 0,
+		"cards": snapshot["played_cards"].duplicate(true),
+		"category": "straight_flush",
+		"score": 10,
+	}]
+
+	adapter.publish_game_room_state(snapshot)
+
+	_expect_equal(match_store.turn_number, 1, "保存回合编号")
+	_expect_equal(match_store.played_category, "straight_flush", "保存公开牌型")
+	_expect_equal(match_store.played_score, 10, "保存公开出牌得分")
+	var returned_cards: Array[Dictionary] = match_store.get_played_cards()
+	returned_cards[0]["rank"] = 2
+	returned_cards.clear()
+	_expect_equal(match_store.get_played_cards(), snapshot["played_cards"], "公开出牌深拷贝")
+	var returned_events: Array[Dictionary] = match_store.get_play_events()
+	returned_events[0]["cards"][0]["rank"] = 2
+	returned_events.clear()
+	_expect_equal(match_store.get_play_events(), snapshot["play_events"], "出牌历史嵌套深拷贝")
+
+	adapter.publish_game_room_state(_started_snapshot("room-a", "human-a", 17))
+
+	_expect_equal(match_store.get_played_cards(), [], "新回合快照清空旧出牌")
+	_expect_equal(match_store.get_play_events(), [], "空历史快照清空旧出牌事件")
+	_expect_equal(match_store.played_category, "", "新回合快照清空旧牌型")
+	_expect_equal(match_store.played_score, 0, "新回合快照清空旧得分")
+
+
+func _test_play_cards_intention_is_forwarded_without_optimistic_state() -> void:
+	var adapter := FakeRealtimeAdapter.new()
+	var match_store := MatchStore.new(adapter)
+	if not match_store.has_method("play_cards"):
+		_failures.append("MatchStore 应公开 play_cards 意图")
+		return
+	adapter.publish_game_room_state(_started_snapshot("room-a", "human-a", 20))
+	var local_hand := [
+		_card("local-2", 2, "clubs", 0),
+		_card("local-3", 3, "clubs", 0),
+		_card("local-4", 4, "clubs", 0),
+	]
+	adapter.publish_match_private_state({
+		"participant_id": "human-a",
+		"hand": local_hand,
+	})
+	var selected_card_ids: Array[String] = ["local-2", "local-3", "local-4"]
+
+	match_store.play_cards(selected_card_ids)
+
+	_expect_equal(adapter.room_requests, [{
+		"type": "play_cards",
+		"payload": {"cardIds": ["local-2", "local-3", "local-4"]},
+	}], "出牌意图转发到 adapter")
+	_expect_equal(match_store.get_local_hand(), local_hand, "发送后等待权威私有手牌")
+	_expect_equal(match_store.get_played_cards(), [], "发送后等待权威公开出牌")
+	_expect_equal(match_store.played_score, 0, "发送后不乐观加分")
 
 
 func _test_only_targeted_private_hand_is_retained() -> void:
@@ -165,7 +242,23 @@ func _test_leave_clears_match_and_allows_next_room_activation() -> void:
 	match_store.left.connect(func(code: int, reason: String):
 		observed["left"] = {"code": code, "reason": reason}
 	)
-	adapter.publish_game_room_state(_started_snapshot("room-a", "human-a", 20))
+	var active_snapshot := _started_snapshot("room-a", "human-a", 20)
+	active_snapshot["turn_number"] = 1
+	active_snapshot["played_cards"] = [
+		_card("played-2", 2, "clubs", 0),
+		_card("played-3", 3, "spades", 0),
+		_card("played-4", 4, "hearts", 0),
+	]
+	active_snapshot["played_category"] = "straight"
+	active_snapshot["played_score"] = 5
+	active_snapshot["play_events"] = [{
+		"turn_number": 1,
+		"actor_seat_index": 0,
+		"cards": active_snapshot["played_cards"].duplicate(true),
+		"category": "straight",
+		"score": 5,
+	}]
+	adapter.publish_game_room_state(active_snapshot)
 	adapter.publish_match_private_state({
 		"participant_id": "human-a",
 		"hand": [_card("local-card", 11, "clubs", 0)],
@@ -180,6 +273,11 @@ func _test_leave_clears_match_and_allows_next_room_activation() -> void:
 	_expect_equal(match_store.phase, "", "离开清空比赛阶段")
 	_expect_equal(match_store.actor_seat_index, -1, "离开清空行动席位")
 	_expect_equal(match_store.draw_pile_count, 0, "离开清空牌堆数量")
+	_expect_equal(match_store.turn_number, 0, "离开清空回合编号")
+	_expect_equal(match_store.get_played_cards(), [], "离开清空公开出牌")
+	_expect_equal(match_store.get_play_events(), [], "离开清空出牌历史")
+	_expect_equal(match_store.played_category, "", "离开清空牌型")
+	_expect_equal(match_store.played_score, 0, "离开清空本轮得分")
 	_expect_equal(match_store.get_participants(), [], "离开清空参与者")
 	_expect_equal(match_store.get_contest_rounds(), [], "离开清空拼点历史")
 	_expect_equal(match_store.get_local_hand(), [], "离开清空私有手牌")

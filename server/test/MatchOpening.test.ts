@@ -4,6 +4,8 @@ import { createPhysicalDeck } from "../src/match/cards.js";
 import {
   MatchEngine,
   type MatchParticipant,
+  type PointContestRoundEvent,
+  type PublicMatchEvent,
 } from "../src/match/MatchEngine.js";
 import {
   SeededRandomSource,
@@ -39,6 +41,16 @@ const PARTICIPANTS: readonly MatchParticipant[] = [
   { seatIndex: 2, participantId: "participant-c", nickname: "丙", bot: true },
   { seatIndex: 3, participantId: "participant-d", nickname: "丁", bot: true },
 ];
+
+function pointContestEvents(
+  events: readonly PublicMatchEvent[],
+): PointContestRoundEvent[] {
+  const contestEvents = events.filter((event): event is PointContestRoundEvent => (
+    event.type === "point_contest_round"
+  ));
+  assert.strictEqual(contestEvents.length, events.length);
+  return contestEvents;
+}
 
 function buildExhaustedPointContestSequence(): number[] {
   let cards = [...createPhysicalDeck("two")];
@@ -110,6 +122,10 @@ describe("match opening", () => {
       actorSeatIndex: 0,
       firstActorSeatIndex: 0,
       drawPileCount: 20,
+      playedCards: [],
+      playedCategory: null,
+      playedScore: 0,
+      turnNumber: 0,
       participants: [
         { ...PARTICIPANTS[0], score: 0, handCount: 8 },
         { ...PARTICIPANTS[1], score: 0, handCount: 8 },
@@ -238,9 +254,10 @@ describe("match opening", () => {
     });
 
     const publicState = engine.view(0).publicState;
-    assert.strictEqual(publicState.events.length, 52);
-    assert.deepStrictEqual(publicState.events[50].tiedSeats, [0, 1]);
-    assert.strictEqual(publicState.events[51].winnerSeatIndex, 1);
+    const contestEvents = pointContestEvents(publicState.events);
+    assert.strictEqual(contestEvents.length, 52);
+    assert.deepStrictEqual(contestEvents[50].tiedSeats, [0, 1]);
+    assert.strictEqual(contestEvents[51].winnerSeatIndex, 1);
     assert.strictEqual(publicState.actorSeatIndex, 1);
     assert.strictEqual(publicState.drawPileCount, 72);
     assert.deepStrictEqual(random.requestedMaxima.slice(102, 106), [2, 1, 104, 103]);
@@ -254,7 +271,7 @@ describe("match opening", () => {
       actionDeadlineSeconds: 60,
     });
 
-    const [round] = engine.view(0).publicState.events;
+    const [round] = pointContestEvents(engine.view(0).publicState.events);
     assert.deepStrictEqual(
       round.reveals.map((reveal) => ({
         seatIndex: reveal.seatIndex,
@@ -281,7 +298,7 @@ describe("match opening", () => {
     const views = PARTICIPANTS.map(({ seatIndex }) => engine.view(seatIndex));
     const publicState = views[0].publicState;
     const dealtIds = views.flatMap((view) => view.privateState.hand.map((card) => card.id));
-    const contestIds = publicState.events.flatMap((event) => (
+    const contestIds = pointContestEvents(publicState.events).flatMap((event) => (
       event.reveals.map((reveal) => reveal.card.id)
     ));
 
@@ -304,6 +321,10 @@ describe("match opening", () => {
       "actorSeatIndex",
       "firstActorSeatIndex",
       "drawPileCount",
+      "playedCards",
+      "playedCategory",
+      "playedScore",
+      "turnNumber",
       "participants",
       "events",
     ]);

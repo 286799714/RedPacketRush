@@ -73,5 +73,12 @@ func start_match() -> void:
 	room_requests.append({"type": "start", "payload": null})
 
 
+func play_cards(card_ids: Array[String]) -> void:
+	room_requests.append({
+		"type": "play_cards",
+		"payload": {"cardIds": card_ids.duplicate()},
+	})
+
+
 func leave_game_room() -> void:
 	leave_game_room_requests += 1

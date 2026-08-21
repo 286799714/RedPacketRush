@@ -44,18 +44,25 @@ var _contest_panel: PanelContainer
 var _contest_title_label: Label
 var _contest_detail_label: Label
 var _contest_reveal_row: HBoxContainer
+var _played_panel: PanelContainer
+var _played_title_label: Label
+var _played_cards_row: HBoxContainer
+var _played_summary_label: Label
 var _hand_panel: PanelContainer
 var _hand_title_label: Label
 var _hand_row: HBoxContainer
 var _action_bar: PanelContainer
 var _action_prompt_label: Label
+var _action_error_label: Label
+var _play_button: Button
 
 var _seat_cards: Array[PanelContainer] = []
 var _seat_position_labels: Array[Label] = []
 var _seat_name_labels: Array[Label] = []
 var _seat_detail_labels: Array[Label] = []
 var _seat_role_labels: Array[Label] = []
-var _hand_cards: Array[PanelContainer] = []
+var _hand_cards: Array[Button] = []
+var _selected_card_ids: Array[String] = []
 
 var _participant_by_seat: Dictionary = {}
 var _local_seat_index := -1
@@ -91,6 +98,8 @@ func _bind_store() -> void:
 		_store.state_changed.connect(_on_store_changed)
 	if _store.has_signal("private_state_changed"):
 		_store.private_state_changed.connect(_on_store_changed)
+	if _store.has_signal("action_failed"):
+		_store.action_failed.connect(_on_action_failed)
 
 
 func _unbind_store() -> void:
@@ -101,11 +110,22 @@ func _unbind_store() -> void:
 		_bound_store.disconnect("state_changed", callback)
 	if _bound_store.has_signal("private_state_changed") and _bound_store.is_connected("private_state_changed", callback):
 		_bound_store.disconnect("private_state_changed", callback)
+	var error_callback := Callable(self, "_on_action_failed")
+	if _bound_store.has_signal("action_failed") and _bound_store.is_connected("action_failed", error_callback):
+		_bound_store.disconnect("action_failed", error_callback)
 	_bound_store = null
 
 
 func _on_store_changed(_first: Variant = null, _second: Variant = null, _third: Variant = null) -> void:
+	_action_error_label.text = ""
+	_action_error_label.tooltip_text = ""
 	_refresh()
+
+
+func _on_action_failed(code: String, message: String) -> void:
+	var detail := message if not message.is_empty() else code
+	_action_error_label.text = detail
+	_action_error_label.tooltip_text = detail
 
 
 func _build_ui() -> void:
@@ -257,6 +277,7 @@ func _build_table_area() -> Control:
 	_contest_reveal_row.name = "LatestContestReveals"
 	_contest_reveal_row.add_theme_constant_override("separation", 5)
 	contest_column.add_child(_contest_reveal_row)
+	_build_played_panel()
 
 	for seat_index in range(4):
 		_build_seat_card(seat_index)
@@ -295,11 +316,69 @@ func _build_table_area() -> Control:
 	_action_bar.add_child(action_margin)
 	_action_prompt_label = _label("等待服务器状态", 12, COLOR_MUTED)
 	_action_prompt_label.name = "ActionPrompt"
+	_action_prompt_label.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	_action_prompt_label.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
 	_action_prompt_label.clip_text = true
 	_action_prompt_label.text_overrun_behavior = TextServer.OVERRUN_TRIM_ELLIPSIS
-	action_margin.add_child(_action_prompt_label)
+	var action_row := HBoxContainer.new()
+	action_row.name = "ActionRow"
+	action_row.add_theme_constant_override("separation", 8)
+	action_margin.add_child(action_row)
+	action_row.add_child(_action_prompt_label)
+	var error_slot := Control.new()
+	error_slot.name = "ActionErrorSlot"
+	error_slot.custom_minimum_size = Vector2(210, 27)
+	action_row.add_child(error_slot)
+	_action_error_label = _label("", 11, COLOR_HEARTS)
+	_action_error_label.name = "ActionErrorLabel"
+	_action_error_label.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
+	_action_error_label.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
+	_action_error_label.clip_text = true
+	_action_error_label.text_overrun_behavior = TextServer.OVERRUN_TRIM_ELLIPSIS
+	error_slot.add_child(_action_error_label)
+	_play_button = Button.new()
+	_play_button.name = "PlayCardsButton"
+	_play_button.text = "出牌"
+	_play_button.custom_minimum_size = Vector2(82, 27)
+	_play_button.disabled = true
+	_play_button.add_theme_font_size_override("font_size", 13)
+	_play_button.add_theme_color_override("font_color", COLOR_TEXT)
+	_play_button.add_theme_stylebox_override("normal", _style_box(Color("#2b3334"), COLOR_BORDER, 1, 4))
+	_play_button.add_theme_stylebox_override("hover", _style_box(Color("#34413d"), COLOR_GREEN, 1, 4))
+	_play_button.add_theme_stylebox_override("pressed", _style_box(Color("#25392f"), COLOR_GREEN, 2, 4))
+	_play_button.add_theme_stylebox_override("disabled", _style_box(Color("#202426"), COLOR_BORDER, 1, 4))
+	_play_button.pressed.connect(_on_play_pressed)
+	action_row.add_child(_play_button)
 	return _table_area
+
+
+func _build_played_panel() -> void:
+	_played_panel = PanelContainer.new()
+	_played_panel.name = "PlayedCombinationPanel"
+	_played_panel.visible = false
+	_played_panel.add_theme_stylebox_override("panel", _style_box(Color("#202925"), COLOR_GOLD, 2, 5))
+	_table_area.add_child(_played_panel)
+	var margin := MarginContainer.new()
+	margin.add_theme_constant_override("margin_left", 10)
+	margin.add_theme_constant_override("margin_top", 7)
+	margin.add_theme_constant_override("margin_right", 10)
+	margin.add_theme_constant_override("margin_bottom", 7)
+	_played_panel.add_child(margin)
+	var column := VBoxContainer.new()
+	column.add_theme_constant_override("separation", 4)
+	margin.add_child(column)
+	_played_title_label = _label("本回合公开出牌", 13, COLOR_GOLD)
+	_played_title_label.name = "PlayedCombinationTitle"
+	column.add_child(_played_title_label)
+	_played_cards_row = HBoxContainer.new()
+	_played_cards_row.name = "PlayedCardsRow"
+	_played_cards_row.alignment = BoxContainer.ALIGNMENT_CENTER
+	_played_cards_row.add_theme_constant_override("separation", 6)
+	column.add_child(_played_cards_row)
+	_played_summary_label = _label("牌型：-- · 本次 0 分", 12, COLOR_TEXT)
+	_played_summary_label.name = "PlayedCombinationSummary"
+	_played_summary_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	column.add_child(_played_summary_label)
 
 
 func _build_seat_card(seat_index: int) -> PanelContainer:
@@ -359,8 +438,11 @@ func _refresh() -> void:
 		_deck_label.text = "牌堆：--"
 		_connection_label.text = "等待状态"
 		_action_prompt_label.text = "等待服务器状态"
+		_action_error_label.text = ""
+		_action_error_label.tooltip_text = ""
 		_refresh_seats(-1, -1)
-		_refresh_history([])
+		_refresh_history([], [])
+		_refresh_played_combination("")
 		_clear_hand()
 		return
 
@@ -379,7 +461,11 @@ func _refresh() -> void:
 	_deck_label.text = "牌堆：%d" % int(_store.draw_pile_count)
 	_connection_label.text = "公开状态"
 	_refresh_seats(local_seat_index, actor_seat_index)
-	_refresh_history(_store.get_contest_rounds())
+	var play_events: Array[Dictionary] = []
+	if _store.has_method("get_play_events"):
+		play_events = _store.get_play_events()
+	_refresh_history(_store.get_contest_rounds(), play_events)
+	_refresh_played_combination(phase)
 	_refresh_hand()
 	_refresh_action_prompt(phase, actor_seat_index, local_seat_index)
 
@@ -418,11 +504,14 @@ func _refresh_seats(local_seat_index: int, actor_seat_index: int) -> void:
 		_seat_cards[seat_index].add_theme_stylebox_override("panel", _style_box(fill, border, 2 if is_actor else 1, 5))
 
 
-func _refresh_history(rounds: Array[Dictionary]) -> void:
+func _refresh_history(
+	rounds: Array[Dictionary],
+	play_events: Array[Dictionary]
+) -> void:
 	for child in _history_list.get_children():
 		child.free()
-	if rounds.is_empty():
-		var empty := _label("等待拼点揭晓", 12, COLOR_MUTED)
+	if rounds.is_empty() and play_events.is_empty():
+		var empty := _label("等待公开事件", 12, COLOR_MUTED)
 		empty.name = "HistoryEmpty"
 		empty.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 		_history_list.add_child(empty)
@@ -431,7 +520,9 @@ func _refresh_history(rounds: Array[Dictionary]) -> void:
 	for round_data in rounds:
 		var item := _build_history_item(round_data)
 		_history_list.add_child(item)
-	_refresh_latest_contest(rounds[rounds.size() - 1])
+	for play_event in play_events:
+		_history_list.add_child(_build_play_history_item(play_event))
+	_refresh_latest_contest(rounds[rounds.size() - 1] if not rounds.is_empty() else {})
 
 
 func _build_history_item(round_data: Dictionary) -> Control:
@@ -457,6 +548,39 @@ func _build_history_item(round_data: Dictionary) -> Control:
 		var winner := _label("胜者：%s" % _participant_name(winner_seat), 11, COLOR_TEXT)
 		winner.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 		item.add_child(winner)
+	return item
+
+
+func _build_play_history_item(play_event: Dictionary) -> Control:
+	var turn_number := int(play_event.get("turn_number", 0))
+	var actor_seat_index := int(play_event.get("actor_seat_index", -1))
+	var item := VBoxContainer.new()
+	item.name = "PlayEvent%d" % turn_number
+	item.add_theme_constant_override("separation", 2)
+	var title := _label(
+		"第 %d 回合 · %s 出牌" % [turn_number, _participant_name(actor_seat_index)],
+		12,
+		COLOR_GOLD
+	)
+	title.clip_text = true
+	item.add_child(title)
+	var summary := _label(
+		"%s · %d 分" % [
+			_combination_text(str(play_event.get("category", ""))),
+			int(play_event.get("score", 0)),
+		],
+		11,
+		COLOR_TEXT
+	)
+	item.add_child(summary)
+	var raw_cards: Variant = play_event.get("cards", [])
+	if raw_cards is Array:
+		var card_values: Array[String] = []
+		for raw_card: Variant in raw_cards:
+			card_values.append(_format_card(raw_card))
+		var cards := _label("、".join(card_values), 11, COLOR_MUTED)
+		cards.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+		item.add_child(cards)
 	return item
 
 
@@ -499,12 +623,46 @@ func _refresh_latest_contest(round_data: Dictionary) -> void:
 			_contest_reveal_row.add_child(chip)
 
 
+func _refresh_played_combination(phase: String) -> void:
+	for child in _played_cards_row.get_children():
+		child.free()
+	var cards: Array[Dictionary] = []
+	if _store != null and _store.has_method("get_played_cards"):
+		cards = _store.get_played_cards()
+	var show_played := phase == "claim_commit" and cards.size() == 3
+	_played_panel.visible = show_played
+	_contest_panel.visible = not show_played
+	if not show_played:
+		_played_title_label.text = "本回合公开出牌"
+		_played_summary_label.text = "牌型：-- · 本次 0 分"
+		return
+	_played_title_label.text = "第 %d 回合 · 公开出牌" % int(_store.turn_number)
+	_played_summary_label.text = "牌型：%s · 本次 %d 分" % [
+		_combination_text(str(_store.played_category)),
+		int(_store.played_score),
+	]
+	for index in range(cards.size()):
+		var chip := PanelContainer.new()
+		chip.name = "PlayedCard%d" % index
+		chip.custom_minimum_size = Vector2(72, 42)
+		chip.add_theme_stylebox_override("panel", _style_box(COLOR_SURFACE_RAISED, COLOR_BORDER, 1, 4))
+		var value := _label(_format_card(cards[index]), 12, _suit_color(cards[index].get("suit", "")))
+		value.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+		value.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
+		value.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+		chip.add_child(value)
+		_played_cards_row.add_child(chip)
+	call_deferred("_on_resized")
+
+
 func _refresh_hand() -> void:
 	_clear_hand()
 	var hand: Array[Dictionary] = _store.get_local_hand()
+	var can_select := _can_select_hand()
 	_hand_title_label.text = "我的手牌（%d）" % hand.size()
 	for index in range(hand.size()):
 		var card := _build_hand_card(hand[index], index)
+		card.disabled = not can_select
 		_hand_row.add_child(card)
 		_hand_cards.append(card)
 	if hand.is_empty():
@@ -518,22 +676,34 @@ func _clear_hand() -> void:
 	for child in _hand_row.get_children():
 		child.free()
 	_hand_cards.clear()
+	_selected_card_ids.clear()
 	_hand_title_label.text = "我的手牌（0）"
+	if _play_button != null:
+		_play_button.disabled = true
 
 
-func _build_hand_card(card: Dictionary, index: int) -> PanelContainer:
-	var panel := PanelContainer.new()
+func _build_hand_card(card: Dictionary, index: int) -> Button:
+	var panel := Button.new()
 	panel.name = "HandCard%d" % index
 	panel.custom_minimum_size = Vector2(CARD_WIDTH, CARD_HEIGHT)
 	panel.size_flags_horizontal = Control.SIZE_SHRINK_CENTER
-	panel.add_theme_stylebox_override("panel", _style_box(COLOR_SURFACE_RAISED, COLOR_BORDER, 1, 4))
+	panel.toggle_mode = true
+	panel.focus_mode = Control.FOCUS_ALL
+	panel.add_theme_stylebox_override("normal", _style_box(COLOR_SURFACE_RAISED, COLOR_BORDER, 1, 4))
+	panel.add_theme_stylebox_override("hover", _style_box(Color("#293032"), COLOR_GREEN, 1, 4))
+	panel.add_theme_stylebox_override("pressed", _style_box(Color("#30362f"), COLOR_GOLD, 3, 4))
+	panel.add_theme_stylebox_override("disabled", _style_box(COLOR_SURFACE, COLOR_BORDER, 1, 4))
+	panel.toggled.connect(_on_hand_card_toggled.bind(str(card.get("id", "")), panel))
 	var margin := MarginContainer.new()
+	margin.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	margin.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
 	margin.add_theme_constant_override("margin_left", 4)
 	margin.add_theme_constant_override("margin_right", 4)
 	margin.add_theme_constant_override("margin_top", 4)
 	margin.add_theme_constant_override("margin_bottom", 4)
 	panel.add_child(margin)
 	var column := VBoxContainer.new()
+	column.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	column.add_theme_constant_override("separation", 0)
 	margin.add_child(column)
 	var rank := _label(_rank_text(int(card.get("rank", 0))), 20, COLOR_TEXT)
@@ -548,6 +718,38 @@ func _build_hand_card(card: Dictionary, index: int) -> PanelContainer:
 	suit.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
 	column.add_child(suit)
 	return panel
+
+
+func _can_select_hand() -> bool:
+	return (
+		_store != null
+		and str(_store.phase) == "actor_play"
+		and _local_seat_index >= 0
+		and int(_store.actor_seat_index) == _local_seat_index
+	)
+
+
+func _on_hand_card_toggled(pressed: bool, card_id: String, button: Button) -> void:
+	if not _can_select_hand() or card_id.is_empty():
+		button.set_pressed_no_signal(false)
+		return
+	if pressed:
+		if _selected_card_ids.size() >= 3:
+			button.set_pressed_no_signal(false)
+			return
+		if not _selected_card_ids.has(card_id):
+			_selected_card_ids.append(card_id)
+	else:
+		_selected_card_ids.erase(card_id)
+	_play_button.disabled = _selected_card_ids.size() != 3
+
+
+func _on_play_pressed() -> void:
+	if not _can_select_hand() or _selected_card_ids.size() != 3:
+		return
+	_action_error_label.text = ""
+	_action_error_label.tooltip_text = ""
+	_store.play_cards(_selected_card_ids.duplicate())
 
 
 func _refresh_action_prompt(phase: String, actor_seat_index: int, local_seat_index: int) -> void:
@@ -620,6 +822,10 @@ func _on_resized() -> void:
 	var contest_height := maxf(76.0, _contest_panel.get_combined_minimum_size().y)
 	_contest_panel.position = Vector2((width - contest_width) * 0.5, maxf(78.0, (stage_height - contest_height) * 0.46))
 	_contest_panel.size = Vector2(contest_width, contest_height)
+	var played_width := minf(300.0, maxf(240.0, width * 0.46))
+	var played_height := maxf(108.0, _played_panel.get_combined_minimum_size().y)
+	_played_panel.position = Vector2((width - played_width) * 0.5, maxf(78.0, (stage_height - played_height) * 0.46))
+	_played_panel.size = Vector2(played_width, played_height)
 
 
 func _seat_position_text(seat_index: int, local_seat_index: int) -> String:
@@ -717,6 +923,23 @@ func _phase_text(phase: String) -> String:
 		"finished":
 			return "已结束"
 	return "同步中"
+
+
+func _combination_text(category: String) -> String:
+	match category:
+		"high_card":
+			return "散牌"
+		"pair":
+			return "一对"
+		"flush":
+			return "同花"
+		"straight":
+			return "顺子"
+		"three_of_a_kind":
+			return "三条"
+		"straight_flush":
+			return "同花顺"
+	return "未知"
 
 
 func _label(text: String, font_size: int, color: Color) -> Label:

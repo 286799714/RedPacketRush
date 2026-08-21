@@ -16,6 +16,14 @@ const GameSchema = preload("res://schema/schema.gd")
 const LOBBY_ROOM_TYPE := "lobby"
 const GAME_ROOM_TYPE := "game"
 const ROOM_SEAT_COUNT := 4
+const COMBINATION_CATEGORIES := [
+	"high_card",
+	"pair",
+	"flush",
+	"straight",
+	"three_of_a_kind",
+	"straight_flush",
+]
 
 var _client: Variant
 var _lobby_room: Variant
@@ -124,6 +132,10 @@ func fill_bots() -> void:
 
 func start_match() -> void:
 	_send_game_room_message("start")
+
+
+func play_cards(card_ids: Array[String]) -> void:
+	_send_game_room_message("play_cards", {"cardIds": card_ids.duplicate()})
 
 
 func _exit_tree() -> void:
@@ -479,6 +491,11 @@ func _normalize_game_room_state(raw_state: Variant, room: Variant) -> Dictionary
 		"actor_seat_index": int(raw_state.get("actorSeatIndex", -1)),
 		"first_actor_seat_index": int(raw_state.get("firstActorSeatIndex", -1)),
 		"draw_pile_count": int(raw_state.get("drawPileCount", 0)),
+		"turn_number": maxi(0, int(raw_state.get("turnNumber", 0))),
+		"played_cards": _normalize_public_cards(raw_state.get("playedCards", []), 3),
+		"played_category": _normalize_combination_category(raw_state.get("playedCategory", "")),
+		"played_score": maxi(0, int(raw_state.get("playedScore", 0))),
+		"play_events": _normalize_play_events(raw_state.get("playEvents", [])),
 		"seats": seats,
 		"contest_rounds": _normalize_contest_rounds(raw_state.get("contestRounds", [])),
 	}
@@ -560,6 +577,62 @@ func _normalize_card(raw_card: Variant) -> Dictionary:
 		"suit": suit,
 		"copy_index": int(raw_card.get("copyIndex", 0)),
 	}
+
+
+func _normalize_public_cards(raw_cards: Variant, limit: int) -> Array[Dictionary]:
+	var cards: Array[Dictionary] = []
+	var seen_card_ids: Dictionary = {}
+	if not raw_cards is Array:
+		return cards
+	for raw_card: Variant in raw_cards:
+		var card := _normalize_card(raw_card)
+		if card.is_empty() or seen_card_ids.has(card["id"]):
+			continue
+		seen_card_ids[card["id"]] = true
+		cards.append(card)
+		if cards.size() >= limit:
+			break
+	return cards
+
+
+func _normalize_combination_category(raw_category: Variant) -> String:
+	var category := str(raw_category)
+	return category if category in COMBINATION_CATEGORIES else ""
+
+
+func _normalize_play_events(raw_events: Variant) -> Array[Dictionary]:
+	var events_by_turn: Dictionary = {}
+	if not raw_events is Array:
+		return []
+	for raw_event: Variant in raw_events:
+		raw_event = _dictionary_from_schema(raw_event)
+		if not raw_event is Dictionary:
+			continue
+		var turn_number := int(raw_event.get("turnNumber", 0))
+		var actor_seat_index := int(raw_event.get("actorSeatIndex", -1))
+		var cards := _normalize_public_cards(raw_event.get("cards", []), 3)
+		var category := _normalize_combination_category(raw_event.get("category", ""))
+		if (
+			turn_number <= 0
+			or actor_seat_index < 0
+			or actor_seat_index >= ROOM_SEAT_COUNT
+			or cards.size() != 3
+			or category.is_empty()
+		):
+			continue
+		events_by_turn[turn_number] = {
+			"turn_number": turn_number,
+			"actor_seat_index": actor_seat_index,
+			"cards": cards,
+			"category": category,
+			"score": maxi(0, int(raw_event.get("score", 0))),
+		}
+	var result: Array[Dictionary] = []
+	var turn_numbers := events_by_turn.keys()
+	turn_numbers.sort()
+	for turn_number: Variant in turn_numbers:
+		result.append(events_by_turn[turn_number])
+	return result
 
 
 func _normalize_match_private_state(raw_state: Variant, room: Variant) -> Dictionary:

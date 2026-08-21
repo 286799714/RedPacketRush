@@ -4,11 +4,31 @@ import {
   type DeckMode,
   type PhysicalCard,
 } from "./cards.js";
+import {
+  classifyCombination,
+  type CombinationCategory,
+} from "./combinations.js";
 import type { RandomSource } from "./random.js";
 
 export const ACTION_DEADLINES = [15, 30, 60] as const;
 export type ActionDeadlineSeconds = (typeof ACTION_DEADLINES)[number];
-export type MatchPhase = "point_contest" | "actor_play";
+export type MatchPhase = "point_contest" | "actor_play" | "claim_commit";
+export type MatchCommandErrorCode =
+  | "invalid_phase"
+  | "not_actor"
+  | "invalid_play"
+  | "card_not_owned"
+  | "draw_pile_exhausted";
+
+export class MatchCommandError extends Error {
+  public constructor(
+    public readonly code: MatchCommandErrorCode,
+    message: string,
+  ) {
+    super(message);
+    this.name = "MatchCommandError";
+  }
+}
 
 export interface MatchSettings {
   readonly deckMode: DeckMode;
@@ -40,13 +60,26 @@ export interface PointContestRoundEvent {
   readonly winnerSeatIndex: number | null;
 }
 
-export type PublicMatchEvent = PointContestRoundEvent;
+export interface CardsPlayedEvent {
+  readonly type: "cards_played";
+  readonly turnNumber: number;
+  readonly actorSeatIndex: number;
+  readonly cards: readonly PhysicalCard[];
+  readonly category: CombinationCategory;
+  readonly score: number;
+}
+
+export type PublicMatchEvent = PointContestRoundEvent | CardsPlayedEvent;
 
 export interface PublicMatchState {
   readonly phase: MatchPhase;
   readonly actorSeatIndex: number;
   readonly firstActorSeatIndex: number;
   readonly drawPileCount: number;
+  readonly playedCards: readonly PhysicalCard[];
+  readonly playedCategory: CombinationCategory | null;
+  readonly playedScore: number;
+  readonly turnNumber: number;
   readonly participants: readonly PublicMatchParticipant[];
   readonly events: readonly PublicMatchEvent[];
 }
@@ -74,9 +107,14 @@ export class MatchEngine {
   private readonly random: RandomSource;
   private participants: ParticipantState[] | null = null;
   private drawPile: PhysicalCard[] = [];
-  private events: PointContestRoundEvent[] = [];
+  private events: PublicMatchEvent[] = [];
   private firstActorSeatIndex: number | null = null;
+  private actorSeatIndex: number | null = null;
   private phase: MatchPhase | null = null;
+  private playedCards: PhysicalCard[] = [];
+  private playedCategory: CombinationCategory | null = null;
+  private playedScore = 0;
+  private turnNumber = 0;
 
   public constructor(random: RandomSource) {
     if (!random || typeof random.nextInt !== "function") {
@@ -106,6 +144,7 @@ export class MatchEngine {
     this.drawPile = drawPile;
     this.events = contest.events;
     this.firstActorSeatIndex = contest.winnerSeatIndex;
+    this.actorSeatIndex = contest.winnerSeatIndex;
     this.phase = "point_contest";
   }
 
@@ -116,10 +155,76 @@ export class MatchEngine {
     this.phase = "actor_play";
   }
 
+  public playCards(seatIndex: number, cardIds: readonly string[]): void {
+    if (this.participants === null || this.phase !== "actor_play") {
+      throw new MatchCommandError("invalid_phase", "actor play is not active");
+    }
+    if (seatIndex !== this.actorSeatIndex) {
+      throw new MatchCommandError("not_actor", "only the current actor may play cards");
+    }
+    if (!Array.isArray(cardIds) || cardIds.length !== 3) {
+      throw new MatchCommandError("invalid_play", "exactly three card identifiers are required");
+    }
+    if (!cardIds.every((cardId) => typeof cardId === "string" && cardId.length > 0)) {
+      throw new MatchCommandError("invalid_play", "card identifiers must be non-empty strings");
+    }
+    if (new Set(cardIds).size !== 3) {
+      throw new MatchCommandError("invalid_play", "card identifiers must be distinct");
+    }
+    const participant = this.participants.find((candidate) => (
+      candidate.seatIndex === seatIndex
+    ));
+    if (!participant) {
+      throw new Error("seat does not participate in this match");
+    }
+    const cards = cardIds.map((cardId) => {
+      const card = participant.hand.find((candidate) => candidate.id === cardId);
+      if (!card) {
+        throw new MatchCommandError("card_not_owned", "card is not owned by the actor");
+      }
+      return card;
+    });
+    if (this.drawPile.length < 3) {
+      throw new MatchCommandError(
+        "draw_pile_exhausted",
+        "draw pile cannot replace the played cards",
+      );
+    }
+
+    const combination = classifyCombination(cards);
+    const playedIds = new Set(cardIds);
+    participant.hand = participant.hand.filter((card) => !playedIds.has(card.id));
+    for (let replacementIndex = 0; replacementIndex < 3; replacementIndex += 1) {
+      const card = this.drawPile.pop();
+      if (!card) {
+        throw new MatchCommandError(
+          "draw_pile_exhausted",
+          "draw pile cannot replace the played cards",
+        );
+      }
+      participant.hand.push(card);
+    }
+    participant.score += combination.score;
+    this.playedCards = [...cards];
+    this.playedCategory = combination.category;
+    this.playedScore = combination.score;
+    this.turnNumber += 1;
+    this.phase = "claim_commit";
+    this.events.push(Object.freeze({
+      type: "cards_played",
+      turnNumber: this.turnNumber,
+      actorSeatIndex: seatIndex,
+      cards: Object.freeze([...cards]),
+      category: combination.category,
+      score: combination.score,
+    }));
+  }
+
   public view(seatIndex: number): MatchView {
     if (
       this.participants === null
       || this.firstActorSeatIndex === null
+      || this.actorSeatIndex === null
       || this.phase === null
     ) {
       throw new Error("match has not started");
@@ -141,9 +246,13 @@ export class MatchEngine {
     }));
     const publicState: PublicMatchState = Object.freeze({
       phase: this.phase,
-      actorSeatIndex: this.firstActorSeatIndex,
+      actorSeatIndex: this.actorSeatIndex,
       firstActorSeatIndex: this.firstActorSeatIndex,
       drawPileCount: this.drawPile.length,
+      playedCards: Object.freeze([...this.playedCards]),
+      playedCategory: this.playedCategory,
+      playedScore: this.playedScore,
+      turnNumber: this.turnNumber,
       participants: Object.freeze(publicParticipants),
       events: Object.freeze([...this.events]),
     });

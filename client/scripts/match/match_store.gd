@@ -14,10 +14,15 @@ var status := ""
 var phase := ""
 var actor_seat_index := -1
 var draw_pile_count := 0
+var turn_number := 0
+var played_category := ""
+var played_score := 0
 
 var _adapter: Object
 var _participants: Array[Dictionary] = []
 var _contest_rounds: Array[Dictionary] = []
+var _played_cards: Array[Dictionary] = []
+var _play_events: Array[Dictionary] = []
 var _local_hand: Array[Dictionary] = []
 var _activated := false
 
@@ -47,11 +52,29 @@ func get_contest_rounds() -> Array[Dictionary]:
 	return result
 
 
+func get_played_cards() -> Array[Dictionary]:
+	var result: Array[Dictionary] = []
+	for card in _played_cards:
+		result.append(card.duplicate(true))
+	return result
+
+
+func get_play_events() -> Array[Dictionary]:
+	var result: Array[Dictionary] = []
+	for play_event in _play_events:
+		result.append(play_event.duplicate(true))
+	return result
+
+
 func get_local_hand() -> Array[Dictionary]:
 	var result: Array[Dictionary] = []
 	for card in _local_hand:
 		result.append(card.duplicate(true))
 	return result
+
+
+func play_cards(card_ids: Array[String]) -> void:
+	_adapter.play_cards(card_ids.duplicate())
 
 
 func _on_game_room_state_changed(snapshot: Dictionary) -> void:
@@ -61,6 +84,9 @@ func _on_game_room_state_changed(snapshot: Dictionary) -> void:
 	phase = str(snapshot.get("phase", ""))
 	actor_seat_index = int(snapshot.get("actor_seat_index", -1))
 	draw_pile_count = int(snapshot.get("draw_pile_count", 0))
+	turn_number = int(snapshot.get("turn_number", 0))
+	played_category = str(snapshot.get("played_category", ""))
+	played_score = int(snapshot.get("played_score", 0))
 
 	_participants.clear()
 	var raw_seats: Variant = snapshot.get("seats", [])
@@ -83,6 +109,20 @@ func _on_game_room_state_changed(snapshot: Dictionary) -> void:
 		for raw_round: Variant in raw_rounds:
 			if raw_round is Dictionary:
 				_contest_rounds.append(raw_round.duplicate(true))
+
+	_played_cards.clear()
+	var raw_played_cards: Variant = snapshot.get("played_cards", [])
+	if raw_played_cards is Array:
+		for raw_card: Variant in raw_played_cards:
+			if raw_card is Dictionary:
+				_played_cards.append(raw_card.duplicate(true))
+
+	_play_events.clear()
+	var raw_play_events: Variant = snapshot.get("play_events", [])
+	if raw_play_events is Array:
+		for raw_event: Variant in raw_play_events:
+			if raw_event is Dictionary:
+				_play_events.append(raw_event.duplicate(true))
 
 	state_changed.emit()
 	if status == "started" and not _activated:
@@ -121,8 +161,13 @@ func _on_game_room_left(code: int, reason: String) -> void:
 	phase = ""
 	actor_seat_index = -1
 	draw_pile_count = 0
+	turn_number = 0
+	played_category = ""
+	played_score = 0
 	_participants.clear()
 	_contest_rounds.clear()
+	_played_cards.clear()
+	_play_events.clear()
 	_local_hand.clear()
 	_activated = false
 	state_changed.emit()

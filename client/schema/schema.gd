@@ -39,6 +39,19 @@ class PointContestRoundState extends Colyseus.Schema:
 	func _to_string() -> String:
 		return "PointContestRoundState(__ref_id: %s, roundIndex: %s, reveals: %s, tiedSeatIndexes: %s, winnerSeatIndex: %s)" % [self.__ref_id, self.roundIndex, self.reveals, self.tiedSeatIndexes, self.winnerSeatIndex]
 
+class PlayEventState extends Colyseus.Schema:
+	static func definition():
+		return [
+			Colyseus.Schema.Field.new("turnNumber", Colyseus.Schema.UINT16),
+			Colyseus.Schema.Field.new("actorSeatIndex", Colyseus.Schema.UINT8),
+			Colyseus.Schema.Field.new("cards", Colyseus.Schema.ARRAY, PublicCardState),
+			Colyseus.Schema.Field.new("category", Colyseus.Schema.STRING),
+			Colyseus.Schema.Field.new("score", Colyseus.Schema.UINT8),
+		]
+
+	func _to_string() -> String:
+		return "PlayEventState(__ref_id: %s, turnNumber: %s, actorSeatIndex: %s, cards: %s, category: %s, score: %s)" % [self.__ref_id, self.turnNumber, self.actorSeatIndex, self.cards, self.category, self.score]
+
 class ParticipantSeat extends Colyseus.Schema:
 	static func definition():
 		return [
@@ -66,9 +79,14 @@ class GameRoomState extends Colyseus.Schema:
 			Colyseus.Schema.Field.new("actorSeatIndex", Colyseus.Schema.INT8),
 			Colyseus.Schema.Field.new("firstActorSeatIndex", Colyseus.Schema.INT8),
 			Colyseus.Schema.Field.new("drawPileCount", Colyseus.Schema.UINT8),
+			Colyseus.Schema.Field.new("turnNumber", Colyseus.Schema.UINT16),
+			Colyseus.Schema.Field.new("playedCards", Colyseus.Schema.ARRAY, PublicCardState),
+			Colyseus.Schema.Field.new("playedCategory", Colyseus.Schema.STRING),
+			Colyseus.Schema.Field.new("playedScore", Colyseus.Schema.UINT8),
 			Colyseus.Schema.Field.new("seats", Colyseus.Schema.ARRAY, ParticipantSeat),
 			Colyseus.Schema.Field.new("contestRounds", Colyseus.Schema.ARRAY, PointContestRoundState),
+			Colyseus.Schema.Field.new("playEvents", Colyseus.Schema.ARRAY, PlayEventState),
 		]
 
 	func _to_string() -> String:
-		return "GameRoomState(__ref_id: %s, status: %s, displayName: %s, deckMode: %s, actionDeadlineSeconds: %s, hostParticipantId: %s, phase: %s, actorSeatIndex: %s, firstActorSeatIndex: %s, drawPileCount: %s, seats: %s, contestRounds: %s)" % [self.__ref_id, self.status, self.displayName, self.deckMode, self.actionDeadlineSeconds, self.hostParticipantId, self.phase, self.actorSeatIndex, self.firstActorSeatIndex, self.drawPileCount, self.seats, self.contestRounds]
+		return "GameRoomState(__ref_id: %s, status: %s, displayName: %s, deckMode: %s, actionDeadlineSeconds: %s, hostParticipantId: %s, phase: %s, actorSeatIndex: %s, firstActorSeatIndex: %s, drawPileCount: %s, turnNumber: %s, playedCards: %s, playedCategory: %s, playedScore: %s, seats: %s, contestRounds: %s, playEvents: %s)" % [self.__ref_id, self.status, self.displayName, self.deckMode, self.actionDeadlineSeconds, self.hostParticipantId, self.phase, self.actorSeatIndex, self.firstActorSeatIndex, self.drawPileCount, self.turnNumber, self.playedCards, self.playedCategory, self.playedScore, self.seats, self.contestRounds, self.playEvents]
