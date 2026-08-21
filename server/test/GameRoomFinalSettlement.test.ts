@@ -33,6 +33,16 @@ function tickClock(serverRoom: GameRoom, elapsedMilliseconds: number): void {
   serverRoom.clock.tick();
 }
 
+async function waitUntil(condition: () => boolean, timeoutMilliseconds = 1000): Promise<void> {
+  const deadline = Date.now() + timeoutMilliseconds;
+  while (!condition()) {
+    if (Date.now() >= deadline) {
+      throw new Error("timed out waiting for synchronized room state");
+    }
+    await new Promise((resolve) => setTimeout(resolve, 10));
+  }
+}
+
 async function startFinalCommit(colyseus: ColyseusTestServer<typeof appConfig>) {
   const host = await colyseus.sdk.create("game", {
     nickname: "甲",
@@ -108,6 +118,11 @@ async function startFinalCommit(colyseus: ColyseusTestServer<typeof appConfig>) 
   }
 
   assert.strictEqual(serverRoom.state.phase, "final_commit");
+  assert.strictEqual(serverRoom.state.actorSeatIndex, -1);
+  await Promise.all(participants.map((participant) => waitUntil(() => (
+    participant.state.phase === "final_commit"
+    && participant.state.actorSeatIndex === -1
+  ))));
   assert.strictEqual(serverRoom.state.sealedCardCount, 2);
   return { participants, serverRoom, privateStates };
 }
@@ -221,6 +236,7 @@ describe("game room final settlement", () => {
 
     const revealed = serverRoom.state.toJSON();
     assert.strictEqual(revealed.phase, "final_reveal");
+    assert.strictEqual(revealed.actorSeatIndex, -1);
     assert.strictEqual(revealed.finalResults.length, 4);
     assert.ok(revealed.finalResults.every((result: { groups: unknown[] }) => result.groups.length === 2));
     assert.ok(revealed.winnerSeatIndexes.length >= 1);
@@ -241,6 +257,7 @@ describe("game room final settlement", () => {
     tickClock(serverRoom, 900);
     await Promise.all(finishedMessages);
     assert.strictEqual(serverRoom.state.phase, "finished");
+    assert.strictEqual(serverRoom.state.actorSeatIndex, -1);
     assert.deepStrictEqual(serverRoom.state.toJSON().finalResults, revealed.finalResults);
     assert.deepStrictEqual(serverRoom.state.toJSON().winnerSeatIndexes, revealed.winnerSeatIndexes);
 

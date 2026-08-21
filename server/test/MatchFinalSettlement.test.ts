@@ -153,6 +153,7 @@ describe("match final settlement", () => {
 
     const revealed = engine.view(0).publicState;
     assert.strictEqual(revealed.phase, "final_reveal");
+    assert.strictEqual(revealed.actorSeatIndex, -1);
     assert.strictEqual(revealed.finalResults.length, 4);
     assert.strictEqual(revealed.events.filter((event) => event.type === "final_settlement").length, 1);
     assert.deepStrictEqual(
@@ -175,6 +176,7 @@ describe("match final settlement", () => {
     engine.completeFinalReveal();
     const finished = engine.view(0).publicState;
     assert.strictEqual(finished.phase, "finished");
+    assert.strictEqual(finished.actorSeatIndex, -1);
     assert.deepStrictEqual(
       finished.participants.map((participant) => participant.score),
       revealed.participants.map((participant) => participant.score),

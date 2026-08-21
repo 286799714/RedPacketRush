@@ -372,7 +372,7 @@ describe("match award discard and actor rotation", () => {
 
     const views = PARTICIPANTS.map(({ seatIndex }) => engine.view(seatIndex));
     const state = views[0].publicState;
-    assert.strictEqual(state.actorSeatIndex, actorSeatIndex);
+    assert.strictEqual(state.actorSeatIndex, -1);
     assert.strictEqual(state.drawPileCount, 0);
     assert.strictEqual(state.sealedCardCount, 2);
     assert.strictEqual(state.discardedCards.length, 18);

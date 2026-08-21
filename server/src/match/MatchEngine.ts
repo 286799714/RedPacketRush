@@ -784,6 +784,7 @@ export class MatchEngine {
     this.playedScore = 0;
     if (this.drawPile.length < 3) {
       this.sealedCards.push(...this.drawPile.splice(0));
+      this.actorSeatIndex = -1;
       this.phase = "final_commit";
     } else {
       this.phase = "actor_play";
