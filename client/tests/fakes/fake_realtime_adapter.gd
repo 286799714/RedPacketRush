@@ -94,5 +94,19 @@ func discard_card(card_id: String, turn_number: int) -> void:
 	})
 
 
+func submit_final_selection(groups: Array) -> void:
+	room_requests.append({
+		"type": "final_selection",
+		"payload": {"mode": "manual", "groups": groups.duplicate(true)},
+	})
+
+
+func submit_best_final_selection() -> void:
+	room_requests.append({
+		"type": "final_selection",
+		"payload": {"mode": "best"},
+	})
+
+
 func leave_game_room() -> void:
 	leave_game_room_requests += 1

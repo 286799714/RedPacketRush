@@ -18,11 +18,14 @@ func _run() -> void:
 	_test_public_claim_progress_is_not_retained()
 	_test_public_claim_event_history_is_retained_deep_copied_and_cleared()
 	_test_public_discard_state_is_retained_deep_copied_and_cleared()
+	_test_public_final_settlement_is_retained_deep_copied_and_cleared()
 	_test_play_cards_intention_is_forwarded_without_optimistic_state()
 	_test_claim_intention_is_forwarded_without_optimistic_state()
 	_test_discard_intention_is_forwarded_without_optimistic_state()
+	_test_final_selection_intentions_are_forwarded_without_optimistic_state()
 	_test_only_targeted_private_hand_is_retained()
 	_test_only_targeted_private_claim_confirmation_is_retained()
+	_test_only_targeted_private_final_confirmation_is_retained()
 	_test_room_errors_and_connection_changes_are_exposed()
 	_test_leave_clears_match_and_allows_next_room_activation()
 
@@ -247,6 +250,71 @@ func _test_public_discard_state_is_retained_deep_copied_and_cleared() -> void:
 	_expect_equal(match_store.get_discard_events(), [], "新房间快照清空弃牌事件")
 
 
+func _test_public_final_settlement_is_retained_deep_copied_and_cleared() -> void:
+	var adapter := FakeRealtimeAdapter.new()
+	var match_store := MatchStore.new(adapter)
+	for method_name in ["get_final_results", "get_winner_seat_indexes", "get_final_events"]:
+		if not match_store.has_method(method_name):
+			_failures.append("MatchStore 应公开 %s 的只读副本" % method_name)
+			return
+	var result := {
+		"seat_index": 0,
+		"groups": [
+			{
+				"cards": [
+					_card("hearts-q", 12, "hearts", 0),
+					_card("hearts-k", 13, "hearts", 0),
+					_card("hearts-a", 14, "hearts", 0),
+				],
+				"category": "straight_flush",
+				"score": 10,
+			},
+			{
+				"cards": [
+					_card("clubs-2", 2, "clubs", 0),
+					_card("spades-2", 2, "spades", 0),
+					_card("diamonds-7", 7, "diamonds", 0),
+				],
+				"category": "pair",
+				"score": 2,
+			},
+		],
+		"total_score": 22,
+	}
+	var event := {
+		"type": "final_settlement",
+		"results": [result],
+		"winner_seat_indexes": [0],
+	}
+	var snapshot := _started_snapshot("room-a", "human-a", 0)
+	snapshot["phase"] = "final_reveal"
+	snapshot["final_results"] = [result]
+	snapshot["winner_seat_indexes"] = [0]
+	snapshot["final_events"] = [event]
+	snapshot["final_committed"] = true
+	snapshot["final_groups"] = [["forged-a", "forged-b", "forged-c"]]
+	adapter.publish_game_room_state(snapshot)
+
+	var returned_results: Array[Dictionary] = match_store.get_final_results()
+	returned_results[0]["groups"][0]["cards"][0]["rank"] = 2
+	returned_results.clear()
+	_expect_equal(match_store.get_final_results(), [result], "终局结果嵌套深拷贝")
+	var returned_winners: Array[int] = match_store.get_winner_seat_indexes()
+	returned_winners.clear()
+	_expect_equal(match_store.get_winner_seat_indexes(), [0], "共同胜者席位深拷贝")
+	var returned_events: Array[Dictionary] = match_store.get_final_events()
+	returned_events[0]["results"].clear()
+	returned_events.clear()
+	_expect_equal(match_store.get_final_events(), [event], "终局事件嵌套深拷贝")
+	_expect_equal(match_store.get("final_committed"), false, "公共快照不能确认本地最终选择")
+	_expect_equal(match_store.get_final_groups(), [], "公共快照不能写入本地最终分组")
+
+	adapter.publish_game_room_left(4000, "主动离开")
+	_expect_equal(match_store.get_final_results(), [], "离房清空终局结果")
+	_expect_equal(match_store.get_winner_seat_indexes(), [], "离房清空共同胜者")
+	_expect_equal(match_store.get_final_events(), [], "离房清空终局事件")
+
+
 func _test_play_cards_intention_is_forwarded_without_optimistic_state() -> void:
 	var adapter := FakeRealtimeAdapter.new()
 	var match_store := MatchStore.new(adapter)
@@ -332,6 +400,48 @@ func _test_discard_intention_is_forwarded_without_optimistic_state() -> void:
 	_expect_equal(match_store.phase, "award_discard", "发送后不乐观推进阶段")
 
 
+func _test_final_selection_intentions_are_forwarded_without_optimistic_state() -> void:
+	var adapter := FakeRealtimeAdapter.new()
+	var match_store := MatchStore.new(adapter)
+	if (
+		not match_store.has_method("submit_final_selection")
+		or not match_store.has_method("submit_best_final_selection")
+	):
+		_failures.append("MatchStore 应公开手动与最佳最终选择意图")
+		return
+	var snapshot := _started_snapshot("room-a", "human-a", 0)
+	snapshot["phase"] = "final_commit"
+	adapter.publish_game_room_state(snapshot)
+	adapter.publish_match_private_state({
+		"participant_id": "human-a",
+		"hand": [],
+		"final_committed": false,
+		"final_groups": [],
+	})
+	var groups := [
+		["clubs-2", "clubs-3", "clubs-4"],
+		["hearts-q", "hearts-k", "hearts-a"],
+	]
+
+	match_store.submit_final_selection(groups)
+	match_store.submit_best_final_selection()
+
+	_expect_equal(adapter.room_requests, [
+		{
+			"type": "final_selection",
+			"payload": {"mode": "manual", "groups": groups},
+		},
+		{
+			"type": "final_selection",
+			"payload": {"mode": "best"},
+		},
+	], "最终选择意图转发到 adapter")
+	_expect_equal(match_store.final_committed, false, "发送后等待权威最终确认")
+	_expect_equal(match_store.get_final_groups(), [], "发送后不乐观写入最终分组")
+	_expect_equal(match_store.get_final_results(), [], "发送后不乐观生成终局结果")
+	_expect_equal(match_store.phase, "final_commit", "发送后不乐观推进最终阶段")
+
+
 func _test_only_targeted_private_hand_is_retained() -> void:
 	var adapter := FakeRealtimeAdapter.new()
 	var match_store := MatchStore.new(adapter)
@@ -400,6 +510,45 @@ func _test_only_targeted_private_claim_confirmation_is_retained() -> void:
 	})
 	_expect_equal(match_store.get("claim_committed"), false, "权威私信重置抢牌确认")
 	_expect_equal(match_store.get("claim_card_id"), null, "权威私信清空抢牌选择")
+
+
+func _test_only_targeted_private_final_confirmation_is_retained() -> void:
+	var adapter := FakeRealtimeAdapter.new()
+	var match_store := MatchStore.new(adapter)
+	adapter.publish_game_room_state(_started_snapshot("room-a", "human-a", 0))
+	var groups := [
+		["clubs-2", "clubs-3", "clubs-4"],
+		["hearts-q", "hearts-k", "hearts-a"],
+	]
+	adapter.publish_match_private_state({
+		"participant_id": "human-b",
+		"hand": [],
+		"final_committed": true,
+		"final_groups": groups,
+	})
+	_expect_equal(match_store.final_committed, false, "忽略其他参与者最终确认")
+	_expect_equal(match_store.get_final_groups(), [], "忽略其他参与者最终分组")
+
+	adapter.publish_match_private_state({
+		"participant_id": "human-a",
+		"hand": [],
+		"final_committed": true,
+		"final_groups": groups,
+	})
+	_expect_equal(match_store.final_committed, true, "保存本地定向最终确认")
+	var returned_groups: Array = match_store.get_final_groups()
+	returned_groups[0][0] = "tampered"
+	returned_groups.clear()
+	_expect_equal(match_store.get_final_groups(), groups, "本地最终分组嵌套深拷贝")
+
+	adapter.publish_match_private_state({
+		"participant_id": "human-a",
+		"hand": [],
+		"final_committed": false,
+		"final_groups": [],
+	})
+	_expect_equal(match_store.final_committed, false, "权威私信重置最终确认")
+	_expect_equal(match_store.get_final_groups(), [], "权威私信清空最终分组")
 
 
 func _test_room_errors_and_connection_changes_are_exposed() -> void:

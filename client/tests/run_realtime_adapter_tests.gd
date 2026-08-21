@@ -18,14 +18,17 @@ func _run() -> void:
 	_test_play_cards_intention_is_sent_to_active_room()
 	_test_claim_intentions_are_sent_to_active_room()
 	_test_discard_intention_is_sent_to_active_room()
+	_test_final_selection_intentions_are_sent_to_active_room()
 	_test_match_public_state_is_normalized_without_private_fields()
 	_test_public_play_state_is_normalized_from_whitelisted_fields()
 	_test_public_claim_reveal_is_normalized_from_whitelisted_fields()
 	_test_public_discard_history_is_not_truncated_to_one_turn()
 	_test_claim_event_history_is_normalized_from_whitelisted_fields()
 	_test_public_discard_state_is_normalized_from_whitelisted_fields()
+	_test_public_final_settlement_is_normalized_without_private_progress()
 	_test_only_local_match_private_state_is_normalized()
 	_test_local_claim_confirmation_is_normalized_privately()
+	_test_local_final_confirmation_is_normalized_privately()
 
 	if _failures.is_empty():
 		print("PASS: realtime adapter lifecycle tests")
@@ -202,6 +205,41 @@ func _test_discard_intention_is_sent_to_active_room() -> void:
 		"type": "discard",
 		"data": {"cardId": "original-clubs-2", "turnNumber": 6},
 	}], "弃牌意图应发送原手牌的物理牌标识")
+	adapter.queue_free()
+
+
+func _test_final_selection_intentions_are_sent_to_active_room() -> void:
+	var adapter := _new_adapter()
+	var client := FakeColyseusClient.new()
+	adapter._client = client
+	var room := client.queue_join_room("match-room")
+	adapter.join_game_room("match-room", "甲")
+	room.emit_joined()
+	if (
+		not adapter.has_method("submit_final_selection")
+		or not adapter.has_method("submit_best_final_selection")
+	):
+		_failures.append("Adapter 应公开手动与最佳最终选择意图")
+		adapter.queue_free()
+		return
+	var groups := [
+		["clubs-2", "clubs-3", "clubs-4"],
+		["hearts-q", "hearts-k", "hearts-a"],
+	]
+
+	adapter.submit_final_selection(groups)
+	adapter.submit_best_final_selection()
+
+	_expect_equal(room.sent_messages, [
+		{
+			"type": "final_selection",
+			"data": {"mode": "manual", "groups": groups},
+		},
+		{
+			"type": "final_selection",
+			"data": {"mode": "best"},
+		},
+	], "最终选择意图应保留物理牌标识并区分手动与最佳模式")
 	adapter.queue_free()
 
 
@@ -386,6 +424,8 @@ func _test_only_local_match_private_state_is_normalized() -> void:
 		}],
 		"claim_committed": false,
 		"claim_card_id": null,
+		"final_committed": false,
+		"final_groups": [],
 	}], "仅规范化本地参与者私有手牌")
 	adapter.queue_free()
 
@@ -423,7 +463,52 @@ func _test_local_claim_confirmation_is_normalized_privately() -> void:
 		"hand": [],
 		"claim_committed": true,
 		"claim_card_id": "copy-0:hearts:14",
+		"final_committed": false,
+		"final_groups": [],
 	}], "只规范化本地抢牌确认且不泄露额外字段")
+	adapter.queue_free()
+
+
+func _test_local_final_confirmation_is_normalized_privately() -> void:
+	var adapter := _new_adapter()
+	var client := FakeColyseusClient.new()
+	adapter._client = client
+	var observed: Array[Dictionary] = []
+	adapter.match_private_state_changed.connect(
+		func(snapshot: Dictionary): observed.append(snapshot)
+	)
+	var room := client.queue_join_room("private-room")
+	adapter.join_game_room("private-room", "甲")
+	room.emit_joined()
+	var groups := [
+		["clubs-2", "clubs-3", "clubs-4"],
+		["hearts-q", "hearts-k", "hearts-a"],
+	]
+	room.message_received.emit("match_private_state", {
+		"participantId": "session-a",
+		"seatIndex": 0,
+		"hand": [],
+		"finalCommitted": true,
+		"finalGroups": groups,
+		"otherFinalSelection": "must-not-pass",
+	})
+	room.message_received.emit("match_private_state", {
+		"participantId": "session-b",
+		"seatIndex": 1,
+		"hand": [],
+		"finalCommitted": true,
+		"finalGroups": [["other-a", "other-b", "other-c"], ["other-d", "other-e", "other-f"]],
+	})
+
+	_expect_equal(observed, [{
+		"participant_id": "session-a",
+		"seat_index": 0,
+		"hand": [],
+		"claim_committed": false,
+		"claim_card_id": null,
+		"final_committed": true,
+		"final_groups": groups,
+	}], "只规范化本地最终选择确认且不泄露额外字段")
 	adapter.queue_free()
 
 
@@ -598,6 +683,96 @@ func _test_public_discard_state_is_normalized_from_whitelisted_fields() -> void:
 			"card": _card("original-spades-3", 3, "spades", 0),
 		},
 	], "弃牌事件按回合和席位规范化且只保留公开字段")
+	adapter.queue_free()
+
+
+func _test_public_final_settlement_is_normalized_without_private_progress() -> void:
+	var adapter := _new_adapter()
+	var client := FakeColyseusClient.new()
+	adapter._client = client
+	var observed := {"snapshot": {}}
+	adapter.game_room_state_changed.connect(
+		func(snapshot: Dictionary): observed["snapshot"] = snapshot
+	)
+	var room := client.queue_join_room("final-room")
+	adapter.join_game_room("final-room", "甲")
+	room.emit_joined()
+	var raw_result := {
+		"seatIndex": 0,
+		"groups": [
+			{
+				"cards": [
+					_raw_card("hearts-q", 12, "hearts", 0, "drop"),
+					_raw_card("hearts-k", 13, "hearts", 0, "drop"),
+					_raw_card("hearts-a", 14, "hearts", 0, "drop"),
+				],
+				"category": "straight_flush",
+				"score": 10,
+				"privateChoice": "drop",
+			},
+			{
+				"cards": [
+					_raw_card("clubs-2", 2, "clubs", 0),
+					_raw_card("spades-2", 2, "spades", 0),
+					_raw_card("diamonds-7", 7, "diamonds", 0),
+				],
+				"category": "pair",
+				"score": 2,
+			},
+		],
+		"totalScore": 22,
+		"selectionOwner": "drop",
+	}
+	var raw_final_event := {
+		"results": [raw_result],
+		"winnerSeatIndexes": [0],
+	}
+	room.emit_state({
+		"status": "started",
+		"phase": "final_reveal",
+		"finalResults": [raw_result],
+		"winnerSeatIndexes": [0, 0, 9],
+		"finalEvents": [raw_final_event, raw_final_event],
+		"finalCommitted": true,
+		"finalGroups": [["hearts-q", "hearts-k", "hearts-a"]],
+		"finalSelections": {"other": "must-not-pass"},
+	})
+
+	var expected_result := {
+		"seat_index": 0,
+		"groups": [
+			{
+				"cards": [
+					_card("hearts-q", 12, "hearts", 0),
+					_card("hearts-k", 13, "hearts", 0),
+					_card("hearts-a", 14, "hearts", 0),
+				],
+				"category": "straight_flush",
+				"score": 10,
+			},
+			{
+				"cards": [
+					_card("clubs-2", 2, "clubs", 0),
+					_card("spades-2", 2, "spades", 0),
+					_card("diamonds-7", 7, "diamonds", 0),
+				],
+				"category": "pair",
+				"score": 2,
+			},
+		],
+		"total_score": 22,
+	}
+	var snapshot: Dictionary = observed["snapshot"]
+	_expect_equal(snapshot.get("final_results"), [expected_result], "终局结果仅保留公开白名单")
+	_expect_equal(snapshot.get("winner_seat_indexes"), [0], "共同胜者席位规范化并去重")
+	_expect_equal(snapshot.get("final_events"), [{
+		"type": "final_settlement",
+		"results": [expected_result],
+		"winner_seat_indexes": [0],
+	}], "终局事件补齐领域类型、去重解码尾部并保留权威结果")
+	_expect_equal(snapshot.has("final_committed"), false, "公共快照忽略终局提交确认")
+	_expect_equal(snapshot.has("final_groups"), false, "公共快照忽略终局私有分组")
+	_expect_equal(snapshot.has("final_selections"), false, "公共快照忽略其他参与者选择")
 	adapter.queue_free()
 
 

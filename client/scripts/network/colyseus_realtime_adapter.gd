@@ -143,6 +143,17 @@ func discard_card(card_id: String, turn_number: int) -> void:
 	})
 
 
+func submit_final_selection(groups: Array) -> void:
+	_send_game_room_message("final_selection", {
+		"mode": "manual",
+		"groups": groups.duplicate(true),
+	})
+
+
+func submit_best_final_selection() -> void:
+	_send_game_room_message("final_selection", {"mode": "best"})
+
+
 func _exit_tree() -> void:
 	disconnect_game_room()
 	disconnect_lobby(false)
@@ -510,6 +521,9 @@ func _normalize_game_room_state(raw_state: Variant, room: Variant) -> Dictionary
 		),
 		"claim_events": _normalize_claim_events(raw_state.get("claimEvents", [])),
 		"discard_events": _normalize_discard_events(raw_state.get("discardEvents", [])),
+		"final_results": _normalize_final_results(raw_state.get("finalResults", [])),
+		"winner_seat_indexes": _normalize_seat_indexes(raw_state.get("winnerSeatIndexes", [])),
+		"final_events": _normalize_final_events(raw_state.get("finalEvents", [])),
 		"seats": seats,
 		"contest_rounds": _normalize_contest_rounds(raw_state.get("contestRounds", [])),
 	}
@@ -784,6 +798,110 @@ func _discard_event_before(left: Dictionary, right: Dictionary) -> bool:
 	return left_turn < right_turn
 
 
+func _normalize_final_results(raw_results: Variant) -> Array[Dictionary]:
+	var results_by_seat: Dictionary = {}
+	if not raw_results is Array:
+		return []
+	for raw_result: Variant in raw_results:
+		raw_result = _dictionary_from_schema(raw_result)
+		if not raw_result is Dictionary:
+			continue
+		var seat_index := int(raw_result.get("seatIndex", -1))
+		var raw_groups: Variant = raw_result.get("groups", [])
+		if seat_index < 0 or seat_index >= ROOM_SEAT_COUNT or not raw_groups is Array:
+			continue
+		if raw_groups.size() != 2:
+			continue
+		var groups: Array[Dictionary] = []
+		var selected_card_ids: Dictionary = {}
+		var valid := true
+		for raw_group: Variant in raw_groups:
+			raw_group = _dictionary_from_schema(raw_group)
+			if not raw_group is Dictionary:
+				valid = false
+				break
+			var cards := _normalize_public_cards(raw_group.get("cards", []), 3)
+			var category := _normalize_combination_category(raw_group.get("category", ""))
+			if cards.size() != 3 or category.is_empty():
+				valid = false
+				break
+			for card in cards:
+				var card_id := str(card.get("id", ""))
+				if selected_card_ids.has(card_id):
+					valid = false
+					break
+				selected_card_ids[card_id] = true
+			if not valid:
+				break
+			groups.append({
+				"cards": cards,
+				"category": category,
+				"score": maxi(0, int(raw_group.get("score", 0))),
+			})
+		if not valid or groups.size() != 2:
+			continue
+		results_by_seat[seat_index] = {
+			"seat_index": seat_index,
+			"groups": groups,
+			"total_score": maxi(0, int(raw_result.get("totalScore", 0))),
+		}
+	var results: Array[Dictionary] = []
+	var seat_indexes := results_by_seat.keys()
+	seat_indexes.sort()
+	for seat_index: Variant in seat_indexes:
+		results.append(results_by_seat[seat_index])
+	return results
+
+
+func _normalize_final_events(raw_events: Variant) -> Array[Dictionary]:
+	if not raw_events is Array:
+		return []
+	var latest_event: Dictionary = {}
+	for raw_event: Variant in raw_events:
+		raw_event = _dictionary_from_schema(raw_event)
+		if not raw_event is Dictionary:
+			continue
+		var results := _normalize_final_results(raw_event.get("results", []))
+		var winner_seat_indexes := _normalize_seat_indexes(
+			raw_event.get("winnerSeatIndexes", [])
+		)
+		if results.is_empty() or winner_seat_indexes.is_empty():
+			continue
+		latest_event = {
+			"type": "final_settlement",
+			"results": results,
+			"winner_seat_indexes": winner_seat_indexes,
+		}
+	if latest_event.is_empty():
+		return []
+	return [latest_event]
+
+
+func _normalize_final_groups(raw_groups: Variant) -> Array:
+	if not raw_groups is Array:
+		return []
+	if raw_groups.is_empty():
+		return []
+	if raw_groups.size() != 2:
+		return []
+	var groups: Array = []
+	var selected_card_ids: Dictionary = {}
+	for raw_group: Variant in raw_groups:
+		if not raw_group is Array or raw_group.size() != 3:
+			return []
+		var group: Array[String] = []
+		for raw_card_id: Variant in raw_group:
+			if not raw_card_id is String:
+				return []
+			var card_id := str(raw_card_id)
+			if card_id.is_empty() or selected_card_ids.has(card_id):
+				return []
+			selected_card_ids[card_id] = true
+			group.append(card_id)
+		groups.append(group)
+	return groups
+
+
 func _normalize_match_private_state(raw_state: Variant, room: Variant) -> Dictionary:
 	raw_state = _dictionary_from_schema(raw_state)
 	if not raw_state is Dictionary:
@@ -814,6 +932,8 @@ func _normalize_match_private_state(raw_state: Variant, room: Variant) -> Dictio
 		"hand": hand,
 		"claim_committed": bool(raw_state.get("claimCommitted", false)),
 		"claim_card_id": claim_card_id,
+		"final_committed": bool(raw_state.get("finalCommitted", false)),
+		"final_groups": _normalize_final_groups(raw_state.get("finalGroups", [])),
 	}
 
 

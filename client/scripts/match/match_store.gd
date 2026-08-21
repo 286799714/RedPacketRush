@@ -21,6 +21,7 @@ var played_category := ""
 var played_score := 0
 var claim_committed := false
 var claim_card_id: Variant = null
+var final_committed := false
 
 var _adapter: Object
 var _participants: Array[Dictionary] = []
@@ -30,7 +31,11 @@ var _play_events: Array[Dictionary] = []
 var _claim_events: Array[Dictionary] = []
 var _discard_events: Array[Dictionary] = []
 var _pending_discard_seat_indexes: Array[int] = []
+var _final_results: Array[Dictionary] = []
+var _winner_seat_indexes: Array[int] = []
+var _final_events: Array[Dictionary] = []
 var _local_hand: Array[Dictionary] = []
+var _final_groups: Array = []
 var _activated := false
 
 
@@ -73,8 +78,24 @@ func get_pending_discard_seat_indexes() -> Array[int]:
 	return _pending_discard_seat_indexes.duplicate()
 
 
+func get_final_results() -> Array[Dictionary]:
+	return _duplicate_dictionary_array(_final_results)
+
+
+func get_winner_seat_indexes() -> Array[int]:
+	return _winner_seat_indexes.duplicate()
+
+
+func get_final_events() -> Array[Dictionary]:
+	return _duplicate_dictionary_array(_final_events)
+
+
 func get_local_hand() -> Array[Dictionary]:
 	return _duplicate_dictionary_array(_local_hand)
+
+
+func get_final_groups() -> Array:
+	return _final_groups.duplicate(true)
 
 
 func _duplicate_dictionary_array(source: Array[Dictionary]) -> Array[Dictionary]:
@@ -94,6 +115,14 @@ func claim_card(card_id: Variant) -> void:
 
 func discard_card(card_id: String, expected_turn_number: int) -> void:
 	_adapter.discard_card(card_id, expected_turn_number)
+
+
+func submit_final_selection(groups: Array) -> void:
+	_adapter.submit_final_selection(groups.duplicate(true))
+
+
+func submit_best_final_selection() -> void:
+	_adapter.submit_best_final_selection()
 
 
 func _on_game_room_state_changed(snapshot: Dictionary) -> void:
@@ -165,6 +194,26 @@ func _on_game_room_state_changed(snapshot: Dictionary) -> void:
 		for raw_seat_index: Variant in raw_pending_discard_seats:
 			_pending_discard_seat_indexes.append(int(raw_seat_index))
 
+	_final_results.clear()
+	var raw_final_results: Variant = snapshot.get("final_results", [])
+	if raw_final_results is Array:
+		for raw_result: Variant in raw_final_results:
+			if raw_result is Dictionary:
+				_final_results.append(raw_result.duplicate(true))
+
+	_winner_seat_indexes.clear()
+	var raw_winner_seat_indexes: Variant = snapshot.get("winner_seat_indexes", [])
+	if raw_winner_seat_indexes is Array:
+		for raw_seat_index: Variant in raw_winner_seat_indexes:
+			_winner_seat_indexes.append(int(raw_seat_index))
+
+	_final_events.clear()
+	var raw_final_events: Variant = snapshot.get("final_events", [])
+	if raw_final_events is Array:
+		for raw_event: Variant in raw_final_events:
+			if raw_event is Dictionary:
+				_final_events.append(raw_event.duplicate(true))
+
 	state_changed.emit()
 	if status == "started" and not _activated:
 		_activated = true
@@ -186,6 +235,11 @@ func _on_match_private_state_changed(snapshot: Dictionary) -> void:
 			_local_hand.append(raw_card.duplicate(true))
 	claim_committed = bool(snapshot.get("claim_committed", false))
 	claim_card_id = snapshot.get("claim_card_id", null)
+	final_committed = bool(snapshot.get("final_committed", false))
+	_final_groups.clear()
+	var raw_final_groups: Variant = snapshot.get("final_groups", [])
+	if raw_final_groups is Array:
+		_final_groups = raw_final_groups.duplicate(true)
 	private_state_changed.emit()
 
 
@@ -211,6 +265,7 @@ func _on_game_room_left(code: int, reason: String) -> void:
 	played_score = 0
 	claim_committed = false
 	claim_card_id = null
+	final_committed = false
 	_participants.clear()
 	_contest_rounds.clear()
 	_played_cards.clear()
@@ -218,7 +273,11 @@ func _on_game_room_left(code: int, reason: String) -> void:
 	_claim_events.clear()
 	_discard_events.clear()
 	_pending_discard_seat_indexes.clear()
+	_final_results.clear()
+	_winner_seat_indexes.clear()
+	_final_events.clear()
 	_local_hand.clear()
+	_final_groups.clear()
 	_activated = false
 	state_changed.emit()
 	private_state_changed.emit()

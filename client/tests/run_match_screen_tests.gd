@@ -9,10 +9,12 @@ class FakeMatchStore extends RefCounted:
 	signal state_changed()
 	signal private_state_changed()
 	signal action_failed(code: String, message: String)
+	signal final_selection_requested(mode: String, groups: Array)
 
 	var phase := "actor_play"
 	var actor_seat_index := 2
 	var draw_pile_count := 20
+	var sealed_card_count := 0
 	var room_id := "room-a"
 	var local_participant_id := "human-a"
 	var deck_mode := "one"
@@ -21,6 +23,7 @@ class FakeMatchStore extends RefCounted:
 	var played_score := 0
 	var claim_committed := false
 	var claim_card_id: Variant = null
+	var final_committed := false
 	var _participants: Array[Dictionary] = []
 	var _contest_rounds: Array[Dictionary] = []
 	var _played_cards: Array[Dictionary] = []
@@ -28,7 +31,11 @@ class FakeMatchStore extends RefCounted:
 	var _claim_events: Array[Dictionary] = []
 	var _discard_events: Array[Dictionary] = []
 	var _pending_discard_seat_indexes: Array[int] = []
+	var _final_results: Array[Dictionary] = []
+	var _winner_seat_indexes: Array[int] = []
+	var _final_events: Array[Dictionary] = []
 	var _local_hand: Array[Dictionary] = []
+	var _final_groups: Array = []
 	var play_requests: Array[Array] = []
 	var claim_requests: Array[Variant] = []
 	var discard_requests: Array[Dictionary] = []
@@ -57,6 +64,15 @@ class FakeMatchStore extends RefCounted:
 	func get_pending_discard_seat_indexes() -> Array[int]:
 		return _pending_discard_seat_indexes
 
+	func get_final_results() -> Array[Dictionary]:
+		return _final_results
+
+	func get_winner_seat_indexes() -> Array[int]:
+		return _winner_seat_indexes
+
+	func get_final_events() -> Array[Dictionary]:
+		return _final_events
+
 	func play_cards(card_ids: Array[String]) -> void:
 		play_requests.append(card_ids.duplicate())
 
@@ -65,6 +81,15 @@ class FakeMatchStore extends RefCounted:
 
 	func discard_card(card_id: String, turn_number: int) -> void:
 		discard_requests.append({"card_id": card_id, "turn_number": turn_number})
+
+	func get_final_groups() -> Array:
+		return _final_groups.duplicate(true)
+
+	func submit_final_selection(groups: Array) -> void:
+		final_selection_requested.emit("manual", groups.duplicate(true))
+
+	func submit_best_final_selection() -> void:
+		final_selection_requested.emit("best", [])
 
 	func apply_public_snapshot(snapshot: Dictionary) -> void:
 		if snapshot.has("room_id"):
@@ -79,6 +104,8 @@ class FakeMatchStore extends RefCounted:
 			actor_seat_index = int(snapshot["actor_seat_index"])
 		if snapshot.has("draw_pile_count"):
 			draw_pile_count = int(snapshot["draw_pile_count"])
+		if snapshot.has("sealed_card_count"):
+			sealed_card_count = int(snapshot["sealed_card_count"])
 		if snapshot.has("turn_number"):
 			turn_number = int(snapshot["turn_number"])
 		if snapshot.has("played_category"):
@@ -91,12 +118,20 @@ class FakeMatchStore extends RefCounted:
 		_apply_dictionary_array(snapshot, "play_events", _play_events)
 		_apply_dictionary_array(snapshot, "claim_events", _claim_events)
 		_apply_dictionary_array(snapshot, "discard_events", _discard_events)
+		_apply_dictionary_array(snapshot, "final_results", _final_results)
+		_apply_dictionary_array(snapshot, "final_events", _final_events)
 		if snapshot.has("pending_discard_seat_indexes"):
 			_pending_discard_seat_indexes.clear()
 			var raw_pending_seats: Variant = snapshot["pending_discard_seat_indexes"]
 			if raw_pending_seats is Array:
 				for raw_seat_index: Variant in raw_pending_seats:
 					_pending_discard_seat_indexes.append(int(raw_seat_index))
+		if snapshot.has("winner_seat_indexes"):
+			_winner_seat_indexes.clear()
+			var raw_winners: Variant = snapshot["winner_seat_indexes"]
+			if raw_winners is Array:
+				for raw_seat_index: Variant in raw_winners:
+					_winner_seat_indexes.append(int(raw_seat_index))
 		state_changed.emit()
 
 	func apply_private_snapshot(snapshot: Dictionary) -> void:
@@ -105,6 +140,10 @@ class FakeMatchStore extends RefCounted:
 			claim_committed = bool(snapshot["claim_committed"])
 		if snapshot.has("claim_card_id"):
 			claim_card_id = snapshot["claim_card_id"]
+		if snapshot.has("final_committed"):
+			final_committed = bool(snapshot["final_committed"])
+		if snapshot.has("final_groups"):
+			_final_groups = snapshot["final_groups"].duplicate(true)
 		private_state_changed.emit()
 
 	func reject_action(code: String, message: String) -> void:
@@ -197,6 +236,9 @@ func _run() -> void:
 	await _test_two_deck_physical_cards_are_distinguishable_at_960(screen, store)
 	await _test_award_recipient_discards_an_original_card(screen, store)
 	await _test_discard_rejection_and_non_recipient_waiting(screen, store)
+	await _test_final_group_editor_locks_exactly_two_groups(screen, store)
+	await _test_best_final_selection_waits_for_authority(screen, store)
+	await _test_final_reveal_and_finished_ranking_are_authoritative(screen, store)
 	await _test_rejected_claim_reenables_controls_without_moving_layout(screen, store)
 	await _test_action_error_is_visible_without_moving_controls(screen, store)
 	await _test_unbinding_store_clears_pending_claim_controls(screen, store)
@@ -875,7 +917,7 @@ func _test_discard_rejection_and_non_recipient_waiting(
 	await process_frame
 	await process_frame
 	_expect(_find_visible_label_containing(screen, "阶段：最终结算") != null, "牌堆耗尽后显示最终选择阶段")
-	_expect(_find_visible_label_containing(screen, "选择两组不重叠") != null, "最终选择阶段显示下一步状态")
+	_expect(_find_visible_label_containing(screen, "A/B 各选 3 张") != null, "最终选择阶段显示下一步状态")
 	_expect(_find_visible_button(screen, "弃牌") == null, "最终选择阶段不残留弃牌命令")
 	store.apply_public_snapshot({
 		"phase": "actor_play",
@@ -883,6 +925,267 @@ func _test_discard_rejection_and_non_recipient_waiting(
 		"pending_discard_seat_indexes": [],
 		"claim_events": [],
 	})
+
+
+func _test_final_group_editor_locks_exactly_two_groups(
+	screen: MatchScreen,
+	store: FakeMatchStore
+) -> void:
+	var observed_requests: Array[Dictionary] = []
+	var observe_request := func(mode: String, groups: Array) -> void:
+		observed_requests.append({"mode": mode, "groups": groups.duplicate(true)})
+	store.final_selection_requested.connect(observe_request)
+	store.apply_public_snapshot({
+		"room_id": "final-editor-room",
+		"phase": "final_commit",
+		"actor_seat_index": -1,
+		"draw_pile_count": 0,
+		"sealed_card_count": 2,
+		"pending_discard_seat_indexes": [],
+		"played_cards": [],
+		"final_results": [],
+		"winner_seat_indexes": [],
+		"final_events": [],
+	})
+	store.apply_private_snapshot({
+		"hand": _final_hand(),
+		"final_committed": false,
+		"final_groups": [],
+	})
+	await process_frame
+	await process_frame
+
+	_expect(_find_visible_label_containing(screen, "牌堆 0 · 封存 2") != null, "终局顶栏同时显示空牌堆和封存牌")
+	var group_a_button := _find_visible_button(screen, "A 组")
+	var group_b_button := _find_visible_button(screen, "B 组")
+	var lock_button := _find_visible_button(screen, "锁定分组")
+	var best_button := _find_visible_button(screen, "最佳并锁定")
+	if group_a_button == null or group_b_button == null or lock_button == null or best_button == null:
+		_failures.append("最终选择阶段应提供 A/B 分组、锁定和最佳选择命令")
+		store.final_selection_requested.disconnect(observe_request)
+		return
+	_expect(group_a_button.button_pressed, "进入终局时默认编辑 A 组")
+	_expect(lock_button.disabled, "未完成 3+3 分组时不能锁定")
+	var editor_prompt := _find_visible_label_containing(screen, "最终结算：A/B 各选 3 张")
+	if editor_prompt != null:
+		var prompt_rect := editor_prompt.get_global_rect()
+		_expect(prompt_rect.position.x >= 0.0 and prompt_rect.end.x <= 960.0, "960x540 终局短提示完整位于视口内")
+	for rank in [2, 3, 4]:
+		var card_button := _find_visible_button_with_content(screen, "%d♣" % rank)
+		if card_button != null:
+			card_button.button_pressed = true
+			await process_frame
+	group_b_button = _find_visible_button(screen, "B 组")
+	group_b_button.button_pressed = true
+	for rank in [5, 6, 7]:
+		var card_button := _find_visible_button_with_content(screen, "%d♠" % rank)
+		if card_button != null:
+			card_button.button_pressed = true
+			await process_frame
+
+	lock_button = _find_visible_button(screen, "锁定分组")
+	_expect(lock_button != null and not lock_button.disabled, "A/B 各三张且不重叠时启用锁定")
+	var group_a_card := _find_visible_button_with_content(screen, "2♣")
+	var group_b_card := _find_visible_button_with_content(screen, "5♠")
+	_expect(group_a_card != null and _node_text(group_a_card).contains("A组"), "A 组牌显示可见 badge")
+	_expect(group_b_card != null and _node_text(group_b_card).contains("B组"), "B 组牌显示可见 badge")
+	store.apply_public_snapshot({"draw_pile_count": 0})
+	await process_frame
+	await process_frame
+	lock_button = _find_visible_button(screen, "锁定分组")
+	_expect(lock_button != null and not lock_button.disabled, "普通权威刷新不擦除本地最终分组")
+	group_a_card = _find_visible_button_with_content(screen, "2♣")
+	group_b_card = _find_visible_button_with_content(screen, "5♠")
+	_expect(group_a_card != null and _node_text(group_a_card).contains("A组"), "刷新后保留 A 组 badge")
+	_expect(group_b_card != null and _node_text(group_b_card).contains("B组"), "刷新后保留 B 组 badge")
+
+	lock_button.pressed.emit()
+	_expect_equal(observed_requests, [{
+		"mode": "manual",
+		"groups": [
+			["final-clubs-2", "final-clubs-3", "final-clubs-4"],
+			["final-spades-5", "final-spades-6", "final-spades-7"],
+		],
+	}], "锁定命令发送两个有序物理牌分组")
+	_expect(_find_visible_label_containing(screen, "最终选择提交中") != null, "权威确认前显示稳定提交状态")
+	_expect(lock_button.disabled and best_button.disabled, "提交中禁用重复最终选择")
+	store.reject_action("invalid_final_selection", "最终分组已失效，请调整后重试")
+	await process_frame
+	await process_frame
+	lock_button = _find_visible_button(screen, "锁定分组")
+	best_button = _find_visible_button(screen, "最佳并锁定")
+	_expect(lock_button != null and not lock_button.disabled, "提交失败后恢复手动重试")
+	_expect(best_button != null and not best_button.disabled, "提交失败后恢复最佳选择")
+	group_a_card = _find_visible_button_with_content(screen, "2♣")
+	group_b_card = _find_visible_button_with_content(screen, "5♠")
+	_expect(group_a_card != null and _node_text(group_a_card).contains("A组"), "提交失败后保留 A 组分配")
+	_expect(group_b_card != null and _node_text(group_b_card).contains("B组"), "提交失败后保留 B 组分配")
+	_expect(_find_visible_label_containing(screen, "请调整后重试") != null, "最终选择失败原因保持可见")
+
+	store.apply_private_snapshot({
+		"hand": _final_hand(),
+		"final_committed": true,
+		"final_groups": [
+			["final-clubs-2", "final-clubs-3", "final-clubs-4"],
+			["final-spades-5", "final-spades-6", "final-spades-7"],
+		],
+	})
+	await process_frame
+	await process_frame
+	_expect(_find_visible_button(screen, "锁定分组") == null, "权威确认后隐藏锁定命令")
+	_expect(_find_visible_button(screen, "最佳并锁定") == null, "权威确认后隐藏最佳命令")
+	_expect(_find_visible_label_containing(screen, "等待统一揭晓") != null, "权威确认后显示通用只读等待")
+	_expect(_find_visible_label_containing(screen, "/4") == null, "终局等待不泄露公开提交进度")
+	var committed_card := _find_visible_button_with_content(screen, "2♣")
+	_expect(
+		committed_card != null and committed_card.disabled and _node_text(committed_card).contains("A组"),
+		"权威分组以只读 badge 展示"
+	)
+	store.final_selection_requested.disconnect(observe_request)
+
+
+func _test_best_final_selection_waits_for_authority(
+	screen: MatchScreen,
+	store: FakeMatchStore
+) -> void:
+	var observed_requests: Array[Dictionary] = []
+	var observe_request := func(mode: String, groups: Array) -> void:
+		observed_requests.append({"mode": mode, "groups": groups.duplicate(true)})
+	store.final_selection_requested.connect(observe_request)
+	store.apply_public_snapshot({
+		"room_id": "final-best-room",
+		"phase": "final_commit",
+		"actor_seat_index": -1,
+		"draw_pile_count": 0,
+		"sealed_card_count": 1,
+		"final_results": [],
+		"winner_seat_indexes": [],
+		"final_events": [],
+	})
+	store.apply_private_snapshot({
+		"hand": _final_hand(),
+		"final_committed": false,
+		"final_groups": [],
+	})
+	await process_frame
+	await process_frame
+
+	var best_button := _find_visible_button(screen, "最佳并锁定")
+	if best_button == null:
+		_failures.append("最终选择阶段应提供最佳并锁定命令")
+		store.final_selection_requested.disconnect(observe_request)
+		return
+	var best_rect := best_button.get_global_rect()
+	best_button.pressed.emit()
+	_expect_equal(observed_requests, [{"mode": "best", "groups": []}], "最佳命令只发送 best 意图")
+	_expect(best_button.disabled, "最佳选择提交中禁用重复操作")
+	_expect(_find_visible_label_containing(screen, "最终选择提交中") != null, "最佳选择等待权威确认")
+	store.apply_public_snapshot({"draw_pile_count": 0})
+	await process_frame
+	await process_frame
+	best_button = _find_visible_button(screen, "最佳并锁定")
+	_expect(best_button != null and best_button.disabled, "普通公开刷新不解除最佳选择 pending")
+
+	store.reject_action("invalid_final_selection", "无法锁定最佳组合，请重试")
+	await process_frame
+	await process_frame
+	best_button = _find_visible_button(screen, "最佳并锁定")
+	_expect(best_button != null and not best_button.disabled, "最佳选择失败后恢复重试")
+	_expect(_find_visible_label_containing(screen, "请重试") != null, "最佳选择失败原因保持可见")
+	_expect_equal(best_button.get_global_rect(), best_rect, "最佳选择 pending 与重试不移动命令")
+	store.final_selection_requested.disconnect(observe_request)
+
+
+func _test_final_reveal_and_finished_ranking_are_authoritative(
+	screen: MatchScreen,
+	store: FakeMatchStore
+) -> void:
+	screen.size = Vector2(960, 540)
+	var results := _final_results()
+	var winners: Array[int] = [1, 2]
+	store.apply_public_snapshot({
+		"room_id": "final-reveal-room",
+		"phase": "final_reveal",
+		"actor_seat_index": -1,
+		"draw_pile_count": 0,
+		"sealed_card_count": 2,
+		"seats": [
+			_seat(0, "human-a", "甲", false, 22, 8),
+			_seat(1, "human-b", "乙", false, 25, 8),
+			_seat(2, "bot-c", "机器人丙", true, 25, 8),
+			_seat(3, "bot-d", "机器人丁", true, 10, 8),
+		],
+		"final_results": results,
+		"winner_seat_indexes": winners,
+		"final_events": [{
+			"type": "final_settlement",
+			"results": results,
+			"winner_seat_indexes": winners,
+		}],
+	})
+	store.apply_private_snapshot({
+		"hand": _final_hand(),
+		"final_committed": true,
+		"final_groups": [
+			["final-clubs-2", "final-clubs-3", "final-clubs-4"],
+			["final-spades-5", "final-spades-6", "final-spades-7"],
+		],
+	})
+	await process_frame
+	await process_frame
+
+	_expect(_find_visible_label_containing(screen, "阶段：结算揭晓") != null, "四席提交后显示统一结算揭晓")
+	_expect(_find_visible_label_containing(screen, "行动者：无") != null, "终局同步阶段不显示虚构行动者")
+	_expect(_find_visible_label_containing(screen, "最终结算 · 统一揭晓") != null, "中央结算面显示明确标题")
+	for expected in [
+		"甲 · 结算 +12",
+		"乙 · 结算 +9",
+		"机器人丙 · 结算 +10",
+		"机器人丁 · 结算 +4",
+	]:
+		_expect(_find_visible_label_containing(screen, expected) != null, "四席结算显示 %s" % expected)
+	_expect(_find_visible_label_containing(screen, "A · 同花顺 +10") != null, "揭晓 A 组三张牌、牌型与得分")
+	_expect(_find_visible_label_containing(screen, "B · 一对 +2") != null, "揭晓 B 组三张牌、牌型与得分")
+	_expect(_find_visible_label_containing(screen, "共同胜者：乙、机器人丙") != null, "结算使用服务端共同胜者列表")
+	_expect(_find_visible_button(screen, "锁定分组") == null, "揭晓阶段不残留最终选择命令")
+	_expect(_find_visible_button(screen, "最佳并锁定") == null, "揭晓阶段不残留最佳命令")
+	_assert_final_surface_does_not_overlap_compact_panels(screen)
+	var fourth_group := _find_last_visible_label_containing(screen, "B · 同花 +4")
+	var reveal_title := _find_visible_label_containing(screen, "最终结算 · 统一揭晓")
+	var reveal_panel := _ancestor_panel(reveal_title)
+	_expect(fourth_group != null and reveal_panel != null, "960x540 第四席 B 组结算行可见")
+	if fourth_group != null and reveal_panel != null:
+		var fourth_rect := fourth_group.get_global_rect()
+		var reveal_rect := reveal_panel.get_global_rect()
+		_expect(reveal_rect.encloses(fourth_rect), "第四席结算行完整位于中央结算面")
+
+	store.apply_public_snapshot({"phase": "finished"})
+	await process_frame
+	await process_frame
+	_expect(_find_visible_label_containing(screen, "对局结束 · 最终排名") != null, "结束态中央展示最终排名")
+	_expect(_find_visible_label_containing(screen, "第 1 名 · 乙 · 总分 25 · 共同胜者") != null, "第一共同胜者高亮")
+	_expect(_find_visible_label_containing(screen, "第 1 名 · 机器人丙 · 总分 25 · 共同胜者") != null, "同分按席位稳定排列并共享第一名")
+	_expect(_find_visible_label_containing(screen, "第 3 名 · 甲 · 总分 22") != null, "非胜者按权威总分继续排名")
+	_expect(_find_visible_label_containing(screen, "第 4 名 · 机器人丁 · 总分 10") != null, "第四席排名稳定")
+	_assert_final_surface_does_not_overlap_compact_panels(screen)
+	var final_title := _find_visible_label_containing(screen, "对局结束 · 最终排名")
+	var hand_card := _find_visible_button_with_content(screen, "2♣")
+	if final_title != null and hand_card != null:
+		_expect(not final_title.get_global_rect().intersects(hand_card.get_global_rect()), "960x540 排名面不遮挡手牌")
+	for viewport_size in [Vector2(1280, 720), Vector2(960, 540)]:
+		screen.size = viewport_size
+		await process_frame
+		await process_frame
+		_expect(
+			_visible_compact_panel_count(screen) >= 4 if viewport_size.x >= 1280.0 else _visible_compact_panel_count(screen) == 0,
+			"终局席位框随可用空间隐藏并在宽屏恢复"
+		)
+		_assert_final_surface_does_not_overlap_compact_panels(screen)
+		var ranking_label := _find_visible_label_containing(screen, "第 1 名 · 机器人丙")
+		if ranking_label != null:
+			var ranking_rect := ranking_label.get_global_rect()
+			_expect(ranking_rect.position.x >= 0.0 and ranking_rect.position.y >= 0.0, "排名文本不越出左上边界")
+			_expect(ranking_rect.end.x <= viewport_size.x and ranking_rect.end.y <= viewport_size.y, "排名文本不越出视口")
 
 
 func _test_rejected_claim_reenables_controls_without_moving_layout(
@@ -1043,6 +1346,51 @@ func _test_key_regions_do_not_overlap(screen: MatchScreen, viewport_size: Vector
 	_expect(action_rect.end.y <= hand_rect.end.y, "行动栏不越出手牌区")
 
 
+func _assert_final_surface_does_not_overlap_compact_panels(screen: MatchScreen) -> void:
+	var title := _find_visible_label_containing(screen, "最终排名")
+	if title == null:
+		title = _find_visible_label_containing(screen, "统一揭晓")
+	var final_panel := _ancestor_panel(title)
+	if final_panel == null:
+		_failures.append("终局中央面应有可见面板边界")
+		return
+	var final_rect := final_panel.get_global_rect()
+	var table_rect := screen._table_area.get_global_rect()
+	var hand_rect := screen._hand_panel.get_global_rect()
+	_expect(table_rect.encloses(final_rect), "终局中央面完整位于牌桌边界内")
+	_expect(final_rect.end.y <= hand_rect.position.y, "终局中央面底边不进入手牌区")
+	for node in screen.find_children("*", "PanelContainer", true, false):
+		if not node is PanelContainer or not node.is_visible_in_tree() or node == final_panel:
+			continue
+		if final_panel.is_ancestor_of(node) or node.is_ancestor_of(final_panel):
+			continue
+		var candidate_panel := node as PanelContainer
+		var candidate_rect := candidate_panel.get_global_rect()
+		if candidate_rect.size.x <= 220.0 and candidate_rect.size.y <= 90.0:
+			_expect(not final_rect.intersects(candidate_rect), "终局中央面不遮挡任何可见紧凑席位面板")
+
+
+func _visible_compact_panel_count(screen: MatchScreen) -> int:
+	var count := 0
+	for node in screen.find_children("*", "PanelContainer", true, false):
+		if not node is PanelContainer or not node.is_visible_in_tree():
+			continue
+		var panel := node as PanelContainer
+		var rect := panel.get_global_rect()
+		if rect.size.x <= 220.0 and rect.size.y <= 90.0:
+			count += 1
+	return count
+
+
+func _ancestor_panel(node: Node) -> PanelContainer:
+	var current := node
+	while current != null:
+		if current is PanelContainer:
+			return current
+		current = current.get_parent()
+	return null
+
+
 func _selected_card_count(screen: MatchScreen) -> int:
 	var count := 0
 	for index in range(screen._hand_cards.size()):
@@ -1125,6 +1473,116 @@ func _collision_claim_event(turn_number: int) -> Dictionary:
 			{"seat_index": 3, "card": _card("played-queen", 12, "hearts", 0), "source": "collision"},
 		],
 		"discarded_cards": [],
+	}
+
+
+func _final_hand() -> Array[Dictionary]:
+	return [
+		_card("final-clubs-2", 2, "clubs", 0),
+		_card("final-clubs-3", 3, "clubs", 0),
+		_card("final-clubs-4", 4, "clubs", 0),
+		_card("final-spades-5", 5, "spades", 0),
+		_card("final-spades-6", 6, "spades", 0),
+		_card("final-spades-7", 7, "spades", 0),
+		_card("final-diamonds-10", 10, "diamonds", 0),
+		_card("final-hearts-a", 14, "hearts", 0),
+	]
+
+
+func _final_results() -> Array[Dictionary]:
+	return [
+		_settlement_result(
+			0,
+			12,
+			[
+				_card("seat0-hearts-q", 12, "hearts", 0),
+				_card("seat0-hearts-k", 13, "hearts", 0),
+				_card("seat0-hearts-a", 14, "hearts", 0),
+			],
+			"straight_flush",
+			10,
+			[
+				_card("seat0-clubs-2", 2, "clubs", 0),
+				_card("seat0-spades-2", 2, "spades", 0),
+				_card("seat0-diamonds-7", 7, "diamonds", 0),
+			],
+			"pair",
+			2
+		),
+		_settlement_result(
+			1,
+			9,
+			[
+				_card("seat1-clubs-2", 2, "clubs", 0),
+				_card("seat1-spades-3", 3, "spades", 0),
+				_card("seat1-diamonds-4", 4, "diamonds", 0),
+			],
+			"straight",
+			5,
+			[
+				_card("seat1-hearts-6", 6, "hearts", 0),
+				_card("seat1-hearts-9", 9, "hearts", 0),
+				_card("seat1-hearts-j", 11, "hearts", 0),
+			],
+			"flush",
+			4
+		),
+		_settlement_result(
+			2,
+			10,
+			[
+				_card("seat2-clubs-k", 13, "clubs", 0),
+				_card("seat2-spades-k", 13, "spades", 0),
+				_card("seat2-hearts-k", 13, "hearts", 0),
+			],
+			"three_of_a_kind",
+			8,
+			[
+				_card("seat2-clubs-a", 14, "clubs", 0),
+				_card("seat2-spades-a", 14, "spades", 0),
+				_card("seat2-diamonds-5", 5, "diamonds", 0),
+			],
+			"pair",
+			2
+		),
+		_settlement_result(
+			3,
+			4,
+			[
+				_card("seat3-clubs-2", 2, "clubs", 0),
+				_card("seat3-spades-6", 6, "spades", 0),
+				_card("seat3-diamonds-10", 10, "diamonds", 0),
+			],
+			"high_card",
+			0,
+			[
+				_card("seat3-diamonds-3", 3, "diamonds", 0),
+				_card("seat3-diamonds-8", 8, "diamonds", 0),
+				_card("seat3-diamonds-q", 12, "diamonds", 0),
+			],
+			"flush",
+			4
+		),
+	]
+
+
+func _settlement_result(
+	seat_index: int,
+	total_score: int,
+	group_a_cards: Array[Dictionary],
+	group_a_category: String,
+	group_a_score: int,
+	group_b_cards: Array[Dictionary],
+	group_b_category: String,
+	group_b_score: int
+) -> Dictionary:
+	return {
+		"seat_index": seat_index,
+		"groups": [
+			{"cards": group_a_cards, "category": group_a_category, "score": group_a_score},
+			{"cards": group_b_cards, "category": group_b_category, "score": group_b_score},
+		],
+		"total_score": total_score,
 	}
 
 

@@ -61,6 +61,10 @@ var _play_button: Button
 var _discard_button: Button
 var _submit_claim_button: Button
 var _pass_claim_button: Button
+var _final_group_a_button: Button
+var _final_group_b_button: Button
+var _lock_final_button: Button
+var _best_final_button: Button
 
 var _seat_cards: Array[PanelContainer] = []
 var _seat_position_labels: Array[Label] = []
@@ -73,8 +77,13 @@ var _claim_choice_group := ButtonGroup.new()
 var _selected_claim_card_id := ""
 var _claim_submission_pending := false
 var _discard_submission_pending := false
+var _final_submission_pending := false
+var _final_group_mode := ButtonGroup.new()
+var _active_final_group := 0
+var _final_group_ids: Array = [[], []]
 var _animated_collision_turns: Dictionary = {}
 var _match_identity := ""
+var _last_phase := ""
 
 var _participant_by_seat: Dictionary = {}
 var _local_seat_index := -1
@@ -145,6 +154,9 @@ func _on_action_failed(code: String, message: String) -> void:
 	elif _discard_submission_pending and _show_discard_controls():
 		_discard_submission_pending = false
 		_selected_card_ids.clear()
+		_refresh()
+	elif _final_submission_pending and _show_final_controls():
+		_final_submission_pending = false
 		_refresh()
 
 
@@ -409,7 +421,40 @@ func _build_table_area() -> Control:
 	_pass_claim_button.add_theme_stylebox_override("disabled", _style_box(Color("#202426"), COLOR_BORDER, 1, 4))
 	_pass_claim_button.pressed.connect(_on_pass_claim_pressed)
 	action_row.add_child(_pass_claim_button)
+	_final_group_mode.allow_unpress = false
+	_final_group_a_button = _build_compact_action_button("A 组", 54.0)
+	_final_group_a_button.toggle_mode = true
+	_final_group_a_button.button_group = _final_group_mode
+	_final_group_a_button.button_pressed = true
+	_final_group_a_button.toggled.connect(_on_final_group_mode_toggled.bind(0))
+	action_row.add_child(_final_group_a_button)
+	_final_group_b_button = _build_compact_action_button("B 组", 54.0)
+	_final_group_b_button.toggle_mode = true
+	_final_group_b_button.button_group = _final_group_mode
+	_final_group_b_button.toggled.connect(_on_final_group_mode_toggled.bind(1))
+	action_row.add_child(_final_group_b_button)
+	_lock_final_button = _build_compact_action_button("锁定分组", 84.0)
+	_lock_final_button.pressed.connect(_on_lock_final_pressed)
+	action_row.add_child(_lock_final_button)
+	_best_final_button = _build_compact_action_button("最佳并锁定", 100.0)
+	_best_final_button.pressed.connect(_on_best_final_pressed)
+	action_row.add_child(_best_final_button)
 	return _table_area
+
+
+func _build_compact_action_button(text: String, minimum_width: float) -> Button:
+	var button := Button.new()
+	button.text = text
+	button.custom_minimum_size = Vector2(minimum_width, 27)
+	button.visible = false
+	button.disabled = true
+	button.add_theme_font_size_override("font_size", 12)
+	button.add_theme_color_override("font_color", COLOR_TEXT)
+	button.add_theme_stylebox_override("normal", _style_box(Color("#2b3334"), COLOR_BORDER, 1, 4))
+	button.add_theme_stylebox_override("hover", _style_box(Color("#34413d"), COLOR_GREEN, 1, 4))
+	button.add_theme_stylebox_override("pressed", _style_box(Color("#30362f"), COLOR_GOLD, 2, 4))
+	button.add_theme_stylebox_override("disabled", _style_box(Color("#202426"), COLOR_BORDER, 1, 4))
+	return button
 
 
 func _build_played_panel() -> void:
@@ -506,13 +551,17 @@ func _refresh() -> void:
 	if _store == null:
 		_claim_submission_pending = false
 		_discard_submission_pending = false
+		_final_submission_pending = false
 		_selected_claim_card_id = ""
 		_animated_collision_turns.clear()
 		_match_identity = ""
+		_last_phase = ""
+		_reset_final_editor()
 		_submit_claim_button.visible = false
 		_submit_claim_button.disabled = true
 		_pass_claim_button.visible = false
 		_pass_claim_button.disabled = true
+		_set_final_controls_visible(false)
 		_discard_button.visible = false
 		_discard_button.disabled = true
 		_participant_by_seat.clear()
@@ -524,7 +573,7 @@ func _refresh() -> void:
 		_action_error_label.text = ""
 		_action_error_label.tooltip_text = ""
 		_refresh_seats(-1, -1)
-		_refresh_history([], [], [], [])
+		_refresh_history([], [], [], [], [])
 		_refresh_played_combination("")
 		_clear_hand()
 		return
@@ -540,9 +589,18 @@ func _refresh() -> void:
 	var match_identity := "%s|%s" % [str(_store.room_id), str(_store.local_participant_id)]
 	if match_identity != _match_identity:
 		_animated_collision_turns.clear()
+		_reset_final_editor()
+		_last_phase = ""
 		_match_identity = match_identity
 	var phase := str(_store.phase)
 	var actor_seat_index := int(_store.actor_seat_index)
+	if phase == "final_commit" and _last_phase != "final_commit":
+		_reset_final_editor()
+	if phase == "final_commit" and bool(_store.get("final_committed")):
+		_final_submission_pending = false
+		_apply_authoritative_final_groups()
+	elif phase != "final_commit":
+		_final_submission_pending = false
 	if phase != "claim_commit" or actor_seat_index == local_seat_index:
 		_claim_submission_pending = false
 		_selected_claim_card_id = ""
@@ -551,8 +609,15 @@ func _refresh() -> void:
 	if phase != "award_discard" or not _is_local_discard_pending():
 		_discard_submission_pending = false
 	_phase_label.text = "阶段：%s" % _phase_text(phase)
-	_actor_label.text = "行动者：%s" % _participant_name(actor_seat_index)
-	_deck_label.text = "牌堆：%d" % int(_store.draw_pile_count)
+	_actor_label.text = (
+		"行动者：无"
+		if actor_seat_index < 0 and phase in ["final_commit", "final_reveal", "finished"]
+		else "行动者：%s" % _participant_name(actor_seat_index)
+	)
+	_deck_label.text = "牌堆 %d · 封存 %d" % [
+		int(_store.draw_pile_count),
+		int(_store.get("sealed_card_count")),
+	]
 	_connection_label.text = "公开状态"
 	_refresh_seats(local_seat_index, actor_seat_index)
 	var play_events: Array[Dictionary] = []
@@ -564,10 +629,64 @@ func _refresh() -> void:
 	var discard_events: Array[Dictionary] = []
 	if _store.has_method("get_discard_events"):
 		discard_events = _store.get_discard_events()
-	_refresh_history(_store.get_contest_rounds(), play_events, claim_events, discard_events)
+	var final_events: Array[Dictionary] = []
+	if _store.has_method("get_final_events"):
+		final_events = _store.get_final_events()
+	_refresh_history(
+		_store.get_contest_rounds(),
+		play_events,
+		claim_events,
+		discard_events,
+		final_events
+	)
 	_refresh_played_combination(phase)
 	_refresh_hand()
 	_refresh_action_prompt(phase, actor_seat_index, local_seat_index)
+	_last_phase = phase
+
+
+func _reset_final_editor() -> void:
+	_final_submission_pending = false
+	_active_final_group = 0
+	_final_group_ids = [[], []]
+	if _final_group_a_button != null:
+		_final_group_a_button.set_pressed_no_signal(true)
+	if _final_group_b_button != null:
+		_final_group_b_button.set_pressed_no_signal(false)
+
+
+func _apply_authoritative_final_groups() -> void:
+	if _store == null or not _store.has_method("get_final_groups"):
+		return
+	var authoritative_groups: Array = _store.get_final_groups()
+	if _is_valid_final_groups(authoritative_groups):
+		_final_group_ids = authoritative_groups.duplicate(true)
+
+
+func _is_valid_final_groups(groups: Array) -> bool:
+	if groups.size() != 2:
+		return false
+	var selected_card_ids: Dictionary = {}
+	for raw_group: Variant in groups:
+		if not raw_group is Array or raw_group.size() != 3:
+			return false
+		for raw_card_id: Variant in raw_group:
+			var card_id := str(raw_card_id)
+			if card_id.is_empty() or selected_card_ids.has(card_id):
+				return false
+			selected_card_ids[card_id] = true
+	return true
+
+
+func _set_final_controls_visible(visible: bool) -> void:
+	for button in [
+		_final_group_a_button,
+		_final_group_b_button,
+		_lock_final_button,
+		_best_final_button,
+	]:
+		if button != null:
+			button.visible = visible
 
 
 func _find_local_seat_index() -> int:
@@ -580,11 +699,16 @@ func _find_local_seat_index() -> int:
 
 
 func _refresh_seats(local_seat_index: int, actor_seat_index: int) -> void:
+	var winner_seat_indexes: Array[int] = []
+	if _store != null and _store.has_method("get_winner_seat_indexes"):
+		winner_seat_indexes = _store.get_winner_seat_indexes()
 	for seat_index in range(4):
+		_seat_cards[seat_index].visible = true
 		var participant: Dictionary = _participant_by_seat.get(seat_index, {})
 		var occupied := not str(participant.get("participant_id", "")).is_empty()
 		var is_local := seat_index == local_seat_index
 		var is_actor := seat_index == actor_seat_index
+		var is_winner := winner_seat_indexes.has(seat_index)
 		var role_parts: Array[String] = []
 		if is_local:
 			role_parts.append("本地")
@@ -592,6 +716,8 @@ func _refresh_seats(local_seat_index: int, actor_seat_index: int) -> void:
 			role_parts.append("行动中")
 		if bool(participant.get("is_bot", false)) and occupied:
 			role_parts.append("机器人")
+		if is_winner:
+			role_parts.append("共同胜者" if winner_seat_indexes.size() > 1 else "胜者")
 		_seat_position_labels[seat_index].text = _seat_position_text(seat_index, local_seat_index)
 		_seat_name_labels[seat_index].text = str(participant.get("nickname", "等待参与者")) if occupied else "等待参与者"
 		_seat_detail_labels[seat_index].text = (
@@ -600,7 +726,7 @@ func _refresh_seats(local_seat_index: int, actor_seat_index: int) -> void:
 		)
 		_seat_role_labels[seat_index].text = " · ".join(role_parts)
 		var fill := COLOR_SURFACE_RAISED if occupied else COLOR_SURFACE
-		var border := COLOR_GOLD if is_actor else (COLOR_GREEN if is_local else COLOR_BORDER)
+		var border := COLOR_GOLD if is_actor or is_winner else (COLOR_GREEN if is_local else COLOR_BORDER)
 		_seat_cards[seat_index].add_theme_stylebox_override("panel", _style_box(fill, border, 2 if is_actor else 1, 5))
 
 
@@ -608,7 +734,8 @@ func _refresh_history(
 	rounds: Array[Dictionary],
 	play_events: Array[Dictionary],
 	claim_events: Array[Dictionary],
-	discard_events: Array[Dictionary]
+	discard_events: Array[Dictionary],
+	final_events: Array[Dictionary]
 ) -> void:
 	for child in _history_list.get_children():
 		child.free()
@@ -617,6 +744,7 @@ func _refresh_history(
 		and play_events.is_empty()
 		and claim_events.is_empty()
 		and discard_events.is_empty()
+		and final_events.is_empty()
 	):
 		var empty := _label("等待公开事件", 12, COLOR_MUTED)
 		empty.name = "HistoryEmpty"
@@ -656,6 +784,8 @@ func _refresh_history(
 				_history_list.add_child(_build_claim_history_item(data))
 			_:
 				_history_list.add_child(_build_discard_history_item(data))
+	for final_event in final_events:
+		_history_list.add_child(_build_final_history_item(final_event))
 	_refresh_latest_contest(rounds[rounds.size() - 1] if not rounds.is_empty() else {})
 
 
@@ -774,6 +904,37 @@ func _build_discard_history_item(discard_event: Dictionary) -> Control:
 	return item
 
 
+func _build_final_history_item(final_event: Dictionary) -> Control:
+	var item := VBoxContainer.new()
+	item.add_theme_constant_override("separation", 2)
+	var title := _label("最终结算", 12, COLOR_GOLD)
+	item.add_child(title)
+	var winners := _winner_names(final_event.get("winner_seat_indexes", []))
+	var winner_label := _label(
+		("共同胜者：%s" if winners.size() > 1 else "胜者：%s") % "、".join(winners),
+		11,
+		COLOR_TEXT
+	)
+	winner_label.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	item.add_child(winner_label)
+	var raw_results: Variant = final_event.get("results", [])
+	if raw_results is Array:
+		for raw_result: Variant in raw_results:
+			if not raw_result is Dictionary:
+				continue
+			var result_label := _label(
+				"%s · 结算 +%d" % [
+					_participant_name(int(raw_result.get("seat_index", -1))),
+					int(raw_result.get("total_score", 0)),
+				],
+				10,
+				COLOR_MUTED
+			)
+			result_label.clip_text = true
+			item.add_child(result_label)
+	return item
+
+
 func _refresh_latest_contest(round_data: Dictionary) -> void:
 	for child in _contest_reveal_row.get_children():
 		child.free()
@@ -822,18 +983,26 @@ func _refresh_played_combination(phase: String) -> void:
 	if _store != null and _store.has_method("get_played_cards"):
 		cards = _store.get_played_cards()
 	var claim_event := _current_claim_event()
+	var final_results: Array[Dictionary] = []
+	if _store != null and _store.has_method("get_final_results"):
+		final_results = _store.get_final_results()
 	var show_played := phase == "claim_commit" and cards.size() == 3
 	var show_claim_reveal := phase == "claim_reveal" and not claim_event.is_empty()
-	_played_panel.visible = show_played or show_claim_reveal
+	var show_final_settlement := phase in ["final_reveal", "finished"] and not final_results.is_empty()
+	_played_panel.visible = show_played or show_claim_reveal or show_final_settlement
 	_contest_panel.visible = not _played_panel.visible
 	_played_cards_row.visible = show_played
-	_played_summary_label.visible = show_played
-	_claim_reveal_list.visible = show_claim_reveal
+	_played_summary_label.visible = show_played or show_final_settlement
+	_claim_reveal_list.visible = show_claim_reveal or show_final_settlement
 	_claim_discard_label.visible = show_claim_reveal
-	if not show_played and not show_claim_reveal:
+	if not show_played and not show_claim_reveal and not show_final_settlement:
 		_played_title_label.text = "本回合公开出牌"
 		_played_summary_label.text = "牌型：-- · 本次 0 分"
 		_claim_discard_label.text = ""
+		return
+	if show_final_settlement:
+		_refresh_final_settlement(phase, final_results)
+		call_deferred("_on_resized")
 		return
 	if show_claim_reveal:
 		_refresh_claim_reveal(claim_event)
@@ -879,6 +1048,126 @@ func _refresh_played_combination(phase: String) -> void:
 			chip = read_only
 		_played_cards_row.add_child(chip)
 	call_deferred("_on_resized")
+
+
+func _refresh_final_settlement(phase: String, final_results: Array[Dictionary]) -> void:
+	var winner_seat_indexes: Array[int] = []
+	if _store.has_method("get_winner_seat_indexes"):
+		winner_seat_indexes = _store.get_winner_seat_indexes()
+	var winner_names := _winner_names(winner_seat_indexes)
+	_played_title_label.text = (
+		"对局结束 · 最终排名"
+		if phase == "finished"
+		else "最终结算 · 统一揭晓"
+	)
+	_played_summary_label.text = (
+		("共同胜者：%s" if winner_names.size() > 1 else "胜者：%s")
+		% "、".join(winner_names)
+	)
+	_claim_discard_label.text = ""
+	var ordered_results := final_results.duplicate(true)
+	if phase == "finished":
+		ordered_results.sort_custom(_final_result_rank_before)
+	else:
+		ordered_results.sort_custom(_final_result_seat_before)
+	var display_rank := 0
+	var previous_score: Variant = null
+	for result_index in range(ordered_results.size()):
+		var result: Dictionary = ordered_results[result_index]
+		var seat_index := int(result.get("seat_index", -1))
+		var participant_score := _participant_score(seat_index)
+		var is_winner := winner_seat_indexes.has(seat_index)
+		var row := VBoxContainer.new()
+		row.add_theme_constant_override("separation", 0)
+		_claim_reveal_list.add_child(row)
+		var heading_text := "%s · 结算 +%d · 总分 %d · 手牌 %d" % [
+			_participant_name(seat_index),
+			int(result.get("total_score", 0)),
+			_participant_score(seat_index),
+			_participant_hand_count(seat_index),
+		]
+		if phase == "finished":
+			if previous_score == null or participant_score != int(previous_score):
+				display_rank = result_index + 1
+			previous_score = participant_score
+			heading_text = "第 %d 名 · %s · 总分 %d%s · 手牌 %d" % [
+				display_rank,
+				_participant_name(seat_index),
+				participant_score,
+				(
+					" · 共同胜者"
+					if is_winner and winner_seat_indexes.size() > 1
+					else (" · 胜者" if is_winner else "")
+				),
+				_participant_hand_count(seat_index),
+			]
+		var heading := _label(heading_text, 11, COLOR_GOLD if is_winner else COLOR_TEXT)
+		heading.custom_minimum_size.y = 15
+		heading.clip_text = true
+		heading.text_overrun_behavior = TextServer.OVERRUN_TRIM_ELLIPSIS
+		heading.tooltip_text = heading_text
+		row.add_child(heading)
+		var raw_groups: Variant = result.get("groups", [])
+		if raw_groups is Array:
+			for group_index in range(raw_groups.size()):
+				var raw_group: Variant = raw_groups[group_index]
+				if not raw_group is Dictionary:
+					continue
+				var group_text := _final_group_summary(group_index, raw_group)
+				var group_label := _label(group_text, 10, COLOR_MUTED)
+				group_label.custom_minimum_size.y = 13
+				group_label.clip_text = true
+				group_label.text_overrun_behavior = TextServer.OVERRUN_TRIM_ELLIPSIS
+				group_label.tooltip_text = group_text
+				row.add_child(group_label)
+
+
+func _final_group_summary(group_index: int, group: Dictionary) -> String:
+	var card_values: Array[String] = []
+	var raw_cards: Variant = group.get("cards", [])
+	if raw_cards is Array:
+		for raw_card: Variant in raw_cards:
+			if raw_card is Dictionary:
+				card_values.append(_compact_card(raw_card))
+	return "%s · %s +%d · %s" % [
+		"A" if group_index == 0 else "B",
+		_combination_text(str(group.get("category", ""))),
+		int(group.get("score", 0)),
+		" ".join(card_values),
+	]
+
+
+func _final_result_seat_before(left: Dictionary, right: Dictionary) -> bool:
+	return int(left.get("seat_index", -1)) < int(right.get("seat_index", -1))
+
+
+func _final_result_rank_before(left: Dictionary, right: Dictionary) -> bool:
+	var left_seat_index := int(left.get("seat_index", -1))
+	var right_seat_index := int(right.get("seat_index", -1))
+	var left_score := _participant_score(left_seat_index)
+	var right_score := _participant_score(right_seat_index)
+	if left_score == right_score:
+		return left_seat_index < right_seat_index
+	return left_score > right_score
+
+
+func _participant_score(seat_index: int) -> int:
+	var participant: Dictionary = _participant_by_seat.get(seat_index, {})
+	return int(participant.get("score", 0))
+
+
+func _participant_hand_count(seat_index: int) -> int:
+	var participant: Dictionary = _participant_by_seat.get(seat_index, {})
+	return int(participant.get("hand_count", 0))
+
+
+func _winner_names(raw_seat_indexes: Variant) -> Array[String]:
+	var names: Array[String] = []
+	if not raw_seat_indexes is Array:
+		return names
+	for raw_seat_index: Variant in raw_seat_indexes:
+		names.append(_participant_name(int(raw_seat_index)))
+	return names
 
 
 func _current_claim_event() -> Dictionary:
@@ -1008,8 +1297,10 @@ func _refresh_hand() -> void:
 	for index in range(hand.size()):
 		var card_id := str(hand[index].get("id", ""))
 		var is_protected := not protected_card_id.is_empty() and card_id == protected_card_id
-		var card := _build_hand_card(hand[index], index, is_protected)
+		var final_group_index := _final_group_index_for_card(card_id)
+		var card := _build_hand_card(hand[index], index, is_protected, final_group_index)
 		card.disabled = not _can_select_hand_card(card_id, is_protected)
+		card.set_pressed_no_signal(final_group_index >= 0)
 		_hand_row.add_child(card)
 		_hand_cards.append(card)
 	if hand.is_empty():
@@ -1031,7 +1322,12 @@ func _clear_hand() -> void:
 		_discard_button.disabled = true
 
 
-func _build_hand_card(card: Dictionary, index: int, is_protected: bool) -> Button:
+func _build_hand_card(
+	card: Dictionary,
+	index: int,
+	is_protected: bool,
+	final_group_index: int
+) -> Button:
 	var panel := Button.new()
 	panel.name = "HandCard%d" % index
 	panel.custom_minimum_size = Vector2(CARD_WIDTH, CARD_HEIGHT)
@@ -1045,11 +1341,12 @@ func _build_hand_card(card: Dictionary, index: int, is_protected: bool) -> Butto
 		"disabled",
 		_style_box(COLOR_SURFACE, COLOR_GOLD if is_protected else COLOR_BORDER, 2 if is_protected else 1, 4)
 	)
-	panel.tooltip_text = (
-		"%s · 本轮获得，不可弃" % _format_card(card)
-		if is_protected
-		else _format_card(card)
-	)
+	var tooltip_parts: Array[String] = [_format_card(card)]
+	if is_protected:
+		tooltip_parts.append("本轮获得，不可弃")
+	if final_group_index >= 0:
+		tooltip_parts.append("%s 组" % ("A" if final_group_index == 0 else "B"))
+	panel.tooltip_text = " · ".join(tooltip_parts)
 	panel.toggled.connect(_on_hand_card_toggled.bind(str(card.get("id", "")), panel))
 	var margin := MarginContainer.new()
 	margin.mouse_filter = Control.MOUSE_FILTER_IGNORE
@@ -1087,6 +1384,11 @@ func _build_hand_card(card: Dictionary, index: int, is_protected: bool) -> Butto
 		protected_marker.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 		protected_marker.clip_text = true
 		column.add_child(protected_marker)
+	elif final_group_index >= 0:
+		var group_marker := _label("%s组" % ("A" if final_group_index == 0 else "B"), 10, COLOR_GOLD)
+		group_marker.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+		group_marker.clip_text = true
+		column.add_child(group_marker)
 	return panel
 
 
@@ -1102,6 +1404,8 @@ func _can_select_hand() -> bool:
 func _can_select_hand_card(card_id: String, is_protected: bool) -> bool:
 	if _can_select_hand():
 		return true
+	if _can_edit_final_groups():
+		return not card_id.is_empty()
 	return (
 		_can_discard_hand()
 		and not is_protected
@@ -1119,6 +1423,26 @@ func _show_discard_controls() -> bool:
 		and str(_store.phase) == "award_discard"
 		and _is_local_discard_pending()
 	)
+
+
+func _show_final_controls() -> bool:
+	return (
+		_store != null
+		and str(_store.phase) == "final_commit"
+		and not bool(_store.get("final_committed"))
+	)
+
+
+func _can_edit_final_groups() -> bool:
+	return _show_final_controls() and not _final_submission_pending
+
+
+func _final_group_index_for_card(card_id: String) -> int:
+	for group_index in range(_final_group_ids.size()):
+		var raw_group: Variant = _final_group_ids[group_index]
+		if raw_group is Array and raw_group.has(card_id):
+			return group_index
+	return -1
 
 
 func _is_local_discard_pending() -> bool:
@@ -1186,6 +1510,9 @@ func _begin_claim_submission(card_id: Variant) -> void:
 
 
 func _on_hand_card_toggled(pressed: bool, card_id: String, button: Button) -> void:
+	if _store != null and str(_store.phase) == "final_commit":
+		_on_final_hand_card_toggled(card_id, button)
+		return
 	var protected_card_id := str(_current_local_award().get("id", ""))
 	var is_protected := not protected_card_id.is_empty() and card_id == protected_card_id
 	if not _can_select_hand_card(card_id, is_protected):
@@ -1206,6 +1533,60 @@ func _on_hand_card_toggled(pressed: bool, card_id: String, button: Button) -> vo
 		_selected_card_ids.erase(card_id)
 	_play_button.disabled = _selected_card_ids.size() != 3
 	_discard_button.disabled = not _can_discard_hand() or _selected_card_ids.size() != 1
+
+
+func _on_final_hand_card_toggled(card_id: String, button: Button) -> void:
+	if not _can_edit_final_groups() or card_id.is_empty():
+		button.set_pressed_no_signal(_final_group_index_for_card(card_id) >= 0)
+		return
+	var current_group_index := _final_group_index_for_card(card_id)
+	var active_group: Array = _final_group_ids[_active_final_group]
+	if current_group_index == _active_final_group:
+		active_group.erase(card_id)
+	elif active_group.size() < 3:
+		if current_group_index >= 0:
+			var previous_group: Array = _final_group_ids[current_group_index]
+			previous_group.erase(card_id)
+		active_group.append(card_id)
+	call_deferred("_refresh")
+
+
+func _on_final_group_mode_toggled(pressed: bool, group_index: int) -> void:
+	if not pressed:
+		return
+	_active_final_group = group_index
+
+
+func _on_lock_final_pressed() -> void:
+	if not _can_edit_final_groups() or not _is_valid_final_groups(_final_group_ids):
+		return
+	_begin_final_submission(false)
+
+
+func _on_best_final_pressed() -> void:
+	if not _can_edit_final_groups():
+		return
+	_begin_final_submission(true)
+
+
+func _begin_final_submission(use_best: bool) -> void:
+	_final_submission_pending = true
+	_action_error_label.text = ""
+	_action_error_label.tooltip_text = ""
+	for hand_card in _hand_cards:
+		hand_card.disabled = true
+	for button in [
+		_final_group_a_button,
+		_final_group_b_button,
+		_lock_final_button,
+		_best_final_button,
+	]:
+		button.disabled = true
+	_action_prompt_label.text = "最终选择提交中：等待服务器确认"
+	if use_best:
+		_store.submit_best_final_selection()
+	else:
+		_store.submit_final_selection(_final_group_ids.duplicate(true))
 
 
 func _on_play_pressed() -> void:
@@ -1233,13 +1614,24 @@ func _refresh_action_prompt(phase: String, actor_seat_index: int, local_seat_ind
 	var show_claim_controls := _show_claim_controls()
 	var can_choose_claim := _can_choose_claim()
 	var show_discard_controls := _show_discard_controls()
-	_play_button.visible = phase != "award_discard"
+	var show_final_controls := _show_final_controls()
+	_play_button.visible = phase not in ["award_discard", "final_commit", "final_reveal", "finished"]
 	_discard_button.visible = show_discard_controls
 	_discard_button.disabled = not _can_discard_hand() or _selected_card_ids.size() != 1
 	_submit_claim_button.visible = show_claim_controls
 	_submit_claim_button.disabled = not can_choose_claim or _selected_claim_card_id.is_empty()
 	_pass_claim_button.visible = show_claim_controls
 	_pass_claim_button.disabled = not _can_choose_claim()
+	_set_final_controls_visible(show_final_controls)
+	_final_group_a_button.disabled = not _can_edit_final_groups()
+	_final_group_b_button.disabled = not _can_edit_final_groups()
+	_final_group_a_button.set_pressed_no_signal(_active_final_group == 0)
+	_final_group_b_button.set_pressed_no_signal(_active_final_group == 1)
+	_lock_final_button.disabled = (
+		not _can_edit_final_groups()
+		or not _is_valid_final_groups(_final_group_ids)
+	)
+	_best_final_button.disabled = not _can_edit_final_groups()
 	if phase == "point_contest":
 		_action_prompt_label.text = "拼点进行中：所有公开翻牌后决定首位行动者"
 	elif phase == "actor_play":
@@ -1269,9 +1661,14 @@ func _refresh_action_prompt(phase: String, actor_seat_index: int, local_seat_ind
 		else:
 			_action_prompt_label.text = "等待获得牌的参与者弃牌"
 	elif phase == "final_commit":
-		_action_prompt_label.text = "最终结算：选择两组不重叠的三张牌"
+		if bool(_store.get("final_committed")):
+			_action_prompt_label.text = "最终选择已锁定：等待统一揭晓"
+		elif _final_submission_pending:
+			_action_prompt_label.text = "最终选择提交中：等待服务器确认"
+		else:
+			_action_prompt_label.text = "最终结算：A/B 各选 3 张"
 	elif phase == "final_reveal":
-		_action_prompt_label.text = "最终选择已锁定，等待全部揭晓"
+		_action_prompt_label.text = "最终组合已统一揭晓：核对结算得分"
 	elif phase == "finished":
 		_action_prompt_label.text = "对局结束：查看最终排名"
 	else:
@@ -1309,6 +1706,13 @@ func _on_resized() -> void:
 	_hand_panel.size = Vector2(width, hand_height)
 
 	var stage_height := maxf(1.0, hand_y)
+	var compact_final_settlement := (
+		_store != null
+		and str(_store.phase) in ["final_reveal", "finished"]
+		and (width < 900.0 or stage_height < 400.0)
+	)
+	for seat_panel in _seat_cards:
+		seat_panel.visible = not compact_final_settlement
 	var seat_width := minf(SEAT_WIDTH, maxf(150.0, (width - 36.0) * 0.28))
 	var seat_height := SEAT_HEIGHT
 	for seat_panel in _seat_cards:
@@ -1338,9 +1742,25 @@ func _on_resized() -> void:
 	var contest_height := maxf(76.0, _contest_panel.get_combined_minimum_size().y)
 	_contest_panel.position = Vector2((width - contest_width) * 0.5, maxf(78.0, (stage_height - contest_height) * 0.46))
 	_contest_panel.size = Vector2(contest_width, contest_height)
-	var played_width := minf(340.0, maxf(280.0, width * 0.5))
+	var show_final_settlement := (
+		_store != null
+		and str(_store.phase) in ["final_reveal", "finished"]
+		and _played_panel.visible
+	)
+	var played_width := (
+		minf(560.0, maxf(340.0, width - 32.0))
+		if show_final_settlement
+		else minf(340.0, maxf(280.0, width * 0.5))
+	)
 	var played_height := maxf(108.0, _played_panel.get_combined_minimum_size().y)
-	_played_panel.position = Vector2((width - played_width) * 0.5, maxf(78.0, (stage_height - played_height) * 0.46))
+	var played_y := maxf(78.0, (stage_height - played_height) * 0.46)
+	if show_final_settlement and compact_final_settlement:
+		played_y = clampf(
+			(stage_height - played_height) * 0.5,
+			8.0,
+			maxf(8.0, stage_height - played_height - 8.0)
+		)
+	_played_panel.position = Vector2((width - played_width) * 0.5, played_y)
 	_played_panel.size = Vector2(played_width, played_height)
 
 
@@ -1393,6 +1813,23 @@ func _format_card(raw_card: Variant) -> String:
 		_suit_text(card.get("suit", "")),
 		copy_marker,
 	]
+
+
+func _compact_card(card: Dictionary) -> String:
+	var suit_symbol := "?"
+	match str(card.get("suit", "")):
+		"clubs":
+			suit_symbol = "♣"
+		"spades":
+			suit_symbol = "♠"
+		"diamonds":
+			suit_symbol = "♦"
+		"hearts":
+			suit_symbol = "♥"
+	var copy_marker := ""
+	if _store != null and str(_store.deck_mode) == "two":
+		copy_marker = "#%d" % (int(card.get("copy_index", 0)) + 1)
+	return "%s%s%s" % [_rank_text(int(card.get("rank", 0))), suit_symbol, copy_marker]
 
 
 func _rank_text(rank: int) -> String:
