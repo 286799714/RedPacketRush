@@ -15,6 +15,7 @@ var deck_mode := "one"
 var phase := ""
 var actor_seat_index := -1
 var draw_pile_count := 0
+var sealed_card_count := 0
 var turn_number := 0
 var played_category := ""
 var played_score := 0
@@ -28,7 +29,6 @@ var _played_cards: Array[Dictionary] = []
 var _play_events: Array[Dictionary] = []
 var _claim_events: Array[Dictionary] = []
 var _discard_events: Array[Dictionary] = []
-var _sealed_cards: Array[Dictionary] = []
 var _pending_discard_seat_indexes: Array[int] = []
 var _local_hand: Array[Dictionary] = []
 var _activated := false
@@ -69,10 +69,6 @@ func get_discard_events() -> Array[Dictionary]:
 	return _duplicate_dictionary_array(_discard_events)
 
 
-func get_sealed_cards() -> Array[Dictionary]:
-	return _duplicate_dictionary_array(_sealed_cards)
-
-
 func get_pending_discard_seat_indexes() -> Array[int]:
 	return _pending_discard_seat_indexes.duplicate()
 
@@ -108,6 +104,7 @@ func _on_game_room_state_changed(snapshot: Dictionary) -> void:
 	phase = str(snapshot.get("phase", ""))
 	actor_seat_index = int(snapshot.get("actor_seat_index", -1))
 	draw_pile_count = int(snapshot.get("draw_pile_count", 0))
+	sealed_card_count = int(snapshot.get("sealed_card_count", 0))
 	turn_number = int(snapshot.get("turn_number", 0))
 	played_category = str(snapshot.get("played_category", ""))
 	played_score = int(snapshot.get("played_score", 0))
@@ -162,13 +159,6 @@ func _on_game_room_state_changed(snapshot: Dictionary) -> void:
 			if raw_event is Dictionary:
 				_discard_events.append(raw_event.duplicate(true))
 
-	_sealed_cards.clear()
-	var raw_sealed_cards: Variant = snapshot.get("sealed_cards", [])
-	if raw_sealed_cards is Array:
-		for raw_card: Variant in raw_sealed_cards:
-			if raw_card is Dictionary:
-				_sealed_cards.append(raw_card.duplicate(true))
-
 	_pending_discard_seat_indexes.clear()
 	var raw_pending_discard_seats: Variant = snapshot.get("pending_discard_seat_indexes", [])
 	if raw_pending_discard_seats is Array:
@@ -215,6 +205,7 @@ func _on_game_room_left(code: int, reason: String) -> void:
 	phase = ""
 	actor_seat_index = -1
 	draw_pile_count = 0
+	sealed_card_count = 0
 	turn_number = 0
 	played_category = ""
 	played_score = 0
@@ -226,7 +217,6 @@ func _on_game_room_left(code: int, reason: String) -> void:
 	_play_events.clear()
 	_claim_events.clear()
 	_discard_events.clear()
-	_sealed_cards.clear()
 	_pending_discard_seat_indexes.clear()
 	_local_hand.clear()
 	_activated = false

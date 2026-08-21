@@ -131,7 +131,7 @@ class GameRoomState extends Colyseus.Schema:
 			Colyseus.Schema.Field.new("revealedClaims", Colyseus.Schema.ARRAY, RevealedClaimState),
 			Colyseus.Schema.Field.new("claimAwards", Colyseus.Schema.ARRAY, ClaimAwardState),
 			Colyseus.Schema.Field.new("discardedCards", Colyseus.Schema.ARRAY, PublicCardState),
-			Colyseus.Schema.Field.new("sealedCards", Colyseus.Schema.ARRAY, PublicCardState),
+			Colyseus.Schema.Field.new("sealedCardCount", Colyseus.Schema.UINT8),
 			Colyseus.Schema.Field.new("pendingDiscardSeatIndexes", Colyseus.Schema.ARRAY, Colyseus.Schema.UINT8),
 			Colyseus.Schema.Field.new("seats", Colyseus.Schema.ARRAY, ParticipantSeat),
 			Colyseus.Schema.Field.new("contestRounds", Colyseus.Schema.ARRAY, PointContestRoundState),
@@ -141,4 +141,4 @@ class GameRoomState extends Colyseus.Schema:
 		]
 
 	func _to_string() -> String:
-		return "GameRoomState(__ref_id: %s, status: %s, displayName: %s, deckMode: %s, actionDeadlineSeconds: %s, hostParticipantId: %s, phase: %s, actorSeatIndex: %s, firstActorSeatIndex: %s, drawPileCount: %s, turnNumber: %s, playedCards: %s, playedCategory: %s, playedScore: %s, revealedClaims: %s, claimAwards: %s, discardedCards: %s, sealedCards: %s, pendingDiscardSeatIndexes: %s, seats: %s, contestRounds: %s, playEvents: %s, claimEvents: %s, discardEvents: %s)" % [self.__ref_id, self.status, self.displayName, self.deckMode, self.actionDeadlineSeconds, self.hostParticipantId, self.phase, self.actorSeatIndex, self.firstActorSeatIndex, self.drawPileCount, self.turnNumber, self.playedCards, self.playedCategory, self.playedScore, self.revealedClaims, self.claimAwards, self.discardedCards, self.sealedCards, self.pendingDiscardSeatIndexes, self.seats, self.contestRounds, self.playEvents, self.claimEvents, self.discardEvents]
+		return "GameRoomState(__ref_id: %s, status: %s, displayName: %s, deckMode: %s, actionDeadlineSeconds: %s, hostParticipantId: %s, phase: %s, actorSeatIndex: %s, firstActorSeatIndex: %s, drawPileCount: %s, turnNumber: %s, playedCards: %s, playedCategory: %s, playedScore: %s, revealedClaims: %s, claimAwards: %s, discardedCards: %s, sealedCardCount: %s, pendingDiscardSeatIndexes: %s, seats: %s, contestRounds: %s, playEvents: %s, claimEvents: %s, discardEvents: %s)" % [self.__ref_id, self.status, self.displayName, self.deckMode, self.actionDeadlineSeconds, self.hostParticipantId, self.phase, self.actorSeatIndex, self.firstActorSeatIndex, self.drawPileCount, self.turnNumber, self.playedCards, self.playedCategory, self.playedScore, self.revealedClaims, self.claimAwards, self.discardedCards, self.sealedCardCount, self.pendingDiscardSeatIndexes, self.seats, self.contestRounds, self.playEvents, self.claimEvents, self.discardEvents]

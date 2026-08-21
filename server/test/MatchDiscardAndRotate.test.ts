@@ -374,15 +374,14 @@ describe("match award discard and actor rotation", () => {
     const state = views[0].publicState;
     assert.strictEqual(state.actorSeatIndex, actorSeatIndex);
     assert.strictEqual(state.drawPileCount, 0);
-    assert.strictEqual(state.sealedCards.length, 2);
+    assert.strictEqual(state.sealedCardCount, 2);
     assert.strictEqual(state.discardedCards.length, 18);
     assert.ok(state.participants.every((participant) => participant.handCount === 8));
     const allCardIds = [
       ...views.flatMap((view) => view.privateState.hand.map((card) => card.id)),
       ...state.discardedCards.map((card) => card.id),
-      ...state.sealedCards.map((card) => card.id),
     ];
-    assert.strictEqual(allCardIds.length, 52);
-    assert.strictEqual(new Set(allCardIds).size, 52);
+    assert.strictEqual(allCardIds.length + state.sealedCardCount, 52);
+    assert.strictEqual(new Set(allCardIds).size, allCardIds.length);
   });
 });

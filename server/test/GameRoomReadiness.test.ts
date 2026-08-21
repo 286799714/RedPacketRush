@@ -41,7 +41,7 @@ describe("four-participant room readiness", () => {
       revealedClaims: [],
       claimAwards: [],
       discardedCards: [],
-      sealedCards: [],
+      sealedCardCount: 0,
       pendingDiscardSeatIndexes: [],
       seats: [
         {

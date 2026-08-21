@@ -634,10 +634,7 @@ export class GameRoom extends Room<{
     for (const card of publicState.discardedCards) {
       this.state.discardedCards.push(new PublicCardState(card));
     }
-    this.state.sealedCards.clear();
-    for (const card of publicState.sealedCards) {
-      this.state.sealedCards.push(new PublicCardState(card));
-    }
+    this.state.sealedCardCount = publicState.sealedCardCount;
     this.state.pendingDiscardSeatIndexes.clear();
     this.state.pendingDiscardSeatIndexes.push(...publicState.pendingDiscardSeatIndexes);
     for (const participant of publicState.participants) {

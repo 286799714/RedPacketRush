@@ -126,7 +126,7 @@ export interface PublicMatchState {
   readonly revealedClaims: readonly RevealedClaim[];
   readonly claimAwards: readonly ClaimAward[];
   readonly discardedCards: readonly PhysicalCard[];
-  readonly sealedCards: readonly PhysicalCard[];
+  readonly sealedCardCount: number;
   readonly pendingDiscardSeatIndexes: readonly number[];
   readonly participants: readonly PublicMatchParticipant[];
   readonly events: readonly PublicMatchEvent[];
@@ -416,7 +416,7 @@ export class MatchEngine {
       revealedClaims: Object.freeze([...this.revealedClaims]),
       claimAwards: Object.freeze([...this.claimAwards]),
       discardedCards: Object.freeze([...this.discardedCards]),
-      sealedCards: Object.freeze([...this.sealedCards]),
+      sealedCardCount: this.sealedCards.length,
       pendingDiscardSeatIndexes: Object.freeze([...this.pendingDiscardSeatIndexes]),
       participants: Object.freeze(publicParticipants),
       events: Object.freeze([...this.events]),

@@ -27,7 +27,6 @@ class FakeMatchStore extends RefCounted:
 	var _play_events: Array[Dictionary] = []
 	var _claim_events: Array[Dictionary] = []
 	var _discard_events: Array[Dictionary] = []
-	var _sealed_cards: Array[Dictionary] = []
 	var _pending_discard_seat_indexes: Array[int] = []
 	var _local_hand: Array[Dictionary] = []
 	var play_requests: Array[Array] = []
@@ -54,9 +53,6 @@ class FakeMatchStore extends RefCounted:
 
 	func get_discard_events() -> Array[Dictionary]:
 		return _discard_events
-
-	func get_sealed_cards() -> Array[Dictionary]:
-		return _sealed_cards
 
 	func get_pending_discard_seat_indexes() -> Array[int]:
 		return _pending_discard_seat_indexes
@@ -95,7 +91,6 @@ class FakeMatchStore extends RefCounted:
 		_apply_dictionary_array(snapshot, "play_events", _play_events)
 		_apply_dictionary_array(snapshot, "claim_events", _claim_events)
 		_apply_dictionary_array(snapshot, "discard_events", _discard_events)
-		_apply_dictionary_array(snapshot, "sealed_cards", _sealed_cards)
 		if snapshot.has("pending_discard_seat_indexes"):
 			_pending_discard_seat_indexes.clear()
 			var raw_pending_seats: Variant = snapshot["pending_discard_seat_indexes"]
@@ -782,7 +777,7 @@ func _test_award_recipient_discards_an_original_card(
 			"seat_index": 0,
 			"card": _card("original-spades-3", 3, "spades", 0),
 		}],
-		"sealed_cards": [_card("original-spades-3", 3, "spades", 0)],
+		"sealed_card_count": 1,
 	})
 	await process_frame
 	await process_frame

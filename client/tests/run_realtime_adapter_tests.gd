@@ -572,7 +572,7 @@ func _test_public_discard_state_is_normalized_from_whitelisted_fields() -> void:
 		"status": "started",
 		"phase": "award_discard",
 		"pendingDiscardSeatIndexes": [3, 1, 3, 9],
-		"sealedCards": [discarded_two, discarded_three, discarded_two],
+		"sealedCardCount": 2,
 		"discardEvents": [
 			{"turnNumber": 2, "seatIndex": 3, "card": discarded_three, "private": "drop-me"},
 			{"turnNumber": 2, "seatIndex": 1, "card": discarded_two},
@@ -585,10 +585,7 @@ func _test_public_discard_state_is_normalized_from_whitelisted_fields() -> void:
 	var snapshot: Dictionary = observed["snapshot"]
 	_expect_equal(snapshot.get("phase"), "award_discard", "弃牌阶段规范化")
 	_expect_equal(snapshot.get("pending_discard_seat_indexes"), [1, 3], "待弃牌席位规范化并去重")
-	_expect_equal(snapshot.get("sealed_cards"), [
-		_card("original-clubs-2", 2, "clubs", 0),
-		_card("original-spades-3", 3, "spades", 0),
-	], "封存牌按实体标识去重")
+	_expect_equal(snapshot.get("sealed_card_count"), 2, "封存牌只公开数量")
 	_expect_equal(snapshot.get("discard_events"), [
 		{
 			"turn_number": 2,

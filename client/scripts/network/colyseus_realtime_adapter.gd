@@ -504,7 +504,7 @@ func _normalize_game_room_state(raw_state: Variant, room: Variant) -> Dictionary
 		"revealed_claims": _normalize_revealed_claims(raw_state.get("revealedClaims", [])),
 		"claim_awards": _normalize_claim_awards(raw_state.get("claimAwards", [])),
 		"discarded_cards": _normalize_public_cards(raw_state.get("discardedCards", []), MAX_DECK_CARD_COUNT),
-		"sealed_cards": _normalize_public_cards(raw_state.get("sealedCards", []), MAX_DECK_CARD_COUNT),
+		"sealed_card_count": maxi(0, int(raw_state.get("sealedCardCount", 0))),
 		"pending_discard_seat_indexes": _normalize_seat_indexes(
 			raw_state.get("pendingDiscardSeatIndexes", [])
 		),

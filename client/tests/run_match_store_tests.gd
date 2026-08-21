@@ -215,7 +215,6 @@ func _test_public_discard_state_is_retained_deep_copied_and_cleared() -> void:
 	var match_store := MatchStore.new(adapter)
 	for method_name in [
 		"get_pending_discard_seat_indexes",
-		"get_sealed_cards",
 		"get_discard_events",
 	]:
 		if not match_store.has_method(method_name):
@@ -225,7 +224,7 @@ func _test_public_discard_state_is_retained_deep_copied_and_cleared() -> void:
 	var snapshot := _started_snapshot("room-a", "human-a", 17)
 	snapshot["phase"] = "award_discard"
 	snapshot["pending_discard_seat_indexes"] = [0, 2]
-	snapshot["sealed_cards"] = [discarded_card]
+	snapshot["sealed_card_count"] = 2
 	snapshot["discard_events"] = [{
 		"turn_number": 2,
 		"seat_index": 2,
@@ -236,10 +235,7 @@ func _test_public_discard_state_is_retained_deep_copied_and_cleared() -> void:
 	var returned_pending: Array[int] = match_store.get_pending_discard_seat_indexes()
 	returned_pending.clear()
 	_expect_equal(match_store.get_pending_discard_seat_indexes(), [0, 2], "待弃牌席位深拷贝")
-	var returned_sealed: Array[Dictionary] = match_store.get_sealed_cards()
-	returned_sealed[0]["rank"] = 14
-	returned_sealed.clear()
-	_expect_equal(match_store.get_sealed_cards(), [discarded_card], "封存牌嵌套深拷贝")
+	_expect_equal(match_store.sealed_card_count, 2, "保存公开封存牌数量")
 	var returned_events: Array[Dictionary] = match_store.get_discard_events()
 	returned_events[0]["card"]["rank"] = 14
 	returned_events.clear()
@@ -247,7 +243,7 @@ func _test_public_discard_state_is_retained_deep_copied_and_cleared() -> void:
 
 	adapter.publish_game_room_state(_started_snapshot("room-b", "human-z", 18))
 	_expect_equal(match_store.get_pending_discard_seat_indexes(), [], "新回合快照清空待弃牌席位")
-	_expect_equal(match_store.get_sealed_cards(), [], "新房间快照清空封存牌")
+	_expect_equal(match_store.sealed_card_count, 0, "新房间快照清空封存牌数量")
 	_expect_equal(match_store.get_discard_events(), [], "新房间快照清空弃牌事件")
 
 
@@ -482,6 +478,7 @@ func _test_leave_clears_match_and_allows_next_room_activation() -> void:
 	_expect_equal(match_store.phase, "", "离开清空比赛阶段")
 	_expect_equal(match_store.actor_seat_index, -1, "离开清空行动席位")
 	_expect_equal(match_store.draw_pile_count, 0, "离开清空牌堆数量")
+	_expect_equal(match_store.sealed_card_count, 0, "离开清空封存牌数量")
 	_expect_equal(match_store.turn_number, 0, "离开清空回合编号")
 	_expect_equal(match_store.get_played_cards(), [], "离开清空公开出牌")
 	_expect_equal(match_store.get_play_events(), [], "离开清空出牌历史")

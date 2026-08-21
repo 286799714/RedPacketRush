@@ -298,8 +298,8 @@ export class GameRoomState extends Schema {
   @type([PublicCardState])
   public discardedCards = new ArraySchema<PublicCardState>();
 
-  @type([PublicCardState])
-  public sealedCards = new ArraySchema<PublicCardState>();
+  @type("uint8")
+  public sealedCardCount = 0;
 
   @type(["uint8"])
   public pendingDiscardSeatIndexes = new ArraySchema<number>();

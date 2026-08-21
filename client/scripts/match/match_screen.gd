@@ -1002,7 +1002,8 @@ func _discarded_cards_text(raw_cards: Variant) -> String:
 func _refresh_hand() -> void:
 	_clear_hand()
 	var hand: Array[Dictionary] = _store.get_local_hand()
-	var protected_card_id := _local_awarded_card_id()
+	var local_award := _current_local_award()
+	var protected_card_id := str(local_award.get("id", ""))
 	_hand_title_label.text = "我的手牌（%d）" % hand.size()
 	for index in range(hand.size()):
 		var card_id := str(hand[index].get("id", ""))
@@ -1131,24 +1132,6 @@ func _is_local_discard_pending() -> bool:
 	return pending_seat_indexes.has(_local_seat_index)
 
 
-func _local_awarded_card_id() -> String:
-	if _store == null or _local_seat_index < 0 or str(_store.phase) != "award_discard":
-		return ""
-	var claim_event := _current_claim_event()
-	var raw_awards: Variant = claim_event.get("awards", [])
-	if not raw_awards is Array:
-		return ""
-	for raw_award: Variant in raw_awards:
-		if (
-			raw_award is Dictionary
-			and int(raw_award.get("seat_index", -1)) == _local_seat_index
-		):
-			var card: Variant = raw_award.get("card", {})
-			if card is Dictionary:
-				return str(card.get("id", ""))
-	return ""
-
-
 func _can_choose_claim() -> bool:
 	return (
 		_show_claim_controls()
@@ -1203,7 +1186,7 @@ func _begin_claim_submission(card_id: Variant) -> void:
 
 
 func _on_hand_card_toggled(pressed: bool, card_id: String, button: Button) -> void:
-	var protected_card_id := _local_awarded_card_id()
+	var protected_card_id := str(_current_local_award().get("id", ""))
 	var is_protected := not protected_card_id.is_empty() and card_id == protected_card_id
 	if not _can_select_hand_card(card_id, is_protected):
 		button.set_pressed_no_signal(false)
@@ -1276,13 +1259,12 @@ func _refresh_action_prompt(phase: String, actor_seat_index: int, local_seat_ind
 	elif phase == "claim_reveal":
 		_action_prompt_label.text = "抢牌选择同时揭晓中"
 	elif phase == "award_discard":
+		var local_award := _current_local_award()
 		if _discard_submission_pending and show_discard_controls:
 			_action_prompt_label.text = "弃牌提交中：等待服务器确认"
 		elif show_discard_controls:
-			_action_prompt_label.text = "你获得了 %s：请选择一张原手牌弃置" % _format_card(
-				_current_local_award()
-			)
-		elif not _current_local_award().is_empty():
+			_action_prompt_label.text = "你获得了 %s：请选择一张原手牌弃置" % _format_card(local_award)
+		elif not local_award.is_empty():
 			_action_prompt_label.text = "弃牌已完成：等待其他参与者"
 		else:
 			_action_prompt_label.text = "等待获得牌的参与者弃牌"
