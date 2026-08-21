@@ -770,8 +770,9 @@ func _refresh_seats(local_seat_index: int, actor_seat_index: int) -> void:
 				role_parts.append("共同胜者" if winner_seat_indexes.size() > 1 else "胜者")
 		_seat_position_labels[seat_index].text = _seat_position_text(seat_index, local_seat_index)
 		_seat_name_labels[seat_index].text = str(participant.get("nickname", "等待参与者")) if occupied else "等待参与者"
+		var detail_prefix := "机器人 · " if is_terminal_phase and is_bot else ""
 		_seat_detail_labels[seat_index].text = (
-			"分数 %d  ·  手牌 %d" % [int(participant.get("score", 0)), int(participant.get("hand_count", 0))]
+			"%s分数 %d  ·  手牌 %d" % [detail_prefix, int(participant.get("score", 0)), int(participant.get("hand_count", 0))]
 			if occupied else "空席"
 		)
 		_seat_role_labels[seat_index].text = " · ".join(role_parts)
@@ -1131,7 +1132,7 @@ func _refresh_final_settlement(phase: String, final_results: Array[Dictionary]) 
 		row.add_theme_constant_override("separation", 0)
 		_claim_reveal_list.add_child(row)
 		var heading_text := "%s · 结算 +%d · 总分 %d · 手牌 %d" % [
-			_participant_name(seat_index),
+			_settlement_participant_name(seat_index),
 			int(result.get("total_score", 0)),
 			_participant_score(seat_index),
 			_participant_hand_count(seat_index),
@@ -1142,7 +1143,7 @@ func _refresh_final_settlement(phase: String, final_results: Array[Dictionary]) 
 			previous_score = participant_score
 			heading_text = "第 %d 名 · %s · 总分 %d%s · 手牌 %d" % [
 				display_rank,
-				_participant_name(seat_index),
+				_settlement_participant_name(seat_index),
 				participant_score,
 				(
 					" · 共同胜者"
@@ -1217,7 +1218,7 @@ func _winner_names(raw_seat_indexes: Variant) -> Array[String]:
 	if not raw_seat_indexes is Array:
 		return names
 	for raw_seat_index: Variant in raw_seat_indexes:
-		names.append(_participant_name(int(raw_seat_index)))
+		names.append(_settlement_participant_name(int(raw_seat_index)))
 	return names
 
 
@@ -1918,6 +1919,14 @@ func _participant_name(seat_index: int) -> String:
 		if not nickname.is_empty():
 			return nickname
 	return "等待"
+
+
+func _settlement_participant_name(seat_index: int) -> String:
+	var nickname := _participant_name(seat_index)
+	var participant: Dictionary = _participant_by_seat.get(seat_index, {})
+	if bool(participant.get("is_bot", false)) and not nickname.contains("机器人"):
+		return "%s（机器人）" % nickname
+	return nickname
 
 
 func _format_reveals(raw_reveals: Variant) -> String:

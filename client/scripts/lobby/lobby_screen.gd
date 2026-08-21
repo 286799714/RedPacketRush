@@ -37,7 +37,7 @@ var _room_tree: Tree
 var _empty_label: Label
 var _selection_label: Label
 var _join_button: Button
-var _rooms_state := "disconnected"
+var _connection_state := "disconnected"
 
 
 func set_realtime_adapter(adapter: Object) -> void:
@@ -377,7 +377,7 @@ func _on_room_activated() -> void:
 
 
 func _on_connection_changed(state: String, status_text: String) -> void:
-	_rooms_state = state
+	_connection_state = state
 	var status_color := COLOR_MUTED
 	match state:
 		"connecting":
@@ -426,7 +426,7 @@ func _refresh_rooms_surface() -> void:
 	if _room_tree == null or _empty_label == null:
 		return
 	var has_rooms := _room_tree.get_root() != null and _room_tree.get_root().get_first_child() != null
-	match _rooms_state:
+	match _connection_state:
 		"connecting":
 			_empty_label.text = "正在加载房间列表"
 			_room_tree.visible = false

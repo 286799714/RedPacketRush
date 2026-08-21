@@ -3,9 +3,74 @@ extends SceneTree
 const MatchScreen = preload("res://scripts/match/match_screen.gd")
 const LobbyScreen = preload("res://scripts/lobby/lobby_screen.gd")
 const RoomScreen = preload("res://scripts/room/room_screen.gd")
-const LobbyStore = preload("res://scripts/lobby/lobby_store.gd")
 const RoomStore = preload("res://scripts/room/room_store.gd")
 const FakeRealtimeAdapter = preload("res://tests/fakes/fake_realtime_adapter.gd")
+
+enum Surface { LOBBY, ROOM, MATCH }
+enum Setup {
+	LOBBY_LOADING,
+	LOBBY_EMPTY,
+	LOBBY_VALIDATION_ERROR,
+	LOBBY_RETRY,
+	LOBBY_POPULATED_SELECTED,
+	ROOM_FULL_HOST,
+	MATCH_ACTOR_TWO_DECK,
+	MATCH_CLAIM_SELECTED,
+	MATCH_CLAIM_COLLISION,
+	MATCH_AWARD_PROTECTED,
+	MATCH_RECONNECTING,
+	MATCH_VALIDATION_ERROR,
+	MATCH_FINAL_SELECTION,
+	MATCH_FINAL_REVEAL,
+	MATCH_FINISHED,
+}
+
+const VIEWPORT_SIZES := [Vector2i(960, 540), Vector2i(1280, 720)]
+const VALID_MATCH_PHASES := [
+	"actor_play",
+	"claim_commit",
+	"claim_reveal",
+	"award_discard",
+	"final_commit",
+	"final_reveal",
+	"finished",
+]
+const LOBBY_SETUPS := [
+	Setup.LOBBY_LOADING,
+	Setup.LOBBY_EMPTY,
+	Setup.LOBBY_VALIDATION_ERROR,
+	Setup.LOBBY_RETRY,
+	Setup.LOBBY_POPULATED_SELECTED,
+]
+const ROOM_SETUPS := [Setup.ROOM_FULL_HOST]
+const MATCH_SETUPS := [
+	Setup.MATCH_ACTOR_TWO_DECK,
+	Setup.MATCH_CLAIM_SELECTED,
+	Setup.MATCH_CLAIM_COLLISION,
+	Setup.MATCH_AWARD_PROTECTED,
+	Setup.MATCH_RECONNECTING,
+	Setup.MATCH_VALIDATION_ERROR,
+	Setup.MATCH_FINAL_SELECTION,
+	Setup.MATCH_FINAL_REVEAL,
+	Setup.MATCH_FINISHED,
+]
+const SCENARIOS := [
+	{"surface": Surface.LOBBY, "setup": Setup.LOBBY_LOADING, "label": "lobby-loading-empty"},
+	{"surface": Surface.LOBBY, "setup": Setup.LOBBY_EMPTY, "label": "lobby-empty"},
+	{"surface": Surface.LOBBY, "setup": Setup.LOBBY_VALIDATION_ERROR, "label": "lobby-validation-error"},
+	{"surface": Surface.LOBBY, "setup": Setup.LOBBY_RETRY, "label": "lobby-retry"},
+	{"surface": Surface.LOBBY, "setup": Setup.LOBBY_POPULATED_SELECTED, "label": "lobby-populated-selected"},
+	{"surface": Surface.ROOM, "setup": Setup.ROOM_FULL_HOST, "label": "room-full-host"},
+	{"surface": Surface.MATCH, "setup": Setup.MATCH_ACTOR_TWO_DECK, "phase": "actor_play", "label": "actor-play-two-deck"},
+	{"surface": Surface.MATCH, "setup": Setup.MATCH_CLAIM_SELECTED, "phase": "claim_commit", "label": "claim-commit-selected"},
+	{"surface": Surface.MATCH, "setup": Setup.MATCH_CLAIM_COLLISION, "phase": "claim_reveal", "label": "claim-reveal-collision"},
+	{"surface": Surface.MATCH, "setup": Setup.MATCH_AWARD_PROTECTED, "phase": "award_discard", "label": "award-discard-protected"},
+	{"surface": Surface.MATCH, "setup": Setup.MATCH_RECONNECTING, "phase": "actor_play", "label": "match-reconnecting"},
+	{"surface": Surface.MATCH, "setup": Setup.MATCH_VALIDATION_ERROR, "phase": "actor_play", "label": "match-validation-error"},
+	{"surface": Surface.MATCH, "setup": Setup.MATCH_FINAL_SELECTION, "phase": "final_commit", "label": "final-commit"},
+	{"surface": Surface.MATCH, "setup": Setup.MATCH_FINAL_REVEAL, "phase": "final_reveal", "label": "final-reveal"},
+	{"surface": Surface.MATCH, "setup": Setup.MATCH_FINISHED, "phase": "finished", "label": "finished"},
+]
 
 
 class VisualMatchStore extends RefCounted:
@@ -100,60 +165,111 @@ func _init() -> void:
 
 
 func _run() -> void:
+	if not _validate_scenarios():
+		quit(1)
+		return
+	if "--validate-only" in OS.get_cmdline_user_args():
+		print("PASS: validated %d delivery capture scenarios" % SCENARIOS.size())
+		quit(0)
+		return
+
 	var output_directory := _read_output_directory()
 	var error := DirAccess.make_dir_recursive_absolute(output_directory)
 	if error != OK:
 		push_error("could not create screenshot directory: %s" % error_string(error))
 		quit(1)
 		return
-	if not await _capture_lobby_room_states(output_directory):
-		quit(1)
-		return
-
-	for viewport_size in [Vector2i(960, 540), Vector2i(1280, 720)]:
-		if not await _capture_state("actor_play", viewport_size, output_directory, "actor-play-two-deck"):
-			quit(1)
-			return
-		if not await _capture_state("claim_commit", viewport_size, output_directory, "claim-commit-selected"):
-			quit(1)
-			return
-		if not await _capture_state("claim_reveal", viewport_size, output_directory, "claim-reveal-collision"):
-			quit(1)
-			return
-		for spec in [
-			{"phase": "award_discard", "label": "award-discard-protected"},
-			{"phase": "actor_play", "label": "match-reconnecting"},
-			{"phase": "actor_play", "label": "match-validation-error"},
-			{"phase": "final_commit", "label": "final-commit"},
-			{"phase": "final_reveal", "label": "final-reveal"},
-			{"phase": "finished", "label": "finished"},
-		]:
-			if not await _capture_state(spec["phase"], viewport_size, output_directory, spec["label"]):
+	for viewport_size in VIEWPORT_SIZES:
+		for spec in SCENARIOS:
+			if not await _capture_scenario(spec, viewport_size, output_directory):
 				quit(1)
 				return
 
-	print("PASS: captured nonblank match screen states in %s" % output_directory)
+	print("PASS: captured %d nonblank delivery screen states at %d viewport sizes in %s" % [
+		SCENARIOS.size(),
+		VIEWPORT_SIZES.size(),
+		output_directory,
+	])
 	quit(0)
 
 
-func _capture_lobby_room_states(output_directory: String) -> bool:
-	var lobby_labels := [
-		"lobby-loading-empty",
-		"lobby-empty",
-		"lobby-validation-error",
-		"lobby-retry",
-		"lobby-populated-selected",
-	]
-	for viewport_size in [Vector2i(960, 540), Vector2i(1280, 720)]:
-		for label in lobby_labels:
-			if not await _capture_lobby_state(label, viewport_size, output_directory):
-				return false
-		if not await _capture_room_state("room-full-host", viewport_size, output_directory):
+func _validate_scenarios() -> bool:
+	var seen_labels: Dictionary = {}
+	var seen_setups: Dictionary = {}
+	for spec in SCENARIOS:
+		if not spec.has_all(["surface", "setup", "label"]):
+			push_error("delivery capture scenario is missing surface, setup, or label: %s" % spec)
 			return false
+		var surface: int = spec["surface"]
+		var setup: int = spec["setup"]
+		var label: String = spec["label"]
+		if label.is_empty() or seen_labels.has(label):
+			push_error("delivery capture scenario label is empty or duplicated: %s" % label)
+			return false
+		if seen_setups.has(setup):
+			push_error("delivery capture setup appears more than once: %s" % setup)
+			return false
+		if not _setup_matches_surface(surface, setup):
+			push_error("delivery capture setup %s does not belong to surface %s" % [setup, surface])
+			return false
+		if surface == Surface.MATCH:
+			if not spec.has("phase") or spec["phase"] not in VALID_MATCH_PHASES:
+				push_error("match capture scenario has an invalid phase: %s" % spec)
+				return false
+		elif spec.has("phase"):
+			push_error("non-match capture scenario must not define a phase: %s" % spec)
+			return false
+		seen_labels[label] = true
+		seen_setups[setup] = true
+
+	var expected_setup_count := LOBBY_SETUPS.size() + ROOM_SETUPS.size() + MATCH_SETUPS.size()
+	if seen_setups.size() != expected_setup_count:
+		push_error("delivery capture matrix covers %d of %d setups" % [
+			seen_setups.size(),
+			expected_setup_count,
+		])
+		return false
 	return true
 
 
+func _setup_matches_surface(surface: int, setup: int) -> bool:
+	match surface:
+		Surface.LOBBY:
+			return setup in LOBBY_SETUPS
+		Surface.ROOM:
+			return setup in ROOM_SETUPS
+		Surface.MATCH:
+			return setup in MATCH_SETUPS
+	return false
+
+
+func _capture_scenario(
+	spec: Dictionary,
+	viewport_size: Vector2i,
+	output_directory: String
+) -> bool:
+	var surface: int = spec["surface"]
+	var setup: int = spec["setup"]
+	var label: String = spec["label"]
+	match surface:
+		Surface.LOBBY:
+			return await _capture_lobby_state(setup, label, viewport_size, output_directory)
+		Surface.ROOM:
+			return await _capture_room_state(setup, label, viewport_size, output_directory)
+		Surface.MATCH:
+			return await _capture_match_state(
+				spec["phase"],
+				setup,
+				label,
+				viewport_size,
+				output_directory
+			)
+	push_error("unsupported delivery capture surface: %s" % surface)
+	return false
+
+
 func _capture_lobby_state(
+	setup: int,
 	label: String,
 	viewport_size: Vector2i,
 	output_directory: String
@@ -170,20 +286,20 @@ func _capture_lobby_state(
 	viewport.add_child(screen)
 	await process_frame
 	await process_frame
-	match label:
-		"lobby-loading-empty":
+	match setup:
+		Setup.LOBBY_LOADING:
 			adapter.publish_connection_state("connecting")
-		"lobby-empty":
+		Setup.LOBBY_EMPTY:
 			adapter.publish_connection_state("connected")
 			adapter.publish_rooms([])
-		"lobby-validation-error":
+		Setup.LOBBY_VALIDATION_ERROR:
 			adapter.publish_connection_state("connected")
 			screen._nickname_input.text = "甲"
 			screen._endpoint_input.text = "http://invalid"
 			screen._connect_button.pressed.emit()
-		"lobby-retry":
+		Setup.LOBBY_RETRY:
 			adapter.publish_connection_state("retryable_error", "服务器暂时不可用")
-		"lobby-populated-selected":
+		Setup.LOBBY_POPULATED_SELECTED:
 			adapter.publish_connection_state("connected")
 			screen._nickname_input.text = "甲"
 			adapter.publish_rooms([
@@ -202,10 +318,14 @@ func _capture_lobby_state(
 
 
 func _capture_room_state(
+	setup: int,
 	label: String,
 	viewport_size: Vector2i,
 	output_directory: String
 ) -> bool:
+	if setup != Setup.ROOM_FULL_HOST:
+		push_error("unsupported room capture setup: %s" % setup)
+		return false
 	var viewport := SubViewport.new()
 	viewport.size = viewport_size
 	viewport.render_target_update_mode = SubViewport.UPDATE_ALWAYS
@@ -272,18 +392,19 @@ func _save_capture(
 	return true
 
 
-func _capture_state(
+func _capture_match_state(
 	phase: String,
+	setup: int,
+	label: String,
 	viewport_size: Vector2i,
-	output_directory: String,
-	visual_state: String = ""
+	output_directory: String
 ) -> bool:
 	var viewport := SubViewport.new()
 	viewport.size = viewport_size
 	viewport.render_target_update_mode = SubViewport.UPDATE_ALWAYS
 	root.add_child(viewport)
 
-	var store := _make_store(phase, visual_state)
+	var store := _make_store(phase, setup)
 	var screen := MatchScreen.new()
 	screen.set_anchors_and_offsets_preset(Control.PRESET_TOP_LEFT)
 	screen.size = Vector2(viewport_size)
@@ -291,11 +412,11 @@ func _capture_state(
 	viewport.add_child(screen)
 	await process_frame
 	await process_frame
-	if visual_state == "match-validation-error":
+	if setup == Setup.MATCH_VALIDATION_ERROR:
 		screen._on_action_failed("invalid_play", "出牌失败：请选择三张不同的手牌")
 		await process_frame
 
-	if phase == "actor_play":
+	if setup in [Setup.MATCH_ACTOR_TWO_DECK, Setup.MATCH_RECONNECTING, Setup.MATCH_VALIDATION_ERROR]:
 		for index in range(3):
 			var card_button := screen.find_child("HandCard%d" % index, true, false) as Button
 			if card_button == null:
@@ -305,7 +426,7 @@ func _capture_state(
 				return false
 			card_button.button_pressed = true
 		await process_frame
-	elif phase == "claim_commit":
+	elif setup == Setup.MATCH_CLAIM_SELECTED:
 		var claim_card := screen.find_child("ClaimCard1", true, false) as Button
 		if claim_card == null:
 			push_error("claim-commit capture could not find a selectable played card")
@@ -314,51 +435,41 @@ func _capture_state(
 			return false
 		claim_card.button_pressed = true
 		await process_frame
-	elif phase == "claim_reveal":
+	elif setup == Setup.MATCH_CLAIM_COLLISION:
 		await create_timer(0.25).timeout
-	elif phase == "award_discard":
+	elif setup == Setup.MATCH_AWARD_PROTECTED:
 		await process_frame
-	elif phase == "final_commit":
+	elif setup == Setup.MATCH_FINAL_SELECTION:
 		for rank in [2, 3, 4]:
 			var card_button := _find_button_with_content(screen, "%d♣" % rank)
 			if card_button == null:
 				push_error("final-commit capture could not find A-group card %d" % rank)
+				viewport.queue_free()
+				await process_frame
 				return false
 			card_button.button_pressed = true
 			await process_frame
 		var group_b_button := _find_button(screen, "B 组")
 		if group_b_button == null:
 			push_error("final-commit capture could not find B-group mode")
+			viewport.queue_free()
+			await process_frame
 			return false
 		group_b_button.button_pressed = true
 		for rank in [5, 6, 7]:
 			var card_button := _find_button_with_content(screen, "%d♠" % rank)
 			if card_button == null:
 				push_error("final-commit capture could not find B-group card %d" % rank)
+				viewport.queue_free()
+				await process_frame
 				return false
 			card_button.button_pressed = true
 			await process_frame
 
-	for frame in range(3):
-		await process_frame
-	var image := viewport.get_texture().get_image()
-	var filename_stem := visual_state if not visual_state.is_empty() else phase
-	var filename := "%s-%dx%d.png" % [filename_stem, viewport_size.x, viewport_size.y]
-	var output_path := output_directory.path_join(filename)
-	var save_error := image.save_png(output_path)
-	var nonblank := _has_pixel_variation(image)
-	viewport.queue_free()
-	await process_frame
-	if save_error != OK:
-		push_error("could not save %s: %s" % [output_path, error_string(save_error)])
-		return false
-	if not nonblank:
-		push_error("captured image is blank: %s" % output_path)
-		return false
-	return true
+	return await _save_capture(viewport, output_directory, label, viewport_size)
 
 
-func _make_store(phase: String, visual_state: String = "") -> VisualMatchStore:
+func _make_store(phase: String, setup: int) -> VisualMatchStore:
 	var store := VisualMatchStore.new()
 	store.phase = phase
 	store.participants = [
@@ -464,14 +575,14 @@ func _make_store(phase: String, visual_state: String = "") -> VisualMatchStore:
 			"results": store.final_results,
 			"winner_seat_indexes": store.winner_seat_indexes,
 		}]
-	match visual_state:
-		"actor-play-two-deck":
+	match setup:
+		Setup.MATCH_ACTOR_TWO_DECK:
 			store.deck_mode = "two"
-		"match-reconnecting":
+		Setup.MATCH_RECONNECTING:
 			store.connection_state = "reconnecting"
-		"match-validation-error":
+		Setup.MATCH_VALIDATION_ERROR:
 			store.connection_state = "connected"
-		"award-discard-protected":
+		Setup.MATCH_AWARD_PROTECTED:
 			var awarded_card := _card("award-hearts-a-copy-1", 14, "hearts", 1)
 			store.local_hand = [
 				_card("original-clubs-2", 2, "clubs", 0),
@@ -497,17 +608,6 @@ func _make_store(phase: String, visual_state: String = "") -> VisualMatchStore:
 				"awards": [{"seat_index": 0, "card": awarded_card, "source": "unique"}],
 				"discarded_cards": [],
 			}]
-		"disconnected_human":
-			var disconnected_seat := store.participants[1].duplicate(true)
-			disconnected_seat["is_connected"] = false
-			store.participants[1] = disconnected_seat
-		"bot_takeover":
-			var takeover_seat := store.participants[1].duplicate(true)
-			takeover_seat["is_connected"] = false
-			takeover_seat["is_bot"] = true
-			store.participants[1] = takeover_seat
-		"reconnecting":
-			store.connection_state = "reconnecting"
 	return store
 
 

@@ -1433,6 +1433,30 @@ func _test_final_reveal_and_finished_ranking_are_authoritative(
 			_expect(ranking_rect.position.x >= 0.0 and ranking_rect.position.y >= 0.0, "排名文本不越出左上边界")
 			_expect(ranking_rect.end.x <= viewport_size.x and ranking_rect.end.y <= viewport_size.y, "排名文本不越出视口")
 
+	store.apply_public_snapshot({"seats": [
+		_seat(0, "human-a", "甲", false, 22, 8),
+		_seat(1, "human-b", "乙", false, 25, 8),
+		_seat(2, "human-c", "丙", true, 25, 8),
+		_seat(3, "bot-d", "机器人丁", true, 10, 8),
+	]})
+	screen.size = Vector2(1280, 720)
+	await process_frame
+	await process_frame
+	_expect_equal(screen._seat_name_labels[2].text, "丙", "接管机器人保留原参与者昵称")
+	_expect_equal(screen._seat_role_labels[2].text, "共同胜者", "接管机器人终局角色保持完整")
+	_expect(screen._seat_detail_labels[2].text.begins_with("机器人"), "宽屏终局席位仍明确标记机器人接管")
+	screen.size = Vector2(960, 540)
+	await process_frame
+	await process_frame
+	_expect(_find_visible_label_containing(screen, "丙（机器人）") != null, "紧凑终局排名仍明确标记机器人接管")
+	store.apply_public_snapshot({"seats": [
+		_seat(0, "human-a", "甲", false, 22, 8),
+		_seat(1, "human-b", "乙", false, 25, 8),
+		_seat(2, "bot-c", "机器人丙", true, 25, 8),
+		_seat(3, "bot-d", "机器人丁", true, 10, 8),
+	]})
+	await process_frame
+
 
 func _test_rejected_claim_reenables_controls_without_moving_layout(
 	screen: MatchScreen,

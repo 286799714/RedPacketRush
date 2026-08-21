@@ -24,15 +24,28 @@ func _run() -> void:
 	quit(1)
 
 
-func _test_long_room_name_keeps_header_actions_visible() -> void:
+func _mount_room_screen(viewport_size := Vector2(960, 540)) -> Dictionary:
 	var adapter := FakeRealtimeAdapter.new()
 	var store := RoomStore.new(adapter)
 	var screen := RoomScreen.new()
 	screen.set_room_store(store)
 	screen.set_anchors_and_offsets_preset(Control.PRESET_TOP_LEFT)
-	screen.size = Vector2(960, 540)
+	screen.size = viewport_size
 	root.add_child(screen)
 	await process_frame
+	return {"adapter": adapter, "screen": screen}
+
+
+func _unmount_room_screen(fixture: Dictionary) -> void:
+	var screen: RoomScreen = fixture["screen"]
+	screen.queue_free()
+	await process_frame
+
+
+func _test_long_room_name_keeps_header_actions_visible() -> void:
+	var fixture := await _mount_room_screen()
+	var adapter: Object = fixture["adapter"]
+	var screen: RoomScreen = fixture["screen"]
 
 	adapter.publish_game_room_state({
 		"room_id": "room-long-name",
@@ -66,8 +79,7 @@ func _test_long_room_name_keeps_header_actions_visible() -> void:
 	_expect(leave_rect.position.x >= status_rect.end.x, "离开按钮不应与状态标签重叠")
 	_expect(leave_rect.end.x <= screen_rect.end.x, "离开按钮不应被推出右侧")
 	_expect(title_rect.end.x <= status_rect.position.x, "省略后的房名不应覆盖状态标签")
-	screen.queue_free()
-	await process_frame
+	await _unmount_room_screen(fixture)
 
 
 func _seat(seat_index: int, participant_id: String, nickname: String) -> Dictionary:
@@ -81,14 +93,9 @@ func _seat(seat_index: int, participant_id: String, nickname: String) -> Diction
 
 
 func _test_four_seats_and_host_controls_fit_at_two_sizes() -> void:
-	var adapter := FakeRealtimeAdapter.new()
-	var store := RoomStore.new(adapter)
-	var screen := RoomScreen.new()
-	screen.set_room_store(store)
-	screen.set_anchors_and_offsets_preset(Control.PRESET_TOP_LEFT)
-	screen.size = Vector2(960, 540)
-	root.add_child(screen)
-	await process_frame
+	var fixture := await _mount_room_screen()
+	var adapter: Object = fixture["adapter"]
+	var screen: RoomScreen = fixture["screen"]
 	adapter.publish_game_room_state(_room_snapshot("双副牌测试局", "waiting", "human-a", "two", _seats()))
 	await process_frame
 	_expect_equal(screen._seat_panels.size(), 4, "房间固定四席")
@@ -99,19 +106,13 @@ func _test_four_seats_and_host_controls_fit_at_two_sizes() -> void:
 	screen.size = Vector2(1280, 720)
 	await process_frame
 	_assert_room_regions_fit(screen, Vector2(1280, 720), "1280x720")
-	screen.queue_free()
-	await process_frame
+	await _unmount_room_screen(fixture)
 
 
 func _test_long_nicknames_and_errors_do_not_shift_controls() -> void:
-	var adapter := FakeRealtimeAdapter.new()
-	var store := RoomStore.new(adapter)
-	var screen := RoomScreen.new()
-	screen.set_room_store(store)
-	screen.set_anchors_and_offsets_preset(Control.PRESET_TOP_LEFT)
-	screen.size = Vector2(960, 540)
-	root.add_child(screen)
-	await process_frame
+	var fixture := await _mount_room_screen()
+	var adapter: Object = fixture["adapter"]
+	var screen: RoomScreen = fixture["screen"]
 	var seats := _seats()
 	for index in range(seats.size()):
 		seats[index]["nickname"] = "参与者-%s" % "很长的昵称".repeat(8)
@@ -126,8 +127,7 @@ func _test_long_nicknames_and_errors_do_not_shift_controls() -> void:
 	await process_frame
 	_expect_equal(screen._feedback_label.text, "房间设置已锁定", "房间错误反馈可见")
 	_expect_equal(screen._start_button.get_global_rect(), start_rect, "错误反馈不推动开始按钮")
-	screen.queue_free()
-	await process_frame
+	await _unmount_room_screen(fixture)
 
 
 func _room_snapshot(

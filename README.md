@@ -16,7 +16,7 @@ npm --prefix .\server ci
 .\scripts\verify.ps1 -GodotPath "C:\path\to\Godot_v4.7.1-stable_win64_console.exe" -SkipInstall
 ```
 
-`verify.ps1` 会检查已跟踪文件没有依赖目录、编辑器缓存、日志或秘密文件，然后运行服务端测试、TypeScript 构建、Godot editor parse 和全部 `client/tests/run_*_tests.gd` headless runner。省略 `-SkipInstall` 时，脚本会先执行 `npm ci`；只在已按锁文件安装依赖时使用 `-SkipInstall`。失败会立即停止并返回非零退出码。
+`verify.ps1` 会检查已跟踪文件没有依赖目录、编辑器缓存、日志或秘密文件，然后运行服务端测试、TypeScript 构建、Godot editor parse、全部 `client/tests/run_*_tests.gd` headless runner 和交付截图矩阵定义校验。省略 `-SkipInstall` 时，脚本会先执行 `npm ci`；只在已按锁文件安装依赖时使用 `-SkipInstall`。失败会立即停止并返回非零退出码。
 
 启动服务端：
 

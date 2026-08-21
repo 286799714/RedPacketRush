@@ -259,6 +259,18 @@ foreach ($runner in $headlessRunners) {
         -WorkingDirectory $clientDirectory
 }
 
+Write-Host "== Delivery capture matrix =="
+Invoke-ExternalCommand `
+    -FilePath $resolvedGodotPath `
+    -ArgumentList @(
+        "--headless",
+        "--path", $clientDirectory,
+        "--script", "res://tests/capture_delivery_screens.gd",
+        "--",
+        "--validate-only"
+    ) `
+    -WorkingDirectory $clientDirectory
+
 if ($LiveSmoke) {
     Write-Host "== Native SDK four-client smoke =="
     $smokeScript = Join-Path $clientDirectory "tests\run_live_lobby_smoke.ps1"
@@ -269,7 +281,7 @@ if ($RequireCleanTree) {
     Assert-CleanTree
 }
 
-Write-Host "PASS: tracked-artifact hygiene, server tests/build, Godot parse, and $($headlessRunners.Count) headless runners"
+Write-Host "PASS: tracked-artifact hygiene, server tests/build, Godot parse, $($headlessRunners.Count) headless runners, and delivery capture matrix"
 if ($LiveSmoke) {
     Write-Host "PASS: Native SDK four-client smoke"
 }
