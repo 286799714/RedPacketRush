@@ -2,7 +2,7 @@
 
 Red Packet Rush 是一个固定四人参加的中文纸牌对战原型：玩家在大厅发现房间，在等待房间配置一副或两副牌，随后进行点数抢先、三牌出牌、暗抢、获牌弃牌和最终结算。Colyseus 服务端是唯一规则权威，Godot 客户端只呈现公开状态并提交意图。
 
-> **运行前请先读**：本交付面向 Windows x86_64 desktop。需要 Node.js 22+、Godot 4.7.1 stable（64 位、单精度）和仓库内锁定的 Colyseus Native SDK `godot-v0.17.11`。项目使用 GDScript，不要求 Mono；不要用 Godot 双精度构建，也不要用未锁定的 SDK `main`。
+> **运行前请先读**：本交付已验证 Windows x86_64 desktop 和 Android arm64 调试包。需要 Node.js 22+、Godot 4.7.1 stable（64 位、单精度）和仓库内锁定的 Colyseus Native SDK `godot-v0.17.11`。项目使用 GDScript，不要求 Mono；不要用 Godot 双精度构建，也不要用未锁定的 SDK `main`。
 
 当前 QA 使用 `Godot 4.7.1.stable.mono.official.a13da4feb` console 可执行文件通过；Mono 只是已验证的引擎发行版，不是项目运行时依赖。
 
@@ -42,6 +42,19 @@ $env:GODOT_PATH = "C:\path\to\Godot_v4.7.1-stable_win64_console.exe"
 .\scripts\verify.ps1 -SkipInstall -LiveSmoke
 ```
 
+## Android 调试包
+
+先在 Godot 4.7.1 的编辑器设置中配置 Android SDK、JDK 21 和调试 keystore，并安装与编辑器匹配的同版本官方导出模板；Mono 编辑器应使用 `Godot_v4.7.1-stable_mono_export_templates.tpz`。随后在仓库根目录运行：
+
+```powershell
+$godot = "C:\path\to\Godot_v4.7.1-stable_win64_console.exe"
+New-Item -ItemType Directory -Force .\build\android | Out-Null
+$apk = Join-Path (Resolve-Path .\build\android).Path "RedPacketRush-debug.apk"
+& $godot --headless --path .\client --export-debug Android $apk
+```
+
+预设只导出 `arm64-v8a`，使用本机 Godot 调试签名，产物位于 `build/android/RedPacketRush-debug.apk`。真机访问电脑上的服务端时，大厅地址不能使用 `127.0.0.1`；请填写电脑的局域网地址，例如 `ws://192.168.1.10:2567`，并确保 Windows 防火墙允许该端口。
+
 ## 验证和 smoke
 
 完整检查：
@@ -75,7 +88,7 @@ $env:GODOT_PATH = "C:\path\to\Godot_v4.7.1-stable_win64_console.exe"
 npm --prefix .\server ci
 ```
 
-客户端已提交官方 Native SDK `godot-v0.17.11` 的 Windows x86_64 debug/release 二进制。来源、压缩包 SHA-256 和重装命令见 [`client/addons/colyseus/UPSTREAM.md`](client/addons/colyseus/UPSTREAM.md)。重装后应核对哈希 `334ea298f80af77089549c06dda89dfcbd98a33d7177a4a8bee9b8e7dacd9b7c`，再运行验证脚本。
+客户端已提交官方 Native SDK `godot-v0.17.11` 的 Windows x86_64 与 Android arm64 debug/release 二进制。来源、压缩包 SHA-256 和重装命令见 [`client/addons/colyseus/UPSTREAM.md`](client/addons/colyseus/UPSTREAM.md)。重装后应核对哈希 `334ea298f80af77089549c06dda89dfcbd98a33d7177a4a8bee9b8e7dacd9b7c`，再运行验证脚本。
 
 ## 玩法和系统边界
 
@@ -91,6 +104,6 @@ npm --prefix .\server ci
 
 ## 原型限制
 
-本项目不包含账号、持久化、密码房、好友/聊天、观战、晚加入、移动/主机/Web 正式导出、可验证生产随机数或生产级反作弊。Playground 和 Monitor 只为本地开发开放；部署时应关闭它们、启用认证与 TLS，并重新评估 Native SDK beta 的平台兼容性。
+本项目不包含账号、持久化、密码房、好友/聊天、观战、晚加入、Android 正式签名、主机/Web 正式导出、可验证生产随机数或生产级反作弊。Playground 和 Monitor 只为本地开发开放；部署时应关闭它们、启用认证与 TLS，并重新评估 Native SDK beta 的平台兼容性。
 
 服务端的详细命令、房间设置和目录边界见 [`server/README.md`](server/README.md)；规则词汇和设计取舍见 [`CONTEXT.md`](CONTEXT.md)、[`docs/adr/0001-use-colyseus-native-sdk-with-gdscript.md`](docs/adr/0001-use-colyseus-native-sdk-with-gdscript.md) 和 [`docs/research/godot-colyseus-integration.md`](docs/research/godot-colyseus-integration.md)。

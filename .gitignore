@@ -4,10 +4,15 @@ client/.mono/
 client/bin/
 client/obj/
 
-# The prototype ships only the Windows x86_64 Colyseus native binaries.
+# The prototype ships Windows x86_64 and Android arm64 Colyseus binaries.
 client/addons/colyseus/bin/*
 !client/addons/colyseus/bin/colyseus_godot.windows.x86_64.debug.dll
 !client/addons/colyseus/bin/colyseus_godot.windows.x86_64.release.dll
+!client/addons/colyseus/bin/libcolyseus_godot.android.arm64.debug.so
+!client/addons/colyseus/bin/libcolyseus_godot.android.arm64.release.so
+
+# Local export artifacts
+/build/
 
 # Local editor and operating-system files
 .vscode/

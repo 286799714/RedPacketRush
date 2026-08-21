@@ -25,6 +25,7 @@ window/size/window_height_override=720
 window/size/resizable=true
 window/size/min_width=960
 window/size/min_height=540
+window/handheld/orientation=0
 window/stretch/mode="canvas_items"
 window/stretch/aspect="expand"
 
@@ -44,3 +45,4 @@ project/assembly_name="扑克抢红包"
 
 rendering_device/driver.windows="d3d12"
 renderer/rendering_method="mobile"
+textures/vram_compression/import_etc2_astc=true

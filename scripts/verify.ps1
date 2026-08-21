@@ -106,7 +106,9 @@ function Assert-TrackedArtifactHygiene {
     $violations = [System.Collections.Generic.List[string]]::new()
     $allowedSdkBinaries = @(
         "client/addons/colyseus/bin/colyseus_godot.windows.x86_64.debug.dll",
-        "client/addons/colyseus/bin/colyseus_godot.windows.x86_64.release.dll"
+        "client/addons/colyseus/bin/colyseus_godot.windows.x86_64.release.dll",
+        "client/addons/colyseus/bin/libcolyseus_godot.android.arm64.debug.so",
+        "client/addons/colyseus/bin/libcolyseus_godot.android.arm64.release.so"
     )
 
     foreach ($trackedFile in $trackedFiles) {
