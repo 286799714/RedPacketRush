@@ -4,12 +4,18 @@
 
 **Blocked by:** 04 - Play and score a combination.
 
-**Status:** in-progress
+**Status:** done
 
-- [ ] Only the three non-actors can commit one valid played-card identifier or pass during claim commit.
-- [ ] A commit is acknowledged only to its owner and no unrevealed choice appears in shared state or another client's messages.
-- [ ] Claims reveal only after all three commits or the configured deadline.
-- [ ] Passers receive exactly one point and unique claimants receive the exact selected physical card.
-- [ ] Unique awards are removed before all remaining played cards are shuffled for collision participants.
-- [ ] All-pass, three-unique, two-collision-plus-unique, two-collision-plus-pass, and three-player-collision cases are deterministic under fixed random input.
-- [ ] The Godot table presents one secret choice, a pass action, waiting state, simultaneous reveal, collision motion, and public outcome history.
+- [x] Only the three non-actors can commit one valid played-card identifier or pass during claim commit.
+- [x] A commit is acknowledged only to its owner and no unrevealed choice appears in shared state or another client's messages.
+- [x] Claims reveal only after all three commits or the configured deadline.
+- [x] Passers receive exactly one point and unique claimants receive the exact selected physical card.
+- [x] Unique awards are removed before all remaining played cards are shuffled for collision participants.
+- [x] All-pass, three-unique, two-collision-plus-unique, two-collision-plus-pass, and three-player-collision cases are deterministic under fixed random input.
+- [x] The Godot table presents one secret choice, a pass action, waiting state, simultaneous reveal, collision motion, and public outcome history.
+
+## Review
+
+- Standards: 0 findings (`8e71eea...d05fbd6`).
+- Spec: 0 findings (`8e71eea...d05fbd6`).
+- Verification: server 72 tests, TypeScript build, seven Godot runners, and Native four-client smoke all passed. Existing Godot ObjectDB/resource exit warnings remain non-fatal.
