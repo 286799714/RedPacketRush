@@ -165,7 +165,9 @@ export class MatchEngine {
     if (!Array.isArray(cardIds) || cardIds.length !== 3) {
       throw new MatchCommandError("invalid_play", "exactly three card identifiers are required");
     }
-    if (!cardIds.every((cardId) => typeof cardId === "string" && cardId.length > 0)) {
+    if (!Array.from(cardIds).every((cardId) => (
+      typeof cardId === "string" && cardId.length > 0
+    ))) {
       throw new MatchCommandError("invalid_play", "card identifiers must be non-empty strings");
     }
     if (new Set(cardIds).size !== 3) {

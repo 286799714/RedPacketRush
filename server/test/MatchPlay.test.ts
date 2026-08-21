@@ -172,6 +172,23 @@ describe("match actor play", () => {
     );
   });
 
+  it("rejects a sparse three-slot identifier array", () => {
+    const random = new MaxIndexRandom();
+    const engine = startedEngine(random);
+    engine.completePointContest();
+    const [firstCard, secondCard] = engine.view(0).privateState.hand;
+    const sparseIds = new Array<string>(3);
+    sparseIds[0] = firstCard.id;
+    sparseIds[2] = secondCard.id;
+
+    assertCommandRejectedWithoutMutation(
+      engine,
+      random,
+      () => engine.playCards(0, sparseIds),
+      "invalid_play",
+    );
+  });
+
   it("rejects empty card identifiers", () => {
     const random = new MaxIndexRandom();
     const engine = startedEngine(random);

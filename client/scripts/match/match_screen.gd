@@ -4,6 +4,7 @@ class_name MatchScreen
 ## Dense public match table.  The screen deliberately consumes a very small
 ## store protocol so that private data never has to pass through the scene.
 
+const CombinationCatalog = preload("res://scripts/domain/combination_catalog.gd")
 const COLOR_BACKGROUND := Color("#121416")
 const COLOR_TABLE := Color("#172321")
 const COLOR_TABLE_LINE := Color("#2b413b")
@@ -926,20 +927,7 @@ func _phase_text(phase: String) -> String:
 
 
 func _combination_text(category: String) -> String:
-	match category:
-		"high_card":
-			return "散牌"
-		"pair":
-			return "一对"
-		"flush":
-			return "同花"
-		"straight":
-			return "顺子"
-		"three_of_a_kind":
-			return "三条"
-		"straight_flush":
-			return "同花顺"
-	return "未知"
+	return CombinationCatalog.label(category)
 
 
 func _label(text: String, font_size: int, color: Color) -> Label:

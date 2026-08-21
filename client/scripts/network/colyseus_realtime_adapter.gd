@@ -12,18 +12,11 @@ signal game_room_connection_changed(state: String, detail: String)
 signal room_action_failed(code: String, message: String)
 
 const ColyseusSdk = preload("res://addons/colyseus/colyseus.gd")
+const CombinationCatalog = preload("res://scripts/domain/combination_catalog.gd")
 const GameSchema = preload("res://schema/schema.gd")
 const LOBBY_ROOM_TYPE := "lobby"
 const GAME_ROOM_TYPE := "game"
 const ROOM_SEAT_COUNT := 4
-const COMBINATION_CATEGORIES := [
-	"high_card",
-	"pair",
-	"flush",
-	"straight",
-	"three_of_a_kind",
-	"straight_flush",
-]
 
 var _client: Variant
 var _lobby_room: Variant
@@ -597,7 +590,7 @@ func _normalize_public_cards(raw_cards: Variant, limit: int) -> Array[Dictionary
 
 func _normalize_combination_category(raw_category: Variant) -> String:
 	var category := str(raw_category)
-	return category if category in COMBINATION_CATEGORIES else ""
+	return category if CombinationCatalog.is_category(category) else ""
 
 
 func _normalize_play_events(raw_events: Variant) -> Array[Dictionary]:

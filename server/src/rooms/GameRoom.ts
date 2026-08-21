@@ -407,7 +407,7 @@ export class GameRoom extends Room<{
     if (
       !isRecordLike(message)
       || !Array.isArray(message.cardIds)
-      || !message.cardIds.every((cardId) => typeof cardId === "string")
+      || !Array.from(message.cardIds).every((cardId) => typeof cardId === "string")
     ) {
       this.sendRoomError(client, ROOM_ERRORS.invalidPlayPayload);
       return;

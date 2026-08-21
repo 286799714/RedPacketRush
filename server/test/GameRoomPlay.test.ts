@@ -2,20 +2,15 @@ import assert from "assert";
 import { ColyseusTestServer } from "@colyseus/testing";
 
 import appConfig from "../src/app.config.js";
+import type { PhysicalCard } from "../src/match/cards.js";
+import { classifyCombination } from "../src/match/combinations.js";
 import { GameRoom } from "../src/rooms/GameRoom.js";
 import { getTestServer } from "./testServer.js";
-
-interface PrivateCard {
-  id: string;
-  rank: number;
-  suit: string;
-  copyIndex: number;
-}
 
 interface PrivateMatchState {
   seatIndex: number;
   participantId: string;
-  hand: PrivateCard[];
+  hand: PhysicalCard[];
 }
 
 interface UntypedMessageRoom {
@@ -30,15 +25,6 @@ function onRoomMessage(
   return (participant as UntypedMessageRoom).onMessage(type, callback);
 }
 
-const CATEGORY_SCORES = {
-  high_card: 0,
-  pair: 2,
-  flush: 4,
-  straight: 5,
-  three_of_a_kind: 8,
-  straight_flush: 10,
-} as const;
-
 async function waitUntil(condition: () => boolean, timeoutMs = 2000): Promise<void> {
   const deadline = Date.now() + timeoutMs;
   while (!condition()) {
@@ -49,39 +35,13 @@ async function waitUntil(condition: () => boolean, timeoutMs = 2000): Promise<vo
   }
 }
 
-function classify(cards: readonly PrivateCard[]): {
-  category: keyof typeof CATEGORY_SCORES;
-  score: number;
-} {
-  const ranks = cards.map((card) => card.rank).sort((left, right) => left - right);
-  const distinctRanks = new Set(ranks);
-  const flush = cards.every((card) => card.suit === cards[0].suit);
-  const straight = distinctRanks.size === 3 && (
-    (ranks[1] === ranks[0] + 1 && ranks[2] === ranks[1] + 1)
-    || (ranks[0] === 2 && ranks[1] === 3 && ranks[2] === 14)
-  );
-  const sameRank = distinctRanks.size === 1;
-  const category = flush && straight
-    ? "straight_flush"
-    : sameRank
-      ? "three_of_a_kind"
-      : straight
-        ? "straight"
-        : flush
-          ? "flush"
-          : distinctRanks.size === 2
-            ? "pair"
-            : "high_card";
-  return { category, score: CATEGORY_SCORES[category] };
-}
-
-function chooseHighestScoringCombination(hand: readonly PrivateCard[]): PrivateCard[] {
+function chooseHighestScoringCombination(hand: readonly PhysicalCard[]): PhysicalCard[] {
   let selected = [hand[0], hand[1], hand[2]];
   for (let first = 0; first < hand.length - 2; first += 1) {
     for (let second = first + 1; second < hand.length - 1; second += 1) {
       for (let third = second + 1; third < hand.length; third += 1) {
         const candidate = [hand[first], hand[second], hand[third]];
-        if (classify(candidate).score > classify(selected).score) {
+        if (classifyCombination(candidate).score > classifyCombination(selected).score) {
           selected = candidate;
         }
       }
@@ -244,7 +204,7 @@ describe("game room actor play", () => {
     const actor = participants[actorSeatIndex];
     const actorOpeningState = openingStates[actorSeatIndex];
     const selectedCards = chooseHighestScoringCombination(actorOpeningState.hand);
-    const expected = classify(selectedCards);
+    const expected = classifyCombination(selectedCards);
     const before = serverRoom.state.toJSON();
     const replacementMessages: PrivateMatchState[][] = participants.map((): PrivateMatchState[] => []);
     participants.forEach((participant, seatIndex) => {
