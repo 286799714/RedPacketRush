@@ -4,7 +4,7 @@
 
 **Blocked by:** 05 - Resolve secret claims and collisions.
 
-**Status:** ready-for-agent
+**Status:** claimed
 
 - [ ] Each recipient has nine private cards until submitting one discard and non-recipients remain at eight.
 - [ ] The card awarded this turn cannot be discarded; stale, duplicate, or unowned discard commands do not mutate state.
