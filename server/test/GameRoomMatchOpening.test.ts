@@ -267,9 +267,10 @@ describe("game room match opening", () => {
     handled = serverRoom.waitForMessage("start");
     host.send("start", null);
     await commitEntered;
-    await host.leave();
+    const leaving = host.leave();
+    await waitUntil(() => serverRoom.state.seats[0].participantId === "");
     releaseCommit();
-    await handled;
+    await Promise.all([handled, leaving]);
 
     assert.strictEqual(serverRoom.state.status, "waiting");
     assert.strictEqual(serverRoom.state.phase, "");
@@ -282,5 +283,183 @@ describe("game room match opening", () => {
     assert.strictEqual(listing.locked, false);
 
     await guest.leave();
+  });
+
+  it("restores the current waiting listing when a start commit fails after the host leaves", async () => {
+    const host = await colyseus.sdk.create("game", {
+      nickname: "甲",
+      displayName: "失败离开竞态测试",
+      deckMode: "one",
+      actionDeadlineSeconds: 30,
+    });
+    const guest = await colyseus.sdk.joinById(host.roomId, { nickname: "乙" });
+    const serverRoom = colyseus.getRoomById<GameRoom>(host.roomId);
+
+    let handled = serverRoom.waitForMessage("fill_bots");
+    host.send("fill_bots", null);
+    await handled;
+    handled = serverRoom.waitForMessage("set_ready");
+    host.send("set_ready", { ready: true });
+    await handled;
+    handled = serverRoom.waitForMessage("set_ready");
+    guest.send("set_ready", { ready: true });
+    await handled;
+
+    let releaseCommit = (): void => {};
+    const commitGate = new Promise<void>((resolve) => {
+      releaseCommit = resolve;
+    });
+    let markCommitEntered = (): void => {};
+    const commitEntered = new Promise<void>((resolve) => {
+      markCommitEntered = resolve;
+    });
+    const commitMatchmaking = serverRoom.setMatchmaking.bind(serverRoom);
+    let commitCount = 0;
+    serverRoom.setMatchmaking = async (updates): Promise<void> => {
+      commitCount += 1;
+      if (commitCount === 1) {
+        markCommitEntered();
+        await commitGate;
+        throw new Error("injected matchmaking failure");
+      }
+      await commitMatchmaking(updates);
+    };
+
+    handled = serverRoom.waitForMessage("start");
+    host.send("start", null);
+    await commitEntered;
+    const leaving = host.leave();
+    await waitUntil(() => serverRoom.state.seats[0].participantId === "");
+    releaseCommit();
+    await Promise.all([handled, leaving]);
+
+    assert.strictEqual(serverRoom.state.status, "waiting");
+    assert.strictEqual(serverRoom.state.hostParticipantId, guest.sessionId);
+    assert.strictEqual(serverRoom.metadata.status, "waiting");
+    assert.strictEqual(serverRoom.metadata.participantCount, 3);
+    const [listing] = await matchMaker.query({ roomId: serverRoom.roomId });
+    assert.strictEqual(listing.private, false);
+    assert.strictEqual(listing.locked, false);
+
+    await guest.leave();
+  });
+
+  it("retries a transient persistence failure while cancelling a stale start", async () => {
+    const host = await colyseus.sdk.create("game", {
+      nickname: "甲",
+      displayName: "取消恢复重试测试",
+      deckMode: "one",
+      actionDeadlineSeconds: 30,
+    });
+    const guest = await colyseus.sdk.joinById(host.roomId, { nickname: "乙" });
+    const serverRoom = colyseus.getRoomById<GameRoom>(host.roomId);
+
+    let handled = serverRoom.waitForMessage("fill_bots");
+    host.send("fill_bots", null);
+    await handled;
+    handled = serverRoom.waitForMessage("set_ready");
+    host.send("set_ready", { ready: true });
+    await handled;
+    handled = serverRoom.waitForMessage("set_ready");
+    guest.send("set_ready", { ready: true });
+    await handled;
+
+    const commitMatchmaking = serverRoom.setMatchmaking.bind(serverRoom);
+    let releaseCommit = (): void => {};
+    const commitGate = new Promise<void>((resolve) => {
+      releaseCommit = resolve;
+    });
+    let markCommitEntered = (): void => {};
+    const commitEntered = new Promise<void>((resolve) => {
+      markCommitEntered = resolve;
+    });
+    let commitCount = 0;
+    serverRoom.setMatchmaking = async (updates): Promise<void> => {
+      commitCount += 1;
+      if (commitCount === 1) {
+        markCommitEntered();
+        await commitGate;
+        await commitMatchmaking(updates);
+        return;
+      }
+      if (commitCount === 2) {
+        throw new Error("injected recovery failure");
+      }
+      await commitMatchmaking(updates);
+    };
+
+    handled = serverRoom.waitForMessage("start");
+    host.send("start", null);
+    await commitEntered;
+    const leaving = host.leave();
+    await waitUntil(() => serverRoom.state.seats[0].participantId === "");
+    releaseCommit();
+    await Promise.all([handled, leaving]);
+
+    assert.strictEqual(commitCount >= 3, true);
+    assert.strictEqual(serverRoom.state.status, "waiting");
+    assert.strictEqual(serverRoom.metadata.status, "waiting");
+    assert.strictEqual(serverRoom.metadata.participantCount, 3);
+    const [listing] = await matchMaker.query({ roomId: serverRoom.roomId });
+    assert.strictEqual(listing.private, false);
+    assert.strictEqual(listing.locked, false);
+
+    await guest.leave();
+  });
+
+  it("repairs an ambiguously committed start after immediate recovery is exhausted", async () => {
+    const host = await colyseus.sdk.create("game", {
+      nickname: "甲",
+      displayName: "定时恢复测试",
+      deckMode: "one",
+      actionDeadlineSeconds: 30,
+    });
+    const serverRoom = colyseus.getRoomById<GameRoom>(host.roomId);
+
+    let handled = serverRoom.waitForMessage("fill_bots");
+    host.send("fill_bots", null);
+    await handled;
+    handled = serverRoom.waitForMessage("set_ready");
+    host.send("set_ready", { ready: true });
+    await handled;
+
+    const commitMatchmaking = serverRoom.setMatchmaking.bind(serverRoom);
+    let commitCount = 0;
+    serverRoom.setMatchmaking = async (updates): Promise<void> => {
+      commitCount += 1;
+      if (commitCount === 1) {
+        await commitMatchmaking(updates);
+        throw new Error("injected ambiguous start failure");
+      }
+      if (commitCount <= 3) {
+        throw new Error("injected immediate recovery failure");
+      }
+      await commitMatchmaking(updates);
+    };
+
+    const startFailure = host.waitForMessage("room_error", 1000);
+    handled = serverRoom.waitForMessage("start");
+    host.send("start", null);
+    const [, roomError] = await Promise.all([handled, startFailure]);
+
+    assert.strictEqual(roomError.code, "start_failed");
+    assert.strictEqual(serverRoom.state.status, "waiting");
+    assert.strictEqual(serverRoom.metadata.status, "started");
+    let [listing] = await matchMaker.query({ roomId: serverRoom.roomId });
+    assert.strictEqual(listing.private, true);
+    assert.strictEqual(listing.locked, true);
+
+    serverRoom.clock.currentTime -= 200;
+    serverRoom.clock.tick();
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    await waitUntil(() => serverRoom.metadata.status === "waiting");
+
+    [listing] = await matchMaker.query({ roomId: serverRoom.roomId });
+    assert.strictEqual(commitCount >= 4, true);
+    assert.strictEqual(listing.metadata.status, "waiting");
+    assert.strictEqual(listing.private, false);
+    assert.strictEqual(listing.locked, true);
+
+    await host.leave();
   });
 });

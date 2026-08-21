@@ -183,6 +183,8 @@ export class GameRoom extends Room<{
   private pendingReconnections = new Map<string, PendingReconnection>();
   private phaseTimer: { clear(): void } | null = null;
   private startInProgress = false;
+  private matchmakingWriteTail: Promise<void> = Promise.resolve();
+  private matchmakingRecoveryTimer: { clear(): void } | null = null;
 
   public override async setPrivate(isPrivate = true, persist = true): Promise<void> {
     this.matchmakingPrivate = isPrivate;
@@ -242,7 +244,7 @@ export class GameRoom extends Room<{
     if (this.state.hostParticipantId === "") {
       this.state.hostParticipantId = client.sessionId;
     }
-    await this.updateParticipantCount();
+    await this.synchronizeMatchmaking();
   }
 
   public async onDrop(client: Client): Promise<void> {
@@ -315,8 +317,7 @@ export class GameRoom extends Room<{
     if (wasHost) {
       this.state.hostParticipantId = this.findNextHumanParticipantId(seatIndex);
     }
-    await this.updateParticipantCount();
-    await this.unlock();
+    await this.synchronizeMatchmakingEventually();
   }
 
   private humanSeatFor(client: Client) {
@@ -407,10 +408,7 @@ export class GameRoom extends Room<{
         seat.ready = false;
       }
     }
-    await this.setMetadata({
-      deckMode: message.deckMode,
-      actionDeadlineSeconds: message.actionDeadlineSeconds,
-    });
+    await this.synchronizeMatchmakingEventually();
   }
 
   private async fillBots(client: Client, message: unknown): Promise<void> {
@@ -431,27 +429,94 @@ export class GameRoom extends Room<{
         );
       }
     }
-    await this.updateParticipantCount();
-    await this.lock();
+    await this.synchronizeMatchmakingEventually();
   }
 
-  private async updateParticipantCount(): Promise<void> {
+  private currentMetadata(): GameRoomMetadata {
     const participantCount = this.state.seats.reduce(
       (count, seat) => count + (seat.participantId === "" ? 0 : 1),
       0,
     );
-    await this.setMetadata({ participantCount });
+    return {
+      displayName: this.state.displayName,
+      deckMode: this.state.deckMode,
+      actionDeadlineSeconds: this.state.actionDeadlineSeconds,
+      participantCount,
+      status: this.state.status,
+    };
   }
 
-  private findNextHumanParticipantId(afterSeatIndex: number): string {
-    for (let offset = 1; offset <= this.state.seats.length; offset += 1) {
-      const seatIndex = (afterSeatIndex + offset) % this.state.seats.length;
-      const seat = this.state.seats[seatIndex];
-      if (seat.participantId !== "" && !seat.bot) {
-        return seat.participantId;
+  private enqueueMatchmakingWrite(operation: () => Promise<void>): Promise<void> {
+    const result = this.matchmakingWriteTail.then(operation);
+    this.matchmakingWriteTail = result.catch(() => {});
+    return result;
+  }
+
+  private clearMatchmakingRecovery(): void {
+    this.matchmakingRecoveryTimer?.clear();
+    this.matchmakingRecoveryTimer = null;
+  }
+
+  private scheduleMatchmakingRecovery(): void {
+    if (this.matchmakingRecoveryTimer !== null) {
+      return;
+    }
+    const timer = this.clock.setTimeout(() => {
+      if (this.matchmakingRecoveryTimer !== timer) {
+        return;
+      }
+      this.matchmakingRecoveryTimer = null;
+      void this.synchronizeMatchmakingEventually();
+    }, 100);
+    this.matchmakingRecoveryTimer = timer;
+  }
+
+  private async persistCurrentMatchmaking(): Promise<void> {
+    let lastError: unknown = new Error("matchmaking persistence failed");
+    for (let attempt = 0; attempt < 2; attempt += 1) {
+      const metadata = this.currentMetadata();
+      const shouldBePrivate = metadata.status === "started" || this.matchmakingPrivate;
+      const shouldBeLocked = (
+        metadata.status === "started"
+        || metadata.participantCount >= this.maxClients
+      );
+
+      try {
+        await this.setMatchmaking({
+          metadata,
+          private: shouldBePrivate,
+          locked: shouldBeLocked,
+        });
+        this.clearMatchmakingRecovery();
+        return;
+      } catch (error) {
+        lastError = error;
       }
     }
-    return "";
+    this.scheduleMatchmakingRecovery();
+    throw lastError;
+  }
+
+  private synchronizeMatchmaking(): Promise<void> {
+    return this.enqueueMatchmakingWrite(async () => {
+      await this.persistCurrentMatchmaking();
+    });
+  }
+
+  private async synchronizeMatchmakingEventually(): Promise<void> {
+    try {
+      await this.synchronizeMatchmaking();
+    } catch {
+      // The room-clock recovery repairs the listing after the command completes.
+    }
+  }
+
+  private async recoverMatchmakingWithinWrite(): Promise<void> {
+    try {
+      await this.persistCurrentMatchmaking();
+    } catch {
+      // The scheduled recovery keeps retrying after this command releases the write queue.
+    }
   }
 
   private async startMatch(client: Client, message: unknown): Promise<void> {
@@ -475,7 +540,6 @@ export class GameRoom extends Room<{
     }
 
     this.startInProgress = true;
-    const waitingMetadata = { ...this.metadata };
     const waitingPrivate = this.matchmakingPrivate;
     const startingHostParticipantId = this.state.hostParticipantId;
     const startingDeckMode = this.state.deckMode;
@@ -486,6 +550,23 @@ export class GameRoom extends Room<{
       nickname: seat.nickname,
       bot: seat.bot,
     }));
+    const startContextIsCurrent = (): boolean => (
+      this.state.status === "waiting"
+      && this.state.hostParticipantId === startingHostParticipantId
+      && this.state.deckMode === startingDeckMode
+      && this.state.actionDeadlineSeconds === startingActionDeadlineSeconds
+      && this.state.seats.length === startingSeats.length
+      && this.state.seats.every((seat, index) => {
+        const startingSeat = startingSeats[index];
+        return (
+          seat.ready
+          && seat.seatIndex === startingSeat.seatIndex
+          && seat.participantId === startingSeat.participantId
+          && seat.nickname === startingSeat.nickname
+          && seat.bot === startingSeat.bot
+        );
+      })
+    );
     try {
       const matchEngine = new MatchEngine(new SeededRandomSource(
         randomInt(1, 0x1_0000_0000),
@@ -499,62 +580,56 @@ export class GameRoom extends Room<{
       );
       const publicMatchState = matchEngine.view(0).publicState;
 
-      try {
-        await this.setMatchmaking({
-          metadata: { ...waitingMetadata, status: "started" },
-          private: true,
-          locked: true,
-        });
-      } catch {
-        await this.setMetadata(waitingMetadata, false);
-        await this.setPrivate(waitingPrivate, false);
-        this.sendRoomError(client, ROOM_ERRORS.startFailed);
-        return;
-      }
+      await this.enqueueMatchmakingWrite(async () => {
+        if (!startContextIsCurrent()) {
+          await this.recoverMatchmakingWithinWrite();
+          if (this.humanSeatFor(client)) {
+            this.sendRoomError(client, ROOM_ERRORS.startFailed);
+          }
+          return;
+        }
 
-      const startContextIsCurrent = (
-        this.state.status === "waiting"
-        && this.state.hostParticipantId === startingHostParticipantId
-        && this.state.deckMode === startingDeckMode
-        && this.state.actionDeadlineSeconds === startingActionDeadlineSeconds
-        && this.state.seats.length === startingSeats.length
-        && this.state.seats.every((seat, index) => {
-          const startingSeat = startingSeats[index];
-          return (
-            seat.ready
-            && seat.seatIndex === startingSeat.seatIndex
-            && seat.participantId === startingSeat.participantId
-            && seat.nickname === startingSeat.nickname
-            && seat.bot === startingSeat.bot
-          );
-        })
-      );
-      if (!startContextIsCurrent) {
-        const participantCount = this.state.seats.reduce(
-          (count, seat) => count + (seat.participantId === "" ? 0 : 1),
-          0,
-        );
-        await this.setMatchmaking({
-          metadata: {
-            displayName: this.state.displayName,
-            deckMode: this.state.deckMode,
-            actionDeadlineSeconds: this.state.actionDeadlineSeconds,
-            participantCount,
-            status: "waiting",
-          },
-          private: waitingPrivate,
-          locked: participantCount >= this.maxClients,
-        });
-        return;
-      }
+        try {
+          await this.setMatchmaking({
+            metadata: { ...this.currentMetadata(), status: "started" },
+            private: true,
+            locked: true,
+          });
+        } catch {
+          this.matchmakingPrivate = waitingPrivate;
+          await this.recoverMatchmakingWithinWrite();
+          if (this.humanSeatFor(client)) {
+            this.sendRoomError(client, ROOM_ERRORS.startFailed);
+          }
+          return;
+        }
 
-      this.matchEngine = matchEngine;
-      this.state.status = "started";
-      this.autoDispose = false;
-      this.enterMatchPhase(matchEngine, publicMatchState);
+        if (!startContextIsCurrent()) {
+          this.matchmakingPrivate = waitingPrivate;
+          await this.recoverMatchmakingWithinWrite();
+          return;
+        }
+
+        this.matchmakingPrivate = true;
+        this.matchEngine = matchEngine;
+        this.state.status = "started";
+        this.autoDispose = false;
+        this.enterMatchPhase(matchEngine, publicMatchState);
+      });
     } finally {
       this.startInProgress = false;
     }
+  }
+
+  private findNextHumanParticipantId(afterSeatIndex: number): string {
+    for (let offset = 1; offset <= this.state.seats.length; offset += 1) {
+      const seatIndex = (afterSeatIndex + offset) % this.state.seats.length;
+      const seat = this.state.seats[seatIndex];
+      if (seat.participantId !== "" && !seat.bot) {
+        return seat.participantId;
+      }
+    }
+    return "";
   }
 
   private playCards(client: Client, message: unknown): void {

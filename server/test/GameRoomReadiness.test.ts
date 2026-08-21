@@ -6,6 +6,31 @@ import appConfig from "../src/app.config.js";
 import { GameRoom } from "../src/rooms/GameRoom.js";
 import { getTestServer } from "./testServer.js";
 
+async function waitUntil(condition: () => boolean, timeoutMs = 2000): Promise<void> {
+  const deadline = Date.now() + timeoutMs;
+  while (!condition()) {
+    if (Date.now() >= deadline) {
+      throw new Error("timed out waiting for room state");
+    }
+    await new Promise((resolve) => setTimeout(resolve, 10));
+  }
+}
+
+function failNextMatchmakingWrites(serverRoom: GameRoom, failureCount: number): () => number {
+  const commitMatchmaking = serverRoom.setMatchmaking.bind(serverRoom);
+  let remainingFailures = failureCount;
+  let commitCount = 0;
+  serverRoom.setMatchmaking = async (updates): Promise<void> => {
+    commitCount += 1;
+    if (remainingFailures > 0) {
+      remainingFailures -= 1;
+      throw new Error("injected matchmaking failure");
+    }
+    await commitMatchmaking(updates);
+  };
+  return () => commitCount;
+}
+
 describe("four-participant room readiness", () => {
   let colyseus: ColyseusTestServer<typeof appConfig>;
 
@@ -156,6 +181,134 @@ describe("four-participant room readiness", () => {
     await host.leave();
   });
 
+  it("serializes concurrent configuration commits and keeps the latest settings", async () => {
+    const host = await colyseus.sdk.create("game", {
+      nickname: "甲",
+      displayName: "配置竞态测试",
+      deckMode: "one",
+      actionDeadlineSeconds: 30,
+    });
+    const serverRoom = colyseus.getRoomById<GameRoom>(host.roomId);
+    const commitMatchmaking = serverRoom.setMatchmaking.bind(serverRoom);
+    let releaseFirstCommit = (): void => {};
+    const firstCommitGate = new Promise<void>((resolve) => {
+      releaseFirstCommit = resolve;
+    });
+    let markFirstCommitEntered = (): void => {};
+    const firstCommitEntered = new Promise<void>((resolve) => {
+      markFirstCommitEntered = resolve;
+    });
+    let commitCount = 0;
+    let firstCommitFinished = false;
+    serverRoom.setMatchmaking = async (updates): Promise<void> => {
+      commitCount += 1;
+      const isFirstCommit = commitCount === 1;
+      if (isFirstCommit) {
+        markFirstCommitEntered();
+        await firstCommitGate;
+      }
+      await commitMatchmaking(updates);
+      if (isFirstCommit) {
+        firstCommitFinished = true;
+      }
+    };
+
+    const firstHandled = serverRoom.waitForMessage("configure");
+    host.send("configure", { deckMode: "two", actionDeadlineSeconds: 30 });
+    await firstCommitEntered;
+    host.send("configure", { deckMode: "one", actionDeadlineSeconds: 60 });
+    releaseFirstCommit();
+    await firstHandled;
+    await waitUntil(() => (
+      firstCommitFinished
+      && serverRoom.metadata.deckMode === "one"
+      && serverRoom.metadata.actionDeadlineSeconds === 60
+    ));
+
+    assert.strictEqual(serverRoom.state.deckMode, "one");
+    assert.strictEqual(serverRoom.state.actionDeadlineSeconds, 60);
+    assert.strictEqual(serverRoom.metadata.deckMode, "one");
+    assert.strictEqual(serverRoom.metadata.actionDeadlineSeconds, 60);
+
+    await host.leave();
+  });
+
+  it("repairs the listing when a stale configuration write mutates then rejects", async () => {
+    const host = await colyseus.sdk.create("game", {
+      nickname: "甲",
+      displayName: "配置失败恢复测试",
+      deckMode: "one",
+      actionDeadlineSeconds: 30,
+    });
+    const serverRoom = colyseus.getRoomById<GameRoom>(host.roomId);
+    const commitMatchmaking = serverRoom.setMatchmaking.bind(serverRoom);
+    let releaseFirstCommit = (): void => {};
+    const firstCommitGate = new Promise<void>((resolve) => {
+      releaseFirstCommit = resolve;
+    });
+    let markFirstCommitEntered = (): void => {};
+    const firstCommitEntered = new Promise<void>((resolve) => {
+      markFirstCommitEntered = resolve;
+    });
+    let commitCount = 0;
+    serverRoom.setMatchmaking = async (updates): Promise<void> => {
+      commitCount += 1;
+      const isFirstCommit = commitCount === 1;
+      if (isFirstCommit) {
+        markFirstCommitEntered();
+        await firstCommitGate;
+      }
+      await commitMatchmaking(updates);
+      if (isFirstCommit) {
+        throw new Error("injected stale persistence failure");
+      }
+    };
+
+    const firstHandled = serverRoom.waitForMessage("configure");
+    host.send("configure", { deckMode: "two", actionDeadlineSeconds: 30 });
+    await firstCommitEntered;
+    host.send("configure", { deckMode: "one", actionDeadlineSeconds: 60 });
+    releaseFirstCommit();
+    await firstHandled;
+    await waitUntil(() => (
+      serverRoom.metadata.deckMode === "one"
+      && serverRoom.metadata.actionDeadlineSeconds === 60
+    ));
+
+    assert.strictEqual(serverRoom.state.deckMode, "one");
+    assert.strictEqual(serverRoom.state.actionDeadlineSeconds, 60);
+    assert.strictEqual(serverRoom.metadata.deckMode, "one");
+    assert.strictEqual(serverRoom.metadata.actionDeadlineSeconds, 60);
+    assert.strictEqual(commitCount >= 3, true);
+
+    await host.leave();
+  });
+
+  it("contains exhausted configuration persistence and repairs it on the room clock", async () => {
+    const host = await colyseus.sdk.create("game", {
+      nickname: "甲",
+      displayName: "配置恢复测试",
+      deckMode: "one",
+      actionDeadlineSeconds: 30,
+    });
+    const serverRoom = colyseus.getRoomById<GameRoom>(host.roomId);
+    const commitCount = failNextMatchmakingWrites(serverRoom, 2);
+
+    const handled = serverRoom.waitForMessage("configure");
+    host.send("configure", { deckMode: "two", actionDeadlineSeconds: 60 });
+    await handled;
+
+    serverRoom.clock.currentTime -= 200;
+    serverRoom.clock.tick();
+    await waitUntil(() => (
+      serverRoom.metadata.deckMode === "two"
+      && serverRoom.metadata.actionDeadlineSeconds === 60
+    ));
+
+    assert.strictEqual(commitCount(), 3);
+    await host.leave();
+  });
+
   it("rejects a non-host configuration without changing public settings", async () => {
     const host = await colyseus.sdk.create("game", {
       nickname: "甲",
@@ -220,6 +373,79 @@ describe("four-participant room readiness", () => {
       [false, true, true, true],
     );
 
+    await host.leave();
+  });
+
+  it("keeps a bot-filled room joinable when the host leaves during persistence", async () => {
+    const host = await colyseus.sdk.create("game", {
+      nickname: "甲",
+      displayName: "填充离开竞态测试",
+      deckMode: "one",
+      actionDeadlineSeconds: 30,
+    });
+    const guest = await colyseus.sdk.joinById(host.roomId, { nickname: "乙" });
+    const serverRoom = colyseus.getRoomById<GameRoom>(host.roomId);
+    const commitMatchmaking = serverRoom.setMatchmaking.bind(serverRoom);
+    let releaseFirstCommit = (): void => {};
+    const firstCommitGate = new Promise<void>((resolve) => {
+      releaseFirstCommit = resolve;
+    });
+    let markFirstCommitEntered = (): void => {};
+    const firstCommitEntered = new Promise<void>((resolve) => {
+      markFirstCommitEntered = resolve;
+    });
+    let commitCount = 0;
+    serverRoom.setMatchmaking = async (updates): Promise<void> => {
+      commitCount += 1;
+      if (commitCount === 1) {
+        markFirstCommitEntered();
+        await firstCommitGate;
+      }
+      await commitMatchmaking(updates);
+    };
+
+    const fillHandled = serverRoom.waitForMessage("fill_bots");
+    host.send("fill_bots", null);
+    await firstCommitEntered;
+    const leaving = host.leave();
+    await waitUntil(() => serverRoom.state.seats[0].participantId === "");
+    releaseFirstCommit();
+    await Promise.all([fillHandled, leaving]);
+    await waitUntil(() => (
+      serverRoom.metadata.participantCount === 3
+      && !serverRoom.locked
+    ));
+
+    assert.strictEqual(serverRoom.state.seats[0].participantId, "");
+    assert.strictEqual(serverRoom.state.hostParticipantId, guest.sessionId);
+    assert.strictEqual(serverRoom.metadata.participantCount, 3);
+    assert.strictEqual(serverRoom.locked, false);
+
+    await guest.leave();
+  });
+
+  it("contains exhausted bot-fill persistence and repairs it on the room clock", async () => {
+    const host = await colyseus.sdk.create("game", {
+      nickname: "甲",
+      displayName: "填充恢复测试",
+      deckMode: "one",
+      actionDeadlineSeconds: 30,
+    });
+    const serverRoom = colyseus.getRoomById<GameRoom>(host.roomId);
+    const commitCount = failNextMatchmakingWrites(serverRoom, 2);
+
+    const handled = serverRoom.waitForMessage("fill_bots");
+    host.send("fill_bots", null);
+    await handled;
+
+    serverRoom.clock.currentTime -= 200;
+    serverRoom.clock.tick();
+    await waitUntil(() => (
+      serverRoom.metadata.participantCount === 4
+      && serverRoom.locked
+    ));
+
+    assert.strictEqual(commitCount(), 3);
     await host.leave();
   });
 
@@ -406,6 +632,53 @@ describe("four-participant room readiness", () => {
     const newcomer = await colyseus.sdk.joinById(serverRoom.roomId, { nickname: "丁" });
     assert.strictEqual(serverRoom.state.seats[0].participantId, newcomer.sessionId);
     assert.strictEqual(serverRoom.state.hostParticipantId, guest.sessionId);
+
+    await newcomer.leave();
+    await guest.leave();
+  });
+
+  it("keeps the participant count current when a join overtakes a waiting leave", async () => {
+    const host = await colyseus.sdk.create("game", {
+      nickname: "甲",
+      displayName: "加入离开竞态测试",
+      deckMode: "one",
+      actionDeadlineSeconds: 30,
+    });
+    const guest = await colyseus.sdk.joinById(host.roomId, { nickname: "乙" });
+    const serverRoom = colyseus.getRoomById<GameRoom>(host.roomId);
+    const commitMatchmaking = serverRoom.setMatchmaking.bind(serverRoom);
+    let releaseFirstCommit = (): void => {};
+    const firstCommitGate = new Promise<void>((resolve) => {
+      releaseFirstCommit = resolve;
+    });
+    let markFirstCommitEntered = (): void => {};
+    const firstCommitEntered = new Promise<void>((resolve) => {
+      markFirstCommitEntered = resolve;
+    });
+    let commitCount = 0;
+    serverRoom.setMatchmaking = async (updates): Promise<void> => {
+      commitCount += 1;
+      if (commitCount === 1) {
+        markFirstCommitEntered();
+        await firstCommitGate;
+      }
+      await commitMatchmaking(updates);
+    };
+
+    const leaving = host.leave();
+    await firstCommitEntered;
+    await waitUntil(() => serverRoom.state.seats[0].participantId === "");
+    const joining = colyseus.sdk.joinById(serverRoom.roomId, { nickname: "丙" });
+    await waitUntil(() => (
+      serverRoom.state.seats[0].participantId !== ""
+      && serverRoom.state.seats[0].participantId !== host.sessionId
+    ));
+    releaseFirstCommit();
+    const [newcomer] = await Promise.all([joining, leaving]);
+
+    assert.strictEqual(serverRoom.state.seats[0].participantId, newcomer.sessionId);
+    assert.strictEqual(serverRoom.metadata.participantCount, 2);
+    assert.strictEqual(serverRoom.locked, false);
 
     await newcomer.leave();
     await guest.leave();
