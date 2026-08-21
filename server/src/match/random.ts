@@ -2,6 +2,17 @@ export interface RandomSource {
   nextInt(maxExclusive: number): number;
 }
 
+export function nextRandomIndex(random: RandomSource, maxExclusive: number): number {
+  if (!Number.isSafeInteger(maxExclusive) || maxExclusive <= 0) {
+    throw new Error("cannot select a random index from an empty range");
+  }
+  const index = random.nextInt(maxExclusive);
+  if (!Number.isSafeInteger(index) || index < 0 || index >= maxExclusive) {
+    throw new Error(`random source returned invalid index ${index} for ${maxExclusive}`);
+  }
+  return index;
+}
+
 export class SeededRandomSource implements RandomSource {
   private state: number;
 

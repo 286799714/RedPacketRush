@@ -14,7 +14,7 @@ import {
   type EvaluatedFinalSelection,
   type FinalCombination,
 } from "./finalSettlement.js";
-import type { RandomSource } from "./random.js";
+import { nextRandomIndex, type RandomSource } from "./random.js";
 
 export const ACTION_DEADLINES = [15, 30, 60] as const;
 export type ActionDeadlineSeconds = (typeof ACTION_DEADLINES)[number];
@@ -811,7 +811,7 @@ export class MatchEngine {
   }
 
   private drawRandomCard(cards: PhysicalCard[]): PhysicalCard {
-    const index = this.nextRandomIndex(cards.length);
+    const index = nextRandomIndex(this.random, cards.length);
     const [card] = cards.splice(index, 1);
     if (!card) {
       throw new Error("cannot draw from an exhausted card zone");
@@ -821,21 +821,11 @@ export class MatchEngine {
 
   private shuffle(cards: PhysicalCard[]): void {
     for (let index = cards.length - 1; index > 0; index -= 1) {
-      const swapIndex = this.nextRandomIndex(index + 1);
+      const swapIndex = nextRandomIndex(this.random, index + 1);
       [cards[index], cards[swapIndex]] = [cards[swapIndex], cards[index]];
     }
   }
 
-  private nextRandomIndex(maxExclusive: number): number {
-    if (!Number.isSafeInteger(maxExclusive) || maxExclusive <= 0) {
-      throw new Error("cannot select a random index from an empty range");
-    }
-    const index = this.random.nextInt(maxExclusive);
-    if (!Number.isSafeInteger(index) || index < 0 || index >= maxExclusive) {
-      throw new Error(`random source returned invalid index ${index} for ${maxExclusive}`);
-    }
-    return index;
-  }
 }
 
 function validateParticipants(

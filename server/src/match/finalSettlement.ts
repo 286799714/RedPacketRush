@@ -1,4 +1,5 @@
 import { CARD_SUITS, type PhysicalCard } from "./cards.js";
+import { combinationsOfThree } from "./combinatorics.js";
 import {
   classifyCombination,
   type CombinationCategory,
@@ -75,7 +76,7 @@ export function findBestFinalSelection(
 ): EvaluatedFinalSelection {
   validateHand(hand);
   const sortedCards = [...hand].sort(comparePhysicalCards);
-  const groupCandidates = chooseThree(sortedCards.map((card) => card.id));
+  const groupCandidates = combinationsOfThree(sortedCards.map((card) => card.id));
   let best: EvaluatedFinalSelection | null = null;
 
   for (let firstIndex = 0; firstIndex < groupCandidates.length; firstIndex += 1) {
@@ -124,18 +125,6 @@ function validateHand(hand: readonly PhysicalCard[]): Map<string, PhysicalCard> 
     throw new Error("final settlement hand must contain unique physical cards");
   }
   return handById;
-}
-
-function chooseThree(cardIds: readonly string[]): string[][] {
-  const groups: string[][] = [];
-  for (let first = 0; first < cardIds.length - 2; first += 1) {
-    for (let second = first + 1; second < cardIds.length - 1; second += 1) {
-      for (let third = second + 1; third < cardIds.length; third += 1) {
-        groups.push([cardIds[first], cardIds[second], cardIds[third]]);
-      }
-    }
-  }
-  return groups;
 }
 
 function compareSelections(

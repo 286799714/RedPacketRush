@@ -1,5 +1,6 @@
 import type { MatchView } from "./MatchEngine.js";
-import type { RandomSource } from "./random.js";
+import { combinationsOfThree } from "./combinatorics.js";
+import { nextRandomIndex, type RandomSource } from "./random.js";
 
 export type BotCommand =
   | { readonly type: "play_cards"; readonly cardIds: readonly string[] }
@@ -48,10 +49,10 @@ export function chooseBotCommand(view: MatchView, random: RandomSource): BotComm
   const commandType = eligibleBotCommandType(view);
 
   if (commandType === "play_cards") {
-    const combinations = chooseThree(privateState.hand.map((card) => card.id));
+    const combinations = combinationsOfThree(privateState.hand.map((card) => card.id));
     return {
       type: "play_cards",
-      cardIds: combinations[randomIndex(random, combinations.length)],
+      cardIds: combinations[nextRandomIndex(random, combinations.length)],
     };
   }
 
@@ -59,7 +60,7 @@ export function chooseBotCommand(view: MatchView, random: RandomSource): BotComm
     const choices = [...publicState.playedCards.map((card) => card.id), null];
     return {
       type: "claim",
-      cardId: choices[randomIndex(random, choices.length)],
+      cardId: choices[nextRandomIndex(random, choices.length)],
     };
   }
 
@@ -67,7 +68,7 @@ export function chooseBotCommand(view: MatchView, random: RandomSource): BotComm
     const discardableCards = discardableBotCards(view);
     return {
       type: "discard",
-      cardId: discardableCards[randomIndex(random, discardableCards.length)].id,
+      cardId: discardableCards[nextRandomIndex(random, discardableCards.length)].id,
       turnNumber: publicState.turnNumber,
     };
   }
@@ -88,24 +89,4 @@ function discardableBotCards(view: MatchView) {
     (award) => award.seatIndex === privateState.seatIndex,
   )?.card.id;
   return privateState.hand.filter((card) => card.id !== protectedCardId);
-}
-
-function chooseThree(cardIds: readonly string[]): string[][] {
-  const combinations: string[][] = [];
-  for (let first = 0; first < cardIds.length - 2; first += 1) {
-    for (let second = first + 1; second < cardIds.length - 1; second += 1) {
-      for (let third = second + 1; third < cardIds.length; third += 1) {
-        combinations.push([cardIds[first], cardIds[second], cardIds[third]]);
-      }
-    }
-  }
-  return combinations;
-}
-
-function randomIndex(random: RandomSource, maxExclusive: number): number {
-  const index = random.nextInt(maxExclusive);
-  if (!Number.isSafeInteger(index) || index < 0 || index >= maxExclusive) {
-    throw new Error(`random source returned invalid index ${index} for ${maxExclusive}`);
-  }
-  return index;
 }
