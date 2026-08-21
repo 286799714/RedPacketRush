@@ -1,5 +1,5 @@
 import { randomInt } from "node:crypto";
-import { Client, Room } from "colyseus";
+import { Client, Room, type Deferred } from "colyseus";
 
 import { DECK_MODES, type DeckMode } from "../match/cards.js";
 import {
@@ -52,6 +52,12 @@ interface RoomError {
   message: string;
 }
 
+interface PendingReconnection {
+  readonly seatIndex: number;
+  readonly deferred: Deferred<Client>;
+  timer: { clear(): void } | null;
+}
+
 const ROOM_ERRORS = {
   alreadyStarted: { code: "already_started", message: "对局已经开始" },
   configurePhase: { code: "invalid_phase", message: "房间当前不能修改设置" },
@@ -79,6 +85,7 @@ const ROOM_ERRORS = {
 const POINT_CONTEST_DISPLAY_MILLISECONDS = 900;
 const CLAIM_REVEAL_DISPLAY_MILLISECONDS = 900;
 const FINAL_REVEAL_DISPLAY_MILLISECONDS = 900;
+const RECONNECTION_GRACE_MILLISECONDS = 30_000;
 const MAX_ACTION_ID = 0xffff_ffff;
 
 function isRecordLike(value: unknown): value is RecordLike {
@@ -173,6 +180,7 @@ export class GameRoom extends Room<{
   private matchmakingPrivate = false;
   private matchEngine: MatchEngine | null = null;
   private botTimer: { clear(): void } | null = null;
+  private pendingReconnections = new Map<string, PendingReconnection>();
   private phaseTimer: { clear(): void } | null = null;
   private startInProgress = false;
 
@@ -237,10 +245,62 @@ export class GameRoom extends Room<{
     await this.updateParticipantCount();
   }
 
-  public async onLeave(client: Client): Promise<void> {
-    if (this.state.status !== "waiting") {
+  public async onDrop(client: Client): Promise<void> {
+    if (this.state.status === "waiting") {
+      await this.releaseWaitingSeat(client);
       return;
     }
+    const seat = this.humanSeatFor(client);
+    if (!seat || seat.bot) {
+      return;
+    }
+
+    seat.connected = false;
+    const deferred = this.allowReconnection(client, "manual");
+    const pending: PendingReconnection = {
+      seatIndex: seat.seatIndex,
+      deferred,
+      timer: null,
+    };
+    this.pendingReconnections.set(client.sessionId, pending);
+    pending.timer = this.clock.setTimeout(() => {
+      if (this.pendingReconnections.get(client.sessionId) === pending) {
+        deferred.reject(new Error("reconnection window expired"));
+      }
+    }, RECONNECTION_GRACE_MILLISECONDS);
+
+    try {
+      await deferred;
+    } catch {
+      this.expireReconnection(client.sessionId, pending);
+    }
+  }
+
+  public onReconnect(client: Client): void {
+    const pending = this.pendingReconnections.get(client.sessionId);
+    if (!pending) {
+      return;
+    }
+    const seat = this.state.seats[pending.seatIndex];
+    if (!seat || seat.participantId !== client.sessionId || seat.bot) {
+      return;
+    }
+
+    pending.timer?.clear();
+    this.pendingReconnections.delete(client.sessionId);
+    seat.connected = true;
+    this.sendPrivateMatchState(client);
+  }
+
+  public async onLeave(client: Client): Promise<void> {
+    if (this.state.status === "waiting") {
+      await this.releaseWaitingSeat(client);
+      return;
+    }
+    this.takeOverHumanSeat(client.sessionId, client.userData?.seatIndex);
+  }
+
+  private async releaseWaitingSeat(client: Client): Promise<void> {
     const seatIndex = client.userData?.seatIndex;
     if (typeof seatIndex !== "number") {
       return;
@@ -257,6 +317,46 @@ export class GameRoom extends Room<{
     }
     await this.updateParticipantCount();
     await this.unlock();
+  }
+
+  private humanSeatFor(client: Client) {
+    const seatIndex = client.userData?.seatIndex;
+    if (typeof seatIndex !== "number") {
+      return null;
+    }
+    const seat = this.state.seats[seatIndex];
+    return seat?.participantId === client.sessionId ? seat : null;
+  }
+
+  private expireReconnection(
+    participantId: string,
+    pending: PendingReconnection,
+  ): void {
+    if (this.pendingReconnections.get(participantId) !== pending) {
+      return;
+    }
+    pending.timer?.clear();
+    this.pendingReconnections.delete(participantId);
+    this.takeOverHumanSeat(participantId, pending.seatIndex);
+  }
+
+  private takeOverHumanSeat(participantId: string, seatIndex: unknown): void {
+    if (typeof seatIndex !== "number") {
+      return;
+    }
+    const seat = this.state.seats[seatIndex];
+    if (!seat || seat.participantId !== participantId || seat.bot) {
+      return;
+    }
+    const pending = this.pendingReconnections.get(participantId);
+    pending?.timer?.clear();
+    this.pendingReconnections.delete(participantId);
+    seat.bot = true;
+    seat.connected = false;
+    seat.ready = true;
+    if (this.matchEngine) {
+      this.scheduleBotAction(this.matchEngine);
+    }
   }
 
   private setParticipantReady(client: Client, message: unknown): void {

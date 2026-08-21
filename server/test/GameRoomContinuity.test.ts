@@ -18,6 +18,16 @@ function tickClock(serverRoom: GameRoom, elapsedMilliseconds: number): void {
   serverRoom.clock.tick();
 }
 
+async function waitForCondition(condition: () => boolean, attempts = 100): Promise<void> {
+  for (let attempt = 0; attempt < attempts; attempt += 1) {
+    if (condition()) {
+      return;
+    }
+    await new Promise<void>((resolve) => setImmediate(resolve));
+  }
+  throw new Error("condition was not reached");
+}
+
 async function startActorPlay(colyseus: ColyseusTestServer<typeof appConfig>) {
   const host = await colyseus.sdk.create("game", {
     nickname: "甲",
@@ -251,5 +261,115 @@ describe("game room action continuity", () => {
     );
 
     await host.leave();
+  });
+
+  it("restores a dropped human to the same seat with fresh private state", async () => {
+    const { participants, serverRoom } = await startActorPlay(colyseus);
+    const seatIndex = serverRoom.state.actorSeatIndex;
+    const dropped = participants[seatIndex];
+    const sessionId = dropped.sessionId;
+    const reconnectionToken = dropped.reconnectionToken;
+    dropped.reconnection.enabled = false;
+
+    await dropped.leave(false);
+    await waitForCondition(() => serverRoom.state.seats[seatIndex].connected === false);
+    assert.strictEqual(serverRoom.state.seats[seatIndex].participantId, sessionId);
+    assert.strictEqual(serverRoom.state.seats[seatIndex].bot, false);
+
+    const reconnected = await colyseus.sdk.reconnect(reconnectionToken);
+    const privateState = await reconnected.waitForMessage(
+      "match_private_state",
+      1000,
+    ) as PrivateMatchState;
+    await waitForCondition(() => serverRoom.state.seats[seatIndex].connected === true);
+
+    assert.strictEqual(reconnected.sessionId, sessionId);
+    assert.strictEqual(
+      serverRoom.clients.find((client) => client.sessionId === sessionId)?.userData?.seatIndex,
+      seatIndex,
+    );
+    assert.strictEqual(serverRoom.state.seats[seatIndex].bot, false);
+    assert.strictEqual(privateState.participantId, sessionId);
+    assert.strictEqual(privateState.seatIndex, seatIndex);
+    assert.strictEqual(privateState.actionId, serverRoom.state.actionId);
+    assert.strictEqual(privateState.hand.length, 8);
+    assert.strictEqual(serverRoom.clients.length, 4);
+    assert.strictEqual(new Set(serverRoom.clients.map((client) => client.sessionId)).size, 4);
+    assert.strictEqual(
+      serverRoom.state.seats.filter((seat) => seat.participantId === sessionId).length,
+      1,
+    );
+
+    await reconnected.leave();
+    await Promise.all(participants
+      .filter((_, participantSeatIndex) => participantSeatIndex !== seatIndex)
+      .map((participant) => participant.leave()));
+  });
+
+  it("turns an expired dropped claimant into a bot and unblocks claims", async () => {
+    const { participants, serverRoom } = await startActorPlay(colyseus);
+    const actorSeatIndex = serverRoom.state.actorSeatIndex;
+    const droppedSeatIndex = (actorSeatIndex + 1) % participants.length;
+    const dropped = participants[droppedSeatIndex];
+    const sessionId = dropped.sessionId;
+    const reconnectionToken = dropped.reconnectionToken;
+    dropped.reconnection.enabled = false;
+
+    await dropped.leave(false);
+    await waitForCondition(() => serverRoom.state.seats[droppedSeatIndex].connected === false);
+    tickClock(serverRoom, 30_000);
+    await waitForCondition(() => serverRoom.state.seats[droppedSeatIndex].bot === true);
+
+    const takenOverSeat = serverRoom.state.seats[droppedSeatIndex];
+    assert.strictEqual(takenOverSeat.participantId, sessionId);
+    assert.strictEqual(takenOverSeat.connected, false);
+    assert.strictEqual(takenOverSeat.ready, true);
+    assert.strictEqual(serverRoom.state.phase, "claim_commit");
+    drainImmediateTasks(serverRoom);
+
+    const remainingClaimantSeats = participants
+      .map((_, seatIndex) => seatIndex)
+      .filter((seatIndex) => seatIndex !== actorSeatIndex && seatIndex !== droppedSeatIndex);
+    for (const seatIndex of remainingClaimantSeats) {
+      const handled = serverRoom.waitForMessage("claim");
+      participants[seatIndex].send("claim", {
+        cardId: null,
+        actionId: serverRoom.state.actionId,
+      });
+      await handled;
+    }
+
+    assert.strictEqual(serverRoom.state.phase, "claim_reveal");
+    const botClaim = serverRoom.state.revealedClaims.find(
+      (claim) => claim.seatIndex === droppedSeatIndex,
+    );
+    assert.strictEqual(botClaim?.cardId, serverRoom.state.claimEvents[0].claims.find(
+      (claim) => claim.seatIndex === droppedSeatIndex,
+    )?.cardId);
+    assert.notStrictEqual(botClaim?.cardId, "");
+    await assert.rejects(() => colyseus.sdk.reconnect(reconnectionToken));
+
+    await Promise.all(participants
+      .filter((_, seatIndex) => seatIndex !== droppedSeatIndex)
+      .map((participant) => participant.leave()));
+  });
+
+  it("hands a consented leaving actor to a bot immediately", async () => {
+    const { participants, serverRoom } = await startActorPlay(colyseus);
+    const actorSeatIndex = serverRoom.state.actorSeatIndex;
+    const actor = participants[actorSeatIndex];
+    const sessionId = actor.sessionId;
+
+    await actor.leave();
+    await waitForCondition(() => serverRoom.state.seats[actorSeatIndex].bot === true);
+    assert.strictEqual(serverRoom.state.seats[actorSeatIndex].participantId, sessionId);
+    assert.strictEqual(serverRoom.state.seats[actorSeatIndex].connected, false);
+    drainImmediateTasks(serverRoom);
+    assert.strictEqual(serverRoom.state.phase, "claim_commit");
+    assert.strictEqual(serverRoom.state.playEvents.length, 1);
+
+    await Promise.all(participants
+      .filter((_, seatIndex) => seatIndex !== actorSeatIndex)
+      .map((participant) => participant.leave()));
   });
 });
