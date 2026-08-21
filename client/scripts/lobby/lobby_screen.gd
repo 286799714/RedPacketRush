@@ -376,21 +376,50 @@ func _on_room_activated() -> void:
 		_on_join_pressed()
 
 
-func _on_connection_changed(state: String, status_text: String) -> void:
-	_connection_state = state
-	var status_color := COLOR_MUTED
+func _connection_presentation(state: String) -> Dictionary:
 	match state:
 		"connecting":
-			status_color = COLOR_GOLD
+			return {
+				"status_color": COLOR_GOLD,
+				"connect_button_text": "连接中...",
+				"connect_button_disabled": true,
+				"rooms_empty_text": "正在加载房间列表",
+				"rooms_available": false,
+			}
 		"connected":
-			status_color = COLOR_GREEN
+			return {
+				"status_color": COLOR_GREEN,
+				"connect_button_text": "重新连接",
+				"connect_button_disabled": false,
+				"rooms_empty_text": "当前没有可加入的房间",
+				"rooms_available": true,
+			}
 		"retryable_error":
-			status_color = COLOR_RED_HOVER
+			return {
+				"status_color": COLOR_RED_HOVER,
+				"connect_button_text": "连接大厅",
+				"connect_button_disabled": false,
+				"rooms_empty_text": "房间列表加载失败，请重试",
+				"rooms_available": false,
+			}
+	return {
+		"status_color": COLOR_MUTED,
+		"connect_button_text": "连接大厅",
+		"connect_button_disabled": false,
+		"rooms_empty_text": "连接大厅后查看房间",
+		"rooms_available": false,
+	}
+
+
+func _on_connection_changed(state: String, status_text: String) -> void:
+	_connection_state = state
+	var presentation := _connection_presentation(state)
+	var status_color: Color = presentation["status_color"]
 	_status_label.text = "● %s" % status_text
 	_status_label.add_theme_color_override("font_color", status_color)
 	_status_panel.add_theme_stylebox_override("panel", _style_box(COLOR_SURFACE_RAISED, status_color.darkened(0.45), 1, 5))
-	_connect_button.text = "连接中..." if state == "connecting" else ("重新连接" if state == "connected" else "连接大厅")
-	_connect_button.disabled = state == "connecting"
+	_connect_button.text = str(presentation["connect_button_text"])
+	_connect_button.disabled = bool(presentation["connect_button_disabled"])
 	if state == "retryable_error":
 		_show_feedback(status_text, true)
 	_refresh_rooms_surface()
@@ -426,23 +455,11 @@ func _refresh_rooms_surface() -> void:
 	if _room_tree == null or _empty_label == null:
 		return
 	var has_rooms := _room_tree.get_root() != null and _room_tree.get_root().get_first_child() != null
-	match _connection_state:
-		"connecting":
-			_empty_label.text = "正在加载房间列表"
-			_room_tree.visible = false
-			_empty_label.visible = true
-		"retryable_error":
-			_empty_label.text = "房间列表加载失败，请重试"
-			_room_tree.visible = false
-			_empty_label.visible = true
-		"connected":
-			_empty_label.text = "当前没有可加入的房间"
-			_room_tree.visible = has_rooms
-			_empty_label.visible = not has_rooms
-		_:
-			_empty_label.text = "连接大厅后查看房间"
-			_room_tree.visible = false
-			_empty_label.visible = true
+	var presentation := _connection_presentation(_connection_state)
+	var show_rooms := bool(presentation["rooms_available"]) and has_rooms
+	_empty_label.text = str(presentation["rooms_empty_text"])
+	_room_tree.visible = show_rooms
+	_empty_label.visible = not show_rooms
 
 
 func _on_game_room_joined(room_id: String) -> void:

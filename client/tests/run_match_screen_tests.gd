@@ -1402,8 +1402,10 @@ func _test_final_reveal_and_finished_ranking_are_authoritative(
 	screen.size = Vector2(1280, 720)
 	await process_frame
 	await process_frame
-	_expect_equal(screen._seat_role_labels[2].text, "共同胜者", "宽屏终局席位优先显示完整共同胜者角色")
-	_expect(screen._seat_role_labels[2].get_global_rect().size.x >= 70.0, "共同胜者角色保留可读宽度")
+	var north_seat_panel := _seat_panel_for_position(screen, "北")
+	var winner_role := _find_visible_label_exact(north_seat_panel, "共同胜者")
+	_expect(winner_role != null, "宽屏终局席位优先显示完整共同胜者角色")
+	_expect(winner_role != null and winner_role.get_global_rect().size.x >= 70.0, "共同胜者角色保留可读宽度")
 
 	store.apply_public_snapshot({"phase": "finished"})
 	await process_frame
@@ -1442,9 +1444,13 @@ func _test_final_reveal_and_finished_ranking_are_authoritative(
 	screen.size = Vector2(1280, 720)
 	await process_frame
 	await process_frame
-	_expect_equal(screen._seat_name_labels[2].text, "丙", "接管机器人保留原参与者昵称")
-	_expect_equal(screen._seat_role_labels[2].text, "共同胜者", "接管机器人终局角色保持完整")
-	_expect(screen._seat_detail_labels[2].text.begins_with("机器人"), "宽屏终局席位仍明确标记机器人接管")
+	north_seat_panel = _seat_panel_for_position(screen, "北")
+	var takeover_name := _find_visible_label_exact(north_seat_panel, "丙")
+	var takeover_role := _find_visible_label_exact(north_seat_panel, "共同胜者")
+	var takeover_detail := _find_visible_label_containing(north_seat_panel, "机器人")
+	_expect(takeover_name != null, "接管机器人保留原参与者昵称")
+	_expect(takeover_role != null, "接管机器人终局角色保持完整")
+	_expect(takeover_detail != null and takeover_detail.text.begins_with("机器人"), "宽屏终局席位仍明确标记机器人接管")
 	screen.size = Vector2(960, 540)
 	await process_frame
 	await process_frame
@@ -1661,6 +1667,10 @@ func _ancestor_panel(node: Node) -> PanelContainer:
 	return null
 
 
+func _seat_panel_for_position(root_node: Node, position: String) -> PanelContainer:
+	return _ancestor_panel(_find_visible_label_exact(root_node, position))
+
+
 func _selected_card_count(screen: MatchScreen) -> int:
 	var count := 0
 	for index in range(screen._hand_cards.size()):
@@ -1866,8 +1876,19 @@ func _node_text(node: Node) -> String:
 
 
 func _find_visible_label_containing(root_node: Node, fragment: String) -> Label:
+	if root_node == null:
+		return null
 	for node in root_node.find_children("*", "Label", true, false):
 		if node is Label and node.is_visible_in_tree() and node.text.contains(fragment):
+			return node
+	return null
+
+
+func _find_visible_label_exact(root_node: Node, expected_text: String) -> Label:
+	if root_node == null:
+		return null
+	for node in root_node.find_children("*", "Label", true, false):
+		if node is Label and node.is_visible_in_tree() and node.text == expected_text:
 			return node
 	return null
 

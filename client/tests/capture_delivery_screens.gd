@@ -7,23 +7,6 @@ const RoomStore = preload("res://scripts/room/room_store.gd")
 const FakeRealtimeAdapter = preload("res://tests/fakes/fake_realtime_adapter.gd")
 
 enum Surface { LOBBY, ROOM, MATCH }
-enum Setup {
-	LOBBY_LOADING,
-	LOBBY_EMPTY,
-	LOBBY_VALIDATION_ERROR,
-	LOBBY_RETRY,
-	LOBBY_POPULATED_SELECTED,
-	ROOM_FULL_HOST,
-	MATCH_ACTOR_TWO_DECK,
-	MATCH_CLAIM_SELECTED,
-	MATCH_CLAIM_COLLISION,
-	MATCH_AWARD_PROTECTED,
-	MATCH_RECONNECTING,
-	MATCH_VALIDATION_ERROR,
-	MATCH_FINAL_SELECTION,
-	MATCH_FINAL_REVEAL,
-	MATCH_FINISHED,
-}
 
 const VIEWPORT_SIZES := [Vector2i(960, 540), Vector2i(1280, 720)]
 const VALID_MATCH_PHASES := [
@@ -35,41 +18,129 @@ const VALID_MATCH_PHASES := [
 	"final_reveal",
 	"finished",
 ]
-const LOBBY_SETUPS := [
-	Setup.LOBBY_LOADING,
-	Setup.LOBBY_EMPTY,
-	Setup.LOBBY_VALIDATION_ERROR,
-	Setup.LOBBY_RETRY,
-	Setup.LOBBY_POPULATED_SELECTED,
-]
-const ROOM_SETUPS := [Setup.ROOM_FULL_HOST]
-const MATCH_SETUPS := [
-	Setup.MATCH_ACTOR_TWO_DECK,
-	Setup.MATCH_CLAIM_SELECTED,
-	Setup.MATCH_CLAIM_COLLISION,
-	Setup.MATCH_AWARD_PROTECTED,
-	Setup.MATCH_RECONNECTING,
-	Setup.MATCH_VALIDATION_ERROR,
-	Setup.MATCH_FINAL_SELECTION,
-	Setup.MATCH_FINAL_REVEAL,
-	Setup.MATCH_FINISHED,
-]
 const SCENARIOS := [
-	{"surface": Surface.LOBBY, "setup": Setup.LOBBY_LOADING, "label": "lobby-loading-empty"},
-	{"surface": Surface.LOBBY, "setup": Setup.LOBBY_EMPTY, "label": "lobby-empty"},
-	{"surface": Surface.LOBBY, "setup": Setup.LOBBY_VALIDATION_ERROR, "label": "lobby-validation-error"},
-	{"surface": Surface.LOBBY, "setup": Setup.LOBBY_RETRY, "label": "lobby-retry"},
-	{"surface": Surface.LOBBY, "setup": Setup.LOBBY_POPULATED_SELECTED, "label": "lobby-populated-selected"},
-	{"surface": Surface.ROOM, "setup": Setup.ROOM_FULL_HOST, "label": "room-full-host"},
-	{"surface": Surface.MATCH, "setup": Setup.MATCH_ACTOR_TWO_DECK, "phase": "actor_play", "label": "actor-play-two-deck"},
-	{"surface": Surface.MATCH, "setup": Setup.MATCH_CLAIM_SELECTED, "phase": "claim_commit", "label": "claim-commit-selected"},
-	{"surface": Surface.MATCH, "setup": Setup.MATCH_CLAIM_COLLISION, "phase": "claim_reveal", "label": "claim-reveal-collision"},
-	{"surface": Surface.MATCH, "setup": Setup.MATCH_AWARD_PROTECTED, "phase": "award_discard", "label": "award-discard-protected"},
-	{"surface": Surface.MATCH, "setup": Setup.MATCH_RECONNECTING, "phase": "actor_play", "label": "match-reconnecting"},
-	{"surface": Surface.MATCH, "setup": Setup.MATCH_VALIDATION_ERROR, "phase": "actor_play", "label": "match-validation-error"},
-	{"surface": Surface.MATCH, "setup": Setup.MATCH_FINAL_SELECTION, "phase": "final_commit", "label": "final-commit"},
-	{"surface": Surface.MATCH, "setup": Setup.MATCH_FINAL_REVEAL, "phase": "final_reveal", "label": "final-reveal"},
-	{"surface": Surface.MATCH, "setup": Setup.MATCH_FINISHED, "phase": "finished", "label": "finished"},
+	{
+		"surface": Surface.LOBBY,
+		"label": "lobby-loading-empty",
+		"connection_state": "connecting",
+	},
+	{
+		"surface": Surface.LOBBY,
+		"label": "lobby-empty",
+		"connection_state": "connected",
+		"rooms": [],
+	},
+	{
+		"surface": Surface.LOBBY,
+		"label": "lobby-validation-error",
+		"connection_state": "connected",
+		"nickname": "甲",
+		"endpoint": "http://invalid",
+		"press_connect": true,
+	},
+	{
+		"surface": Surface.LOBBY,
+		"label": "lobby-retry",
+		"connection_state": "retryable_error",
+		"connection_detail": "服务器暂时不可用",
+	},
+	{
+		"surface": Surface.LOBBY,
+		"label": "lobby-populated-selected",
+		"connection_state": "connected",
+		"nickname": "甲",
+		"rooms": [
+			{"room_id": "room-a", "name": "午休局", "participant_count": 3, "seat_capacity": 4, "deck_mode": "one", "action_deadline_seconds": 30},
+			{"room_id": "room-b", "name": "双牌局", "participant_count": 1, "seat_capacity": 4, "deck_mode": "two", "action_deadline_seconds": 60},
+		],
+		"selected_room_index": 0,
+	},
+	{
+		"surface": Surface.ROOM,
+		"label": "room-full-host",
+		"room_state": {
+			"room_id": "room-full",
+			"local_participant_id": "human-a",
+			"status": "waiting",
+			"display_name": "双副牌 · 满员等待",
+			"deck_mode": "two",
+			"action_deadline_seconds": 30,
+			"host_participant_id": "human-a",
+			"seats": [
+				{"seat_index": 0, "participant_id": "human-a", "nickname": "甲", "is_bot": false, "is_connected": true, "is_ready": true, "score": 0, "hand_count": 8},
+				{"seat_index": 1, "participant_id": "human-b", "nickname": "乙", "is_bot": false, "is_connected": true, "is_ready": true, "score": 0, "hand_count": 8},
+				{"seat_index": 2, "participant_id": "bot-c", "nickname": "机器人丙", "is_bot": true, "is_connected": true, "is_ready": true, "score": 0, "hand_count": 8},
+				{"seat_index": 3, "participant_id": "bot-d", "nickname": "机器人丁", "is_bot": true, "is_connected": true, "is_ready": true, "score": 0, "hand_count": 8},
+			],
+		},
+	},
+	{
+		"surface": Surface.MATCH,
+		"label": "actor-play-two-deck",
+		"phase": "actor_play",
+		"deck_mode": "two",
+		"selected_hand_indices": [0, 1, 2],
+	},
+	{
+		"surface": Surface.MATCH,
+		"label": "claim-commit-selected",
+		"phase": "claim_commit",
+		"selected_claim_index": 1,
+	},
+	{
+		"surface": Surface.MATCH,
+		"label": "claim-reveal-collision",
+		"phase": "claim_reveal",
+		"reveal_delay_seconds": 0.25,
+	},
+	{
+		"surface": Surface.MATCH,
+		"label": "award-discard-protected",
+		"phase": "award_discard",
+		"deck_mode": "two",
+	},
+	{
+		"surface": Surface.MATCH,
+		"label": "match-reconnecting",
+		"phase": "actor_play",
+		"connection_state": "reconnecting",
+		"selected_hand_indices": [0, 1, 2],
+	},
+	{
+		"surface": Surface.MATCH,
+		"label": "match-participant-disconnected",
+		"phase": "actor_play",
+		"participant_overrides": [
+			{"seat_index": 1, "is_connected": false},
+		],
+	},
+	{
+		"surface": Surface.MATCH,
+		"label": "match-bot-takeover",
+		"phase": "actor_play",
+		"participant_overrides": [
+			{"seat_index": 1, "is_connected": false, "is_bot": true},
+		],
+	},
+	{
+		"surface": Surface.MATCH,
+		"label": "match-validation-error",
+		"phase": "actor_play",
+		"selected_hand_indices": [0, 1, 2],
+		"error_code": "invalid_play",
+		"error_message": "出牌失败：请选择三张不同的手牌",
+	},
+	{
+		"surface": Surface.MATCH,
+		"label": "final-commit",
+		"phase": "final_commit",
+		"final_selection": [
+			{"group_button": "A 组", "card_fragments": ["2♣", "3♣", "4♣"]},
+			{"group_button": "B 组", "card_fragments": ["5♠", "6♠", "7♠"]},
+		],
+	},
+	{"surface": Surface.MATCH, "label": "final-reveal", "phase": "final_reveal"},
+	{"surface": Surface.MATCH, "label": "finished", "phase": "finished"},
 ]
 
 
@@ -195,52 +266,33 @@ func _run() -> void:
 
 func _validate_scenarios() -> bool:
 	var seen_labels: Dictionary = {}
-	var seen_setups: Dictionary = {}
 	for spec in SCENARIOS:
-		if not spec.has_all(["surface", "setup", "label"]):
-			push_error("delivery capture scenario is missing surface, setup, or label: %s" % spec)
+		if not spec.has_all(["surface", "label"]):
+			push_error("delivery capture scenario is missing surface or label: %s" % spec)
 			return false
 		var surface: int = spec["surface"]
-		var setup: int = spec["setup"]
 		var label: String = spec["label"]
 		if label.is_empty() or seen_labels.has(label):
 			push_error("delivery capture scenario label is empty or duplicated: %s" % label)
 			return false
-		if seen_setups.has(setup):
-			push_error("delivery capture setup appears more than once: %s" % setup)
-			return false
-		if not _setup_matches_surface(surface, setup):
-			push_error("delivery capture setup %s does not belong to surface %s" % [setup, surface])
-			return false
-		if surface == Surface.MATCH:
-			if not spec.has("phase") or spec["phase"] not in VALID_MATCH_PHASES:
-				push_error("match capture scenario has an invalid phase: %s" % spec)
+		match surface:
+			Surface.LOBBY:
+				if not spec.has("connection_state") or spec.has("phase"):
+					push_error("lobby capture scenario has invalid state data: %s" % spec)
+					return false
+			Surface.ROOM:
+				if not spec.has("room_state") or spec.has("phase"):
+					push_error("room capture scenario has invalid state data: %s" % spec)
+					return false
+			Surface.MATCH:
+				if not spec.has("phase") or spec["phase"] not in VALID_MATCH_PHASES:
+					push_error("match capture scenario has an invalid phase: %s" % spec)
+					return false
+			_:
+				push_error("delivery capture scenario has an invalid surface: %s" % spec)
 				return false
-		elif spec.has("phase"):
-			push_error("non-match capture scenario must not define a phase: %s" % spec)
-			return false
 		seen_labels[label] = true
-		seen_setups[setup] = true
-
-	var expected_setup_count := LOBBY_SETUPS.size() + ROOM_SETUPS.size() + MATCH_SETUPS.size()
-	if seen_setups.size() != expected_setup_count:
-		push_error("delivery capture matrix covers %d of %d setups" % [
-			seen_setups.size(),
-			expected_setup_count,
-		])
-		return false
 	return true
-
-
-func _setup_matches_surface(surface: int, setup: int) -> bool:
-	match surface:
-		Surface.LOBBY:
-			return setup in LOBBY_SETUPS
-		Surface.ROOM:
-			return setup in ROOM_SETUPS
-		Surface.MATCH:
-			return setup in MATCH_SETUPS
-	return false
 
 
 func _capture_scenario(
@@ -249,35 +301,31 @@ func _capture_scenario(
 	output_directory: String
 ) -> bool:
 	var surface: int = spec["surface"]
-	var setup: int = spec["setup"]
-	var label: String = spec["label"]
 	match surface:
 		Surface.LOBBY:
-			return await _capture_lobby_state(setup, label, viewport_size, output_directory)
+			return await _capture_lobby_state(spec, viewport_size, output_directory)
 		Surface.ROOM:
-			return await _capture_room_state(setup, label, viewport_size, output_directory)
+			return await _capture_room_state(spec, viewport_size, output_directory)
 		Surface.MATCH:
-			return await _capture_match_state(
-				spec["phase"],
-				setup,
-				label,
-				viewport_size,
-				output_directory
-			)
+			return await _capture_match_state(spec, viewport_size, output_directory)
 	push_error("unsupported delivery capture surface: %s" % surface)
 	return false
 
 
-func _capture_lobby_state(
-	setup: int,
-	label: String,
-	viewport_size: Vector2i,
-	output_directory: String
-) -> bool:
+func _create_capture_viewport(viewport_size: Vector2i) -> SubViewport:
 	var viewport := SubViewport.new()
 	viewport.size = viewport_size
 	viewport.render_target_update_mode = SubViewport.UPDATE_ALWAYS
 	root.add_child(viewport)
+	return viewport
+
+
+func _capture_lobby_state(
+	spec: Dictionary,
+	viewport_size: Vector2i,
+	output_directory: String
+) -> bool:
+	var viewport := _create_capture_viewport(viewport_size)
 	var adapter := FakeRealtimeAdapter.new()
 	var screen := LobbyScreen.new()
 	screen.set_realtime_adapter(adapter)
@@ -286,50 +334,42 @@ func _capture_lobby_state(
 	viewport.add_child(screen)
 	await process_frame
 	await process_frame
-	match setup:
-		Setup.LOBBY_LOADING:
-			adapter.publish_connection_state("connecting")
-		Setup.LOBBY_EMPTY:
-			adapter.publish_connection_state("connected")
-			adapter.publish_rooms([])
-		Setup.LOBBY_VALIDATION_ERROR:
-			adapter.publish_connection_state("connected")
-			screen._nickname_input.text = "甲"
-			screen._endpoint_input.text = "http://invalid"
-			screen._connect_button.pressed.emit()
-		Setup.LOBBY_RETRY:
-			adapter.publish_connection_state("retryable_error", "服务器暂时不可用")
-		Setup.LOBBY_POPULATED_SELECTED:
-			adapter.publish_connection_state("connected")
-			screen._nickname_input.text = "甲"
-			adapter.publish_rooms([
-				{"room_id": "room-a", "name": "午休局", "participant_count": 3, "seat_capacity": 4, "deck_mode": "one", "action_deadline_seconds": 30},
-				{"room_id": "room-b", "name": "双牌局", "participant_count": 1, "seat_capacity": 4, "deck_mode": "two", "action_deadline_seconds": 60},
-			])
-			await process_frame
-			var root_item := screen._room_tree.get_root()
-			var first_item := root_item.get_first_child() if root_item != null else null
-			if first_item != null:
-				screen._room_tree.set_selected(first_item, 0)
-				screen._on_room_selected()
+	adapter.publish_connection_state(
+		str(spec["connection_state"]),
+		str(spec.get("connection_detail", ""))
+	)
+	if spec.has("nickname"):
+		screen._nickname_input.text = str(spec["nickname"])
+	if spec.has("endpoint"):
+		screen._endpoint_input.text = str(spec["endpoint"])
+	if bool(spec.get("press_connect", false)):
+		screen._connect_button.pressed.emit()
+	if spec.has("rooms"):
+		var rooms: Array[Dictionary] = []
+		for room in spec["rooms"]:
+			rooms.append(room)
+		adapter.publish_rooms(rooms)
+	if spec.has("selected_room_index"):
+		await process_frame
+		var root_item := screen._room_tree.get_root()
+		var selected_item := root_item.get_first_child() if root_item != null else null
+		for index in range(int(spec["selected_room_index"])):
+			if selected_item != null:
+				selected_item = selected_item.get_next()
+		if selected_item != null:
+			screen._room_tree.set_selected(selected_item, 0)
+			screen._on_room_selected()
 	await process_frame
 	await process_frame
-	return await _save_capture(viewport, output_directory, label, viewport_size)
+	return await _save_capture(viewport, output_directory, str(spec["label"]), viewport_size)
 
 
 func _capture_room_state(
-	setup: int,
-	label: String,
+	spec: Dictionary,
 	viewport_size: Vector2i,
 	output_directory: String
 ) -> bool:
-	if setup != Setup.ROOM_FULL_HOST:
-		push_error("unsupported room capture setup: %s" % setup)
-		return false
-	var viewport := SubViewport.new()
-	viewport.size = viewport_size
-	viewport.render_target_update_mode = SubViewport.UPDATE_ALWAYS
-	root.add_child(viewport)
+	var viewport := _create_capture_viewport(viewport_size)
 	var adapter := FakeRealtimeAdapter.new()
 	var store := RoomStore.new(adapter)
 	var screen := RoomScreen.new()
@@ -338,24 +378,10 @@ func _capture_room_state(
 	screen.size = Vector2(viewport_size)
 	viewport.add_child(screen)
 	await process_frame
-	adapter.publish_game_room_state({
-		"room_id": "room-full",
-		"local_participant_id": "human-a",
-		"status": "waiting",
-		"display_name": "双副牌 · 满员等待",
-		"deck_mode": "two",
-		"action_deadline_seconds": 30,
-		"host_participant_id": "human-a",
-		"seats": [
-			_seat(0, "human-a", "甲", false, 0, 8),
-			_seat(1, "human-b", "乙", false, 0, 8),
-			_seat(2, "bot-c", "机器人丙", true, 0, 8),
-			_seat(3, "bot-d", "机器人丁", true, 0, 8),
-		],
-	})
+	adapter.publish_game_room_state(spec["room_state"])
 	await process_frame
 	await process_frame
-	return await _save_capture(viewport, output_directory, label, viewport_size)
+	return await _save_capture(viewport, output_directory, str(spec["label"]), viewport_size)
 
 
 func _save_capture(
@@ -393,18 +419,12 @@ func _save_capture(
 
 
 func _capture_match_state(
-	phase: String,
-	setup: int,
-	label: String,
+	spec: Dictionary,
 	viewport_size: Vector2i,
 	output_directory: String
 ) -> bool:
-	var viewport := SubViewport.new()
-	viewport.size = viewport_size
-	viewport.render_target_update_mode = SubViewport.UPDATE_ALWAYS
-	root.add_child(viewport)
-
-	var store := _make_store(phase, setup)
+	var viewport := _create_capture_viewport(viewport_size)
+	var store := _make_store(spec)
 	var screen := MatchScreen.new()
 	screen.set_anchors_and_offsets_preset(Control.PRESET_TOP_LEFT)
 	screen.size = Vector2(viewport_size)
@@ -412,65 +432,66 @@ func _capture_match_state(
 	viewport.add_child(screen)
 	await process_frame
 	await process_frame
-	if setup == Setup.MATCH_VALIDATION_ERROR:
-		screen._on_action_failed("invalid_play", "出牌失败：请选择三张不同的手牌")
+	if spec.has("error_message"):
+		screen._on_action_failed(
+			str(spec.get("error_code", "visual_capture_error")),
+			str(spec["error_message"])
+		)
 		await process_frame
 
-	if setup in [Setup.MATCH_ACTOR_TWO_DECK, Setup.MATCH_RECONNECTING, Setup.MATCH_VALIDATION_ERROR]:
-		for index in range(3):
-			var card_button := screen.find_child("HandCard%d" % index, true, false) as Button
-			if card_button == null:
-				push_error("actor-play capture could not find hand card %d" % index)
-				viewport.queue_free()
-				await process_frame
-				return false
-			card_button.button_pressed = true
-		await process_frame
-	elif setup == Setup.MATCH_CLAIM_SELECTED:
-		var claim_card := screen.find_child("ClaimCard1", true, false) as Button
+	for raw_index in spec.get("selected_hand_indices", []):
+		var index := int(raw_index)
+		var card_button := screen.find_child("HandCard%d" % index, true, false) as Button
+		if card_button == null:
+			push_error("match capture could not find hand card %d" % index)
+			viewport.queue_free()
+			await process_frame
+			return false
+		card_button.button_pressed = true
+	await process_frame
+
+	if spec.has("selected_claim_index"):
+		var claim_index := int(spec["selected_claim_index"])
+		var claim_card := screen.find_child("ClaimCard%d" % claim_index, true, false) as Button
 		if claim_card == null:
-			push_error("claim-commit capture could not find a selectable played card")
+			push_error("match capture could not find played card %d" % claim_index)
 			viewport.queue_free()
 			await process_frame
 			return false
 		claim_card.button_pressed = true
 		await process_frame
-	elif setup == Setup.MATCH_CLAIM_COLLISION:
-		await create_timer(0.25).timeout
-	elif setup == Setup.MATCH_AWARD_PROTECTED:
-		await process_frame
-	elif setup == Setup.MATCH_FINAL_SELECTION:
-		for rank in [2, 3, 4]:
-			var card_button := _find_button_with_content(screen, "%d♣" % rank)
-			if card_button == null:
-				push_error("final-commit capture could not find A-group card %d" % rank)
-				viewport.queue_free()
-				await process_frame
-				return false
-			card_button.button_pressed = true
-			await process_frame
-		var group_b_button := _find_button(screen, "B 组")
-		if group_b_button == null:
-			push_error("final-commit capture could not find B-group mode")
+
+	var reveal_delay_seconds := float(spec.get("reveal_delay_seconds", 0.0))
+	if reveal_delay_seconds > 0.0:
+		await create_timer(reveal_delay_seconds).timeout
+
+	for raw_group in spec.get("final_selection", []):
+		var group: Dictionary = raw_group
+		var group_button := _find_button(screen, str(group["group_button"]))
+		if group_button == null:
+			push_error("final selection capture could not find group button: %s" % group["group_button"])
 			viewport.queue_free()
 			await process_frame
 			return false
-		group_b_button.button_pressed = true
-		for rank in [5, 6, 7]:
-			var card_button := _find_button_with_content(screen, "%d♠" % rank)
+		group_button.button_pressed = true
+		await process_frame
+		for raw_fragment in group["card_fragments"]:
+			var fragment := str(raw_fragment)
+			var card_button := _find_button_with_content(screen, fragment)
 			if card_button == null:
-				push_error("final-commit capture could not find B-group card %d" % rank)
+				push_error("final selection capture could not find card: %s" % fragment)
 				viewport.queue_free()
 				await process_frame
 				return false
 			card_button.button_pressed = true
 			await process_frame
 
-	return await _save_capture(viewport, output_directory, label, viewport_size)
+	return await _save_capture(viewport, output_directory, str(spec["label"]), viewport_size)
 
 
-func _make_store(phase: String, setup: int) -> VisualMatchStore:
+func _make_store(spec: Dictionary) -> VisualMatchStore:
 	var store := VisualMatchStore.new()
+	var phase := str(spec["phase"])
 	store.phase = phase
 	store.participants = [
 		_seat(0, "human-a", "甲", false, 10, 8),
@@ -575,39 +596,43 @@ func _make_store(phase: String, setup: int) -> VisualMatchStore:
 			"results": store.final_results,
 			"winner_seat_indexes": store.winner_seat_indexes,
 		}]
-	match setup:
-		Setup.MATCH_ACTOR_TWO_DECK:
-			store.deck_mode = "two"
-		Setup.MATCH_RECONNECTING:
-			store.connection_state = "reconnecting"
-		Setup.MATCH_VALIDATION_ERROR:
-			store.connection_state = "connected"
-		Setup.MATCH_AWARD_PROTECTED:
-			var awarded_card := _card("award-hearts-a-copy-1", 14, "hearts", 1)
-			store.local_hand = [
-				_card("original-clubs-2", 2, "clubs", 0),
-				_card("original-spades-3", 3, "spades", 0),
-				awarded_card,
-				_card("original-diamonds-4", 4, "diamonds", 0),
-				_card("original-hearts-5", 5, "hearts", 0),
-				_card("original-clubs-6", 6, "clubs", 0),
-				_card("original-spades-7", 7, "spades", 0),
-				_card("original-diamonds-8", 8, "diamonds", 0),
-				_card("original-hearts-9", 9, "hearts", 0),
-			]
-			store.deck_mode = "two"
-			store.turn_number = 6
-			store.pending_discard_seat_indexes = [0]
-			store.claim_events = [{
-				"turn_number": 6,
-				"claims": [
-					{"seat_index": 0, "card_id": awarded_card["id"]},
-					{"seat_index": 2, "card_id": null},
-					{"seat_index": 3, "card_id": null},
-				],
-				"awards": [{"seat_index": 0, "card": awarded_card, "source": "unique"}],
-				"discarded_cards": [],
-			}]
+	if phase == "award_discard":
+		var awarded_card := _card("award-hearts-a-copy-1", 14, "hearts", 1)
+		store.local_hand = [
+			_card("original-clubs-2", 2, "clubs", 0),
+			_card("original-spades-3", 3, "spades", 0),
+			awarded_card,
+			_card("original-diamonds-4", 4, "diamonds", 0),
+			_card("original-hearts-5", 5, "hearts", 0),
+			_card("original-clubs-6", 6, "clubs", 0),
+			_card("original-spades-7", 7, "spades", 0),
+			_card("original-diamonds-8", 8, "diamonds", 0),
+			_card("original-hearts-9", 9, "hearts", 0),
+		]
+		store.turn_number = 6
+		store.pending_discard_seat_indexes = [0]
+		store.claim_events = [{
+			"turn_number": 6,
+			"claims": [
+				{"seat_index": 0, "card_id": awarded_card["id"]},
+				{"seat_index": 2, "card_id": null},
+				{"seat_index": 3, "card_id": null},
+			],
+			"awards": [{"seat_index": 0, "card": awarded_card, "source": "unique"}],
+			"discarded_cards": [],
+		}]
+	store.connection_state = str(spec.get("connection_state", store.connection_state))
+	store.deck_mode = str(spec.get("deck_mode", store.deck_mode))
+	for raw_override in spec.get("participant_overrides", []):
+		var participant_override: Dictionary = raw_override
+		var seat_index := int(participant_override["seat_index"])
+		if seat_index < 0 or seat_index >= store.participants.size():
+			continue
+		var participant := store.participants[seat_index].duplicate(true)
+		for key in participant_override:
+			if key != "seat_index":
+				participant[key] = participant_override[key]
+		store.participants[seat_index] = participant
 	return store
 
 
