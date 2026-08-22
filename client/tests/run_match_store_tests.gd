@@ -27,6 +27,11 @@ func _run() -> void:
 	_test_discard_intention_is_forwarded_without_optimistic_state()
 	_test_final_selection_intentions_are_forwarded_without_optimistic_state()
 	_test_only_targeted_private_hand_is_retained()
+	_test_initial_hand_is_an_unhighlighted_acquisition_baseline()
+	_test_actor_draw_highlights_exactly_three_new_physical_cards()
+	_test_claim_award_replaces_draw_highlights_during_award_discard()
+	_test_acquisition_highlights_follow_the_authoritative_hand_and_clear_on_leave()
+	_test_reconnect_full_snapshot_does_not_create_false_acquisition_highlights()
 	_test_only_targeted_private_claim_confirmation_is_retained()
 	_test_only_targeted_private_final_confirmation_is_retained()
 	_test_room_errors_and_connection_changes_are_exposed()
@@ -586,6 +591,198 @@ func _test_only_targeted_private_hand_is_retained() -> void:
 	_expect_equal(match_store.get_local_hand(), [local_card], "本地手牌深拷贝")
 
 
+func _test_initial_hand_is_an_unhighlighted_acquisition_baseline() -> void:
+	var adapter := FakeRealtimeAdapter.new()
+	var match_store := MatchStore.new(adapter)
+	if not match_store.has_method("get_acquired_card_ids"):
+		_failures.append("MatchStore 应公开新获得牌 ID 的只读副本")
+		return
+	adapter.publish_game_room_state(_started_snapshot("room-a", "human-a", 20))
+	adapter.publish_match_private_state({
+		"participant_id": "human-a",
+		"hand": _five_card_hand("opening"),
+	})
+
+	_expect_equal(match_store.get_acquired_card_ids(), [], "开局完整手牌只建立基线")
+	var returned_ids: Array[String] = match_store.get_acquired_card_ids()
+	returned_ids.append("forged")
+	_expect_equal(match_store.get_acquired_card_ids(), [], "新获得牌 ID 返回只读副本")
+
+
+func _test_actor_draw_highlights_exactly_three_new_physical_cards() -> void:
+	var adapter := FakeRealtimeAdapter.new()
+	var match_store := MatchStore.new(adapter)
+	var public_snapshot := _started_snapshot("room-a", "human-a", 20)
+	public_snapshot["actor_seat_index"] = 0
+	adapter.publish_game_room_state(public_snapshot)
+	var opening_hand := _five_card_hand("opening")
+	adapter.publish_match_private_state({
+		"participant_id": "human-a",
+		"hand": opening_hand,
+	})
+	var retained_cards := [opening_hand[3], opening_hand[4]]
+	var drawn_cards := [
+		_card("drawn-hearts-9", 9, "hearts", 0),
+		_card("drawn-spades-10", 10, "spades", 0),
+		_card("drawn-clubs-j", 11, "clubs", 0),
+	]
+	var next_hand: Array = retained_cards + drawn_cards
+
+	# The private message may arrive before the public schema patch.
+	adapter.publish_match_private_state({
+		"participant_id": "human-a",
+		"hand": next_hand,
+	})
+	_expect_equal(match_store.get_acquired_card_ids(), [], "没有公开出牌事件时不猜测摸牌")
+	public_snapshot["phase"] = "claim_commit"
+	public_snapshot["turn_number"] = 1
+	public_snapshot["play_events"] = [{
+		"turn_number": 1,
+		"actor_seat_index": 0,
+		"cards": [opening_hand[0], opening_hand[1], opening_hand[2]],
+		"category": "straight",
+		"score": 5,
+	}]
+	adapter.publish_game_room_state(public_snapshot)
+
+	_expect_equal(
+		match_store.get_acquired_card_ids(),
+		["drawn-hearts-9", "drawn-spades-10", "drawn-clubs-j"],
+		"本地行动者出牌后只高亮三张新摸的物理牌"
+	)
+	adapter.publish_game_room_state(public_snapshot)
+	adapter.publish_match_private_state({
+		"participant_id": "human-a",
+		"hand": next_hand,
+	})
+	_expect_equal(
+		match_store.get_acquired_card_ids(),
+		["drawn-hearts-9", "drawn-spades-10", "drawn-clubs-j"],
+		"重复权威快照不重复或清空摸牌高亮"
+	)
+
+
+func _test_claim_award_replaces_draw_highlights_during_award_discard() -> void:
+	var adapter := FakeRealtimeAdapter.new()
+	var match_store := MatchStore.new(adapter)
+	var public_snapshot := _started_snapshot("room-a", "human-a", 20)
+	public_snapshot["actor_seat_index"] = 0
+	adapter.publish_game_room_state(public_snapshot)
+	var opening_hand := _five_card_hand("opening")
+	adapter.publish_match_private_state({"participant_id": "human-a", "hand": opening_hand})
+	var drawn_cards := [
+		_card("drawn-a", 9, "clubs", 0),
+		_card("drawn-b", 10, "clubs", 0),
+		_card("drawn-c", 11, "clubs", 0),
+	]
+	var post_draw_hand: Array = [opening_hand[3], opening_hand[4]] + drawn_cards
+	public_snapshot["turn_number"] = 1
+	public_snapshot["phase"] = "claim_commit"
+	public_snapshot["play_events"] = [{
+		"turn_number": 1,
+		"actor_seat_index": 0,
+		"cards": [opening_hand[0], opening_hand[1], opening_hand[2]],
+	}]
+	adapter.publish_game_room_state(public_snapshot)
+	adapter.publish_match_private_state({"participant_id": "human-a", "hand": post_draw_hand})
+	_expect_equal(match_store.get_acquired_card_ids().size(), 3, "先记录最近一次摸牌")
+
+	var awarded_card := _card("awarded-hearts-a", 14, "hearts", 0)
+	public_snapshot["phase"] = "award_discard"
+	public_snapshot["actor_seat_index"] = 2
+	public_snapshot["pending_discard_seat_indexes"] = [0]
+	public_snapshot["claim_events"] = [{
+		"turn_number": 1,
+		"claims": [{"seat_index": 0, "card_id": "played-card"}],
+		"awards": [{"seat_index": 0, "card": awarded_card, "source": "unique"}],
+		"discarded_cards": [],
+	}]
+	adapter.publish_game_room_state(public_snapshot)
+	adapter.publish_match_private_state({
+		"participant_id": "human-a",
+		"hand": post_draw_hand + [awarded_card],
+	})
+
+	_expect_equal(
+		match_store.get_acquired_card_ids(),
+		["awarded-hearts-a"],
+		"抢到的牌在 award_discard 阶段替换旧摸牌高亮"
+	)
+
+
+func _test_acquisition_highlights_follow_the_authoritative_hand_and_clear_on_leave() -> void:
+	var adapter := FakeRealtimeAdapter.new()
+	var match_store := MatchStore.new(adapter)
+	var public_snapshot := _started_snapshot("room-a", "human-a", 20)
+	public_snapshot["actor_seat_index"] = 0
+	adapter.publish_game_room_state(public_snapshot)
+	var opening_hand := _five_card_hand("opening")
+	adapter.publish_match_private_state({"participant_id": "human-a", "hand": opening_hand})
+	var drawn_cards := [
+		_card("drawn-a", 9, "clubs", 0),
+		_card("drawn-b", 10, "clubs", 0),
+		_card("drawn-c", 11, "clubs", 0),
+	]
+	public_snapshot["turn_number"] = 1
+	public_snapshot["play_events"] = [{
+		"turn_number": 1,
+		"actor_seat_index": 0,
+		"cards": [opening_hand[0], opening_hand[1], opening_hand[2]],
+	}]
+	adapter.publish_game_room_state(public_snapshot)
+	var post_draw_hand: Array = [opening_hand[3], opening_hand[4]] + drawn_cards
+	adapter.publish_match_private_state({"participant_id": "human-a", "hand": post_draw_hand})
+
+	adapter.publish_match_private_state({
+		"participant_id": "human-a",
+		"hand": [opening_hand[3], opening_hand[4], drawn_cards[1], drawn_cards[2]],
+	})
+	_expect_equal(
+		match_store.get_acquired_card_ids(),
+		["drawn-b", "drawn-c"],
+		"权威手牌移除的物理牌同时移出高亮集合"
+	)
+	adapter.publish_game_room_left(4000, "主动离开")
+	_expect_equal(match_store.get_acquired_card_ids(), [], "离房清空新获得牌高亮")
+
+
+func _test_reconnect_full_snapshot_does_not_create_false_acquisition_highlights() -> void:
+	var adapter := FakeRealtimeAdapter.new()
+	var match_store := MatchStore.new(adapter)
+	var public_snapshot := _started_snapshot("room-a", "human-a", 20)
+	public_snapshot["actor_seat_index"] = 0
+	adapter.publish_game_room_state(public_snapshot)
+	var opening_hand := _five_card_hand("opening")
+	adapter.publish_match_private_state({"participant_id": "human-a", "hand": opening_hand})
+
+	adapter.publish_game_room_connection_state("reconnecting", "网络中断")
+	adapter.publish_game_room_connection_state("connected")
+	var reconnected_hand := [
+		opening_hand[3],
+		opening_hand[4],
+		_card("offline-new-a", 9, "hearts", 0),
+		_card("offline-new-b", 10, "hearts", 0),
+		_card("offline-new-c", 11, "hearts", 0),
+	]
+	public_snapshot["phase"] = "claim_commit"
+	public_snapshot["turn_number"] = 1
+	public_snapshot["play_events"] = [{
+		"turn_number": 1,
+		"actor_seat_index": 0,
+		"cards": [opening_hand[0], opening_hand[1], opening_hand[2]],
+	}]
+	# Whichever full snapshot arrives first after reconnect, both are baselines.
+	adapter.publish_match_private_state({"participant_id": "human-a", "hand": reconnected_hand})
+	adapter.publish_game_room_state(public_snapshot)
+	adapter.publish_match_private_state({"participant_id": "human-a", "hand": reconnected_hand})
+
+	_expect_equal(
+		match_store.get_acquired_card_ids(),
+		[],
+		"重连完整手牌及历史事件只重建基线，不把整手牌误标为新获得"
+	)
+
+
 func _test_only_targeted_private_claim_confirmation_is_retained() -> void:
 	var adapter := FakeRealtimeAdapter.new()
 	var match_store := MatchStore.new(adapter)
@@ -765,10 +962,10 @@ func _started_snapshot(room_id: String, local_participant_id: String, draw_pile_
 		"actor_seat_index": 2,
 		"draw_pile_count": draw_pile_count,
 		"seats": [
-			_seat(0, "human-a", "甲", false, true, 0, 8),
-			_seat(1, "human-b", "乙", false, true, 2, 8),
-			_seat(2, "bot-c", "机器人 3", true, true, 4, 8),
-			_seat(3, "bot-d", "机器人 4", true, true, 1, 8),
+		_seat(0, "human-a", "甲", false, true, 0, 5),
+		_seat(1, "human-b", "乙", false, true, 2, 5),
+		_seat(2, "bot-c", "机器人 3", true, true, 4, 5),
+		_seat(3, "bot-d", "机器人 4", true, true, 1, 5),
 		],
 		"contest_rounds": [{
 			"round_index": 0,
@@ -804,6 +1001,16 @@ func _card(card_id: String, rank: int, suit: String, copy_index: int) -> Diction
 		"suit": suit,
 		"copy_index": copy_index,
 	}
+
+
+func _five_card_hand(prefix: String) -> Array[Dictionary]:
+	return [
+		_card("%s-clubs-2" % prefix, 2, "clubs", 0),
+		_card("%s-diamonds-3" % prefix, 3, "diamonds", 0),
+		_card("%s-spades-4" % prefix, 4, "spades", 0),
+		_card("%s-hearts-5" % prefix, 5, "hearts", 0),
+		_card("%s-clubs-6" % prefix, 6, "clubs", 0),
+	]
 
 
 func _expect_equal(actual: Variant, expected: Variant, context: String) -> void:

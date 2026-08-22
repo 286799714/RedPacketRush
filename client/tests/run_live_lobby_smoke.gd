@@ -272,20 +272,20 @@ func _observe_started_host_state(state: Dictionary, seats: Array) -> void:
 		_fail("opening did not publish point-contest history")
 		return
 	for raw_seat: Variant in seats:
-		if raw_seat is Dictionary and int(raw_seat.get("hand_count", 0)) != 8:
-			_fail("started match did not publish eight-card hand counts")
+		if raw_seat is Dictionary and int(raw_seat.get("hand_count", 0)) != 5:
+			_fail("started match did not publish five-card hand counts")
 			return
 
 	var phase := str(state.get("phase", ""))
 	match phase:
 		"point_contest":
-			if state.get("draw_pile_count", -1) != 72:
-				_fail("two-deck opening did not leave 72 draw cards")
+			if state.get("draw_pile_count", -1) != 84:
+				_fail("two-deck opening did not leave 84 draw cards")
 				return
 			_point_contest_observed = true
 		"actor_play":
-			if state.get("draw_pile_count", -1) != 72:
-				_fail("actor-play opening did not preserve 72 draw cards")
+			if state.get("draw_pile_count", -1) != 84:
+				_fail("actor-play opening did not preserve 84 draw cards")
 				return
 			if not _point_contest_observed:
 				_fail("actor_play arrived before a visible point_contest phase")
@@ -327,8 +327,8 @@ func _observe_started_host_state(state: Dictionary, seats: Array) -> void:
 func _on_match_private_state_changed(state: Dictionary, participant_index: int) -> void:
 	var hand: Variant = state.get("hand", [])
 	var participant_id := str(state.get("participant_id", ""))
-	if participant_id.is_empty() or not hand is Array or hand.size() != 8:
-		_fail("participant %d did not receive a targeted eight-card hand" % participant_index)
+	if participant_id.is_empty() or not hand is Array or hand.size() != 5:
+		_fail("participant %d did not receive a targeted five-card hand" % participant_index)
 		return
 	var action_id := int(state.get("action_id", -1))
 	if action_id <= 0:
@@ -381,7 +381,7 @@ func _try_request_actor_play() -> void:
 		if str(_participant_ids_by_adapter.get(participant_index, "")) != _actor_participant_id:
 			continue
 		var hand: Variant = _opening_hands_by_adapter.get(participant_index, [])
-		if not hand is Array or hand.size() != 8:
+		if not hand is Array or hand.size() != 5:
 			_fail("actor adapter did not retain its targeted opening hand")
 			return
 		var selected_ids: Array[String] = []

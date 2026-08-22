@@ -14,6 +14,35 @@ export interface PhysicalCard {
   readonly copyIndex: number;
 }
 
+const SUIT_STRENGTH = new Map(CARD_SUITS.map((suit, index) => [suit, index]));
+
+/**
+ * Compares gameplay strength only. Physical copies of the same rank and suit
+ * intentionally tie so two-deck point contests keep their redraw semantics.
+ */
+export function compareCardStrength(left: PhysicalCard, right: PhysicalCard): number {
+  return (
+    left.rank - right.rank
+    || (SUIT_STRENGTH.get(left.suit) ?? -1) - (SUIT_STRENGTH.get(right.suit) ?? -1)
+  );
+}
+
+/**
+ * Compares cards for deterministic selection. Copy and id are stable fallbacks
+ * only; they do not contribute to gameplay strength or scoring.
+ */
+export function compareCardPreference(left: PhysicalCard, right: PhysicalCard): number {
+  return (
+    compareCardStrength(left, right)
+    || right.copyIndex - left.copyIndex
+    || -compareStrings(left.id, right.id)
+  );
+}
+
+export function compareCardsStrongestFirst(left: PhysicalCard, right: PhysicalCard): number {
+  return -compareCardPreference(left, right);
+}
+
 export function createPhysicalDeck(deckMode: DeckMode): readonly PhysicalCard[] {
   if (deckMode !== "one" && deckMode !== "two") {
     throw new Error("deckMode must be one or two");
@@ -34,4 +63,14 @@ export function createPhysicalDeck(deckMode: DeckMode): readonly PhysicalCard[] 
     }
   }
   return Object.freeze(cards);
+}
+
+function compareStrings(left: string, right: string): number {
+  if (left < right) {
+    return -1;
+  }
+  if (left > right) {
+    return 1;
+  }
+  return 0;
 }

@@ -200,7 +200,7 @@ describe("match secret claims", () => {
     );
     assert.deepStrictEqual(
       publicState.participants.map((participant) => participant.handCount),
-      [8, 8, 8, 8],
+      [5, 5, 5, 5],
     );
     assert.deepStrictEqual(
       afterViews.map((view) => view.privateState.hand),
@@ -240,7 +240,7 @@ describe("match secret claims", () => {
     assert.deepStrictEqual(publicState.playedCards, []);
     assert.deepStrictEqual(
       publicState.participants.map((participant) => participant.handCount),
-      [8, 9, 9, 9],
+      [5, 6, 6, 6],
     );
     for (let seatIndex = 1; seatIndex < PARTICIPANTS.length; seatIndex += 1) {
       assert.deepStrictEqual(

@@ -33,7 +33,7 @@ The value ordering `2 < 3 < ... < K < A`; A may be low only in `A-2-3` and high 
 _Avoid_: Card score
 
 **Suit rank**:
-The tie-break ordering `clubs < spades < diamonds < hearts`, so red beats black and hearts are highest.
+The tie-break ordering `clubs < spades < diamonds < hearts`; when displayed strongest-first this is hearts, diamonds, spades, clubs.
 _Avoid_: Card rank, combination score
 
 **Point contest**:
@@ -69,7 +69,7 @@ A played card received through either a unique claim or a collision draw; its re
 _Avoid_: Drawn card, played card
 
 **Final settlement**:
-The endgame selection of two disjoint combinations from each participant's eight-card hand, with the other two cards unused.
+The automatic endgame selection of the highest-scoring three-card combination from each participant's five-card hand, with the other two cards unused.
 _Avoid_: Turn, point contest
 
 **Bot**:

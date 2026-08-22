@@ -71,7 +71,6 @@ const ROOM_ERRORS = {
   invalidCommandPayload: { code: "invalid_payload", message: "该命令不接受参数" },
   invalidClaimPayload: { code: "invalid_payload", message: "抢牌参数必须包含牌标识或空值" },
   invalidDiscardPayload: { code: "invalid_payload", message: "弃牌参数必须包含牌标识" },
-  invalidFinalSelectionPayload: { code: "invalid_payload", message: "最终结算参数无效" },
   invalidPlayPayload: { code: "invalid_payload", message: "出牌参数必须是牌标识数组" },
   invalidReady: { code: "invalid_ready", message: "准备状态必须是布尔值" },
   invalidSettings: { code: "invalid_settings", message: "房间设置无效" },
@@ -80,7 +79,6 @@ const ROOM_ERRORS = {
   playPhase: { code: "invalid_phase", message: "当前阶段不能出牌" },
   claimPhase: { code: "invalid_phase", message: "当前阶段不能抢牌" },
   discardPhase: { code: "invalid_phase", message: "当前阶段不能弃牌" },
-  finalSelectionPhase: { code: "invalid_phase", message: "当前阶段不能提交最终组合" },
   readyPhase: { code: "invalid_phase", message: "房间当前不能修改准备状态" },
   startFailed: { code: "start_failed", message: "对局启动失败，请重试" },
   startInProgress: { code: "start_in_progress", message: "对局正在启动" },
@@ -220,9 +218,6 @@ export class GameRoom extends Room<{
     });
     this.onMessage("discard", (client, message: unknown) => {
       this.discardCard(client, message);
-    });
-    this.onMessage("final_selection", (client, message: unknown) => {
-      this.commitFinalSelection(client, message);
     });
   }
 
@@ -777,70 +772,6 @@ export class GameRoom extends Room<{
     this.sendPrivateMatchStates();
   }
 
-  private commitFinalSelection(client: Client, message: unknown): void {
-    if (!this.matchEngine) {
-      this.sendRoomError(client, ROOM_ERRORS.finalSelectionPhase);
-      return;
-    }
-    if (
-      !isRecordLike(message)
-      || (message.mode !== "manual" && message.mode !== "best")
-      || !isActionId(message.actionId)
-    ) {
-      this.sendRoomError(client, ROOM_ERRORS.invalidFinalSelectionPayload);
-      return;
-    }
-    if (!this.authorizeCurrentAction(client, message.actionId)) {
-      return;
-    }
-    if (
-      message.mode === "manual"
-      && (
-        !Array.isArray(message.groups)
-        || message.groups.length !== 2
-        || !Array.from(message.groups).every((group) => (
-          Array.isArray(group)
-          && group.length === 3
-          && Array.from(group).every((cardId) => (
-            typeof cardId === "string" && cardId.length > 0
-          ))
-        ))
-      )
-    ) {
-      this.sendRoomError(client, ROOM_ERRORS.invalidFinalSelectionPayload);
-      return;
-    }
-    const seatIndex = client.userData?.seatIndex;
-    if (typeof seatIndex !== "number") {
-      this.sendRoomError(client, ROOM_ERRORS.noSeat);
-      return;
-    }
-
-    try {
-      if (message.mode === "best") {
-        this.submitBestFinalSelection(this.matchEngine, seatIndex);
-      } else {
-        this.submitFinalSelection(
-          this.matchEngine,
-          seatIndex,
-          message.groups as readonly (readonly string[])[],
-        );
-      }
-    } catch (error) {
-      if (error instanceof MatchCommandError) {
-        this.sendRoomError(client, { code: error.code, message: error.message });
-        return;
-      }
-      throw error;
-    }
-
-    if (this.state.phase === "final_commit") {
-      this.sendPrivateMatchState(client);
-    } else {
-      this.sendPrivateMatchStates();
-    }
-  }
-
   private submitPlay(
     matchEngine: MatchEngine,
     seatIndex: number,
@@ -878,27 +809,6 @@ export class GameRoom extends Room<{
       return;
     }
     this.enterMatchPhase(matchEngine, publicState);
-  }
-
-  private submitBestFinalSelection(matchEngine: MatchEngine, seatIndex: number): void {
-    matchEngine.commitBestFinalSelection(seatIndex);
-    this.projectFinalSelection(matchEngine, seatIndex);
-  }
-
-  private submitFinalSelection(
-    matchEngine: MatchEngine,
-    seatIndex: number,
-    groups: readonly (readonly string[])[],
-  ): void {
-    matchEngine.commitFinalSelection(seatIndex, groups);
-    this.projectFinalSelection(matchEngine, seatIndex);
-  }
-
-  private projectFinalSelection(matchEngine: MatchEngine, seatIndex: number): void {
-    const publicState = matchEngine.view(seatIndex).publicState;
-    if (publicState.phase !== "final_commit") {
-      this.enterMatchPhase(matchEngine, publicState);
-    }
   }
 
   private enterMatchPhase(
@@ -1010,11 +920,6 @@ export class GameRoom extends Room<{
       this.sendPrivateMatchStates();
       return;
     }
-    const phase = this.state.phase;
-    this.submitBestFinalSelection(matchEngine, seatIndex);
-    if (this.state.phase !== phase) {
-      this.sendPrivateMatchStates();
-    }
   }
 
   private resolvePhaseTimer(matchEngine: MatchEngine, phase: MatchPhase): void {
@@ -1033,8 +938,6 @@ export class GameRoom extends Room<{
       matchEngine.completeClaimReveal();
     } else if (phase === "award_discard") {
       matchEngine.resolveDiscardAtDeadline();
-    } else if (phase === "final_commit") {
-      matchEngine.resolveFinalSelectionsAtDeadline();
     } else if (phase === "final_reveal") {
       matchEngine.completeFinalReveal();
     } else {
@@ -1066,7 +969,6 @@ export class GameRoom extends Room<{
       phase === "actor_play"
       || phase === "claim_commit"
       || phase === "award_discard"
-      || phase === "final_commit"
     );
   }
 

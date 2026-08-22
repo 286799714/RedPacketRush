@@ -237,7 +237,7 @@ describe("game room actor play", () => {
     assert.strictEqual(publicState.playedScore, expected.score);
     assert.deepStrictEqual(publicState.playedCards, selectedCards);
     assert.strictEqual(publicState.drawPileCount, before.drawPileCount - 3);
-    assert.strictEqual(publicState.seats[actorSeatIndex].handCount, 8);
+    assert.strictEqual(publicState.seats[actorSeatIndex].handCount, 5);
     assert.strictEqual(publicState.seats[actorSeatIndex].score, expected.score);
     assert.deepStrictEqual(publicState.contestRounds, before.contestRounds);
     assert.deepStrictEqual(publicState.playEvents, [{
@@ -251,12 +251,12 @@ describe("game room actor play", () => {
     const [replacementState] = replacementMessages[actorSeatIndex];
     assert.strictEqual(replacementState.seatIndex, actorSeatIndex);
     assert.strictEqual(replacementState.participantId, actor.sessionId);
-    assert.strictEqual(replacementState.hand.length, 8);
+    assert.strictEqual(replacementState.hand.length, 5);
     const replacementIds = replacementState.hand.map((card) => card.id);
     assert.ok(selectedCards.every((card) => !replacementIds.includes(card.id)));
     assert.strictEqual(
       replacementIds.filter((id) => actorOpeningState.hand.some((card) => card.id === id)).length,
-      5,
+      2,
     );
     for (let seatIndex = 0; seatIndex < participants.length; seatIndex += 1) {
       assert.strictEqual(replacementMessages[seatIndex].length, 1);

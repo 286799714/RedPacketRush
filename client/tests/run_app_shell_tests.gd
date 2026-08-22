@@ -47,6 +47,27 @@ func _run() -> void:
 	})
 	await process_frame
 	_expect_equal(shell.get_current_surface(), "match", "权威开局状态进入牌桌")
+	_expect_equal(adapter.leave_game_room_requests, 0, "对局中尚未请求离房")
+
+	adapter.publish_game_room_state({
+		"room_id": "room-a",
+		"local_participant_id": "human-a",
+		"status": "started",
+		"phase": "finished",
+		"actor_seat_index": -1,
+		"draw_pile_count": 0,
+		"seats": _seats(),
+		"contest_rounds": [],
+	})
+	await process_frame
+	await process_frame
+	var return_button := shell._match_screen.find_child("ReturnToLobbyButton", true, false) as Button
+	_expect_equal(return_button != null and return_button.visible, true, "结束态显示返回大厅按钮")
+	if return_button != null:
+		return_button.pressed.emit()
+		return_button.pressed.emit()
+	_expect_equal(adapter.leave_game_room_requests, 1, "返回大厅只发送一次离房请求")
+	_expect_equal(shell.get_current_surface(), "match", "离房确认前保留牌桌")
 
 	adapter.publish_game_room_left(1000, "")
 	await process_frame
@@ -85,7 +106,7 @@ func _seat(
 		"is_bot": is_bot,
 		"is_ready": true,
 		"score": 0,
-		"hand_count": 8,
+		"hand_count": 5,
 	}
 
 

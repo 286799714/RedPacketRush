@@ -121,7 +121,7 @@ describe("match opening", () => {
       phase: "point_contest",
       actorSeatIndex: 0,
       firstActorSeatIndex: 0,
-      drawPileCount: 20,
+      drawPileCount: 32,
       playedCards: [],
       playedCategory: null,
       playedScore: 0,
@@ -134,10 +134,10 @@ describe("match opening", () => {
       finalResults: [],
       winnerSeatIndexes: [],
       participants: [
-        { ...PARTICIPANTS[0], score: 0, handCount: 8 },
-        { ...PARTICIPANTS[1], score: 0, handCount: 8 },
-        { ...PARTICIPANTS[2], score: 0, handCount: 8 },
-        { ...PARTICIPANTS[3], score: 0, handCount: 8 },
+        { ...PARTICIPANTS[0], score: 0, handCount: 5 },
+        { ...PARTICIPANTS[1], score: 0, handCount: 5 },
+        { ...PARTICIPANTS[2], score: 0, handCount: 5 },
+        { ...PARTICIPANTS[3], score: 0, handCount: 5 },
       ],
       events: [
         {
@@ -175,9 +175,6 @@ describe("match opening", () => {
         { id: "copy-0:hearts:6", rank: 6, suit: "hearts", copyIndex: 0 },
         { id: "copy-0:hearts:2", rank: 2, suit: "hearts", copyIndex: 0 },
         { id: "copy-0:diamonds:11", rank: 11, suit: "diamonds", copyIndex: 0 },
-        { id: "copy-0:diamonds:7", rank: 7, suit: "diamonds", copyIndex: 0 },
-        { id: "copy-0:diamonds:3", rank: 3, suit: "diamonds", copyIndex: 0 },
-        { id: "copy-0:spades:12", rank: 12, suit: "spades", copyIndex: 0 },
       ],
       claimCommitted: false,
       claimCardId: null,
@@ -201,7 +198,7 @@ describe("match opening", () => {
 
     const publicState = engine.view(2).publicState;
     assert.strictEqual(publicState.actorSeatIndex, 3);
-    assert.strictEqual(publicState.drawPileCount, 72);
+    assert.strictEqual(publicState.drawPileCount, 84);
     assert.deepStrictEqual(publicState.events, [
       {
         type: "point_contest_round",
@@ -270,7 +267,7 @@ describe("match opening", () => {
     assert.deepStrictEqual(contestEvents[50].tiedSeats, [0, 1]);
     assert.strictEqual(contestEvents[51].winnerSeatIndex, 1);
     assert.strictEqual(publicState.actorSeatIndex, 1);
-    assert.strictEqual(publicState.drawPileCount, 72);
+    assert.strictEqual(publicState.drawPileCount, 84);
     assert.deepStrictEqual(random.requestedMaxima.slice(102, 106), [2, 1, 104, 103]);
   });
 
@@ -313,14 +310,14 @@ describe("match opening", () => {
       event.reveals.map((reveal) => reveal.card.id)
     ));
 
-    assert.strictEqual(new Set(dealtIds).size, 32);
+    assert.strictEqual(new Set(dealtIds).size, 20);
     assert.strictEqual(publicState.drawPileCount + dealtIds.length, 52);
     assert.ok(contestIds.every((cardId) => dealtIds.includes(cardId)));
     for (const [seatIndex, view] of views.entries()) {
       assert.deepStrictEqual(view.publicState, publicState);
       assert.strictEqual(view.privateState.seatIndex, seatIndex);
       assert.strictEqual(view.privateState.participantId, PARTICIPANTS[seatIndex].participantId);
-      assert.strictEqual(view.privateState.hand.length, 8);
+      assert.strictEqual(view.privateState.hand.length, 5);
       assert.deepStrictEqual(Object.keys(view.privateState), [
         "seatIndex",
         "participantId",

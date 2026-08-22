@@ -133,7 +133,7 @@ describe("game room award discard and actor rotation", () => {
         actionId: serverRoom.state.actionId,
       });
       await Promise.all([handled, privateUpdate]);
-      assert.strictEqual(serverRoom.state.seats[seatIndex].handCount, 8);
+      assert.strictEqual(serverRoom.state.seats[seatIndex].handCount, 5);
       assert.strictEqual(
         serverRoom.state.phase,
         index < claimantSeats.length - 1 ? "award_discard" : "actor_play",
@@ -146,7 +146,7 @@ describe("game room award discard and actor rotation", () => {
     assert.deepStrictEqual(serverRoom.state.revealedClaims.toJSON(), []);
     assert.deepStrictEqual(
       serverRoom.state.seats.toArray().map((seat) => seat.handCount),
-      [8, 8, 8, 8],
+      [5, 5, 5, 5],
     );
     assert.deepStrictEqual(
       serverRoom.state.discardEvents.toJSON().map((event) => event.seatIndex),
@@ -218,7 +218,7 @@ describe("game room award discard and actor rotation", () => {
 
     const resolved = serverRoom.state.toJSON();
     assert.strictEqual(resolved.phase, "actor_play");
-    assert.deepStrictEqual(resolved.seats.map((seat: { handCount: number }) => seat.handCount), [8, 8, 8, 8]);
+    assert.deepStrictEqual(resolved.seats.map((seat: { handCount: number }) => seat.handCount), [5, 5, 5, 5]);
     assert.strictEqual(resolved.discardEvents.length, 3);
     tickClock(serverRoom, 15_000);
     assert.strictEqual(serverRoom.state.phase, "claim_commit");

@@ -14,7 +14,6 @@ const VALID_MATCH_PHASES := [
 	"claim_commit",
 	"claim_reveal",
 	"award_discard",
-	"final_commit",
 	"final_reveal",
 	"finished",
 ]
@@ -67,10 +66,10 @@ const SCENARIOS := [
 			"action_deadline_seconds": 30,
 			"host_participant_id": "human-a",
 			"seats": [
-				{"seat_index": 0, "participant_id": "human-a", "nickname": "甲", "is_bot": false, "is_connected": true, "is_ready": true, "score": 0, "hand_count": 8},
-				{"seat_index": 1, "participant_id": "human-b", "nickname": "乙", "is_bot": false, "is_connected": true, "is_ready": true, "score": 0, "hand_count": 8},
-				{"seat_index": 2, "participant_id": "bot-c", "nickname": "机器人丙", "is_bot": true, "is_connected": true, "is_ready": true, "score": 0, "hand_count": 8},
-				{"seat_index": 3, "participant_id": "bot-d", "nickname": "机器人丁", "is_bot": true, "is_connected": true, "is_ready": true, "score": 0, "hand_count": 8},
+				{"seat_index": 0, "participant_id": "human-a", "nickname": "甲", "is_bot": false, "is_connected": true, "is_ready": true, "score": 0, "hand_count": 5},
+				{"seat_index": 1, "participant_id": "human-b", "nickname": "乙", "is_bot": false, "is_connected": true, "is_ready": true, "score": 0, "hand_count": 5},
+				{"seat_index": 2, "participant_id": "bot-c", "nickname": "机器人丙", "is_bot": true, "is_connected": true, "is_ready": true, "score": 0, "hand_count": 5},
+				{"seat_index": 3, "participant_id": "bot-d", "nickname": "机器人丁", "is_bot": true, "is_connected": true, "is_ready": true, "score": 0, "hand_count": 5},
 			],
 		},
 	},
@@ -130,15 +129,6 @@ const SCENARIOS := [
 		"error_code": "invalid_play",
 		"error_message": "出牌失败：请选择三张不同的手牌",
 	},
-	{
-		"surface": Surface.MATCH,
-		"label": "final-commit",
-		"phase": "final_commit",
-		"final_selection": [
-			{"group_button": "A 组", "card_fragments": ["2♣", "3♣", "4♣"]},
-			{"group_button": "B 组", "card_fragments": ["5♠", "6♠", "7♠"]},
-		],
-	},
 	{"surface": Surface.MATCH, "label": "final-reveal", "phase": "final_reveal"},
 	{"surface": Surface.MATCH, "label": "finished", "phase": "finished"},
 ]
@@ -177,6 +167,7 @@ class VisualMatchStore extends RefCounted:
 	var winner_seat_indexes: Array[int] = []
 	var final_events: Array[Dictionary] = []
 	var local_hand: Array[Dictionary] = []
+	var acquired_card_ids: Array[String] = []
 	var final_groups: Array = []
 
 	func get_participants() -> Array[Dictionary]:
@@ -211,6 +202,9 @@ class VisualMatchStore extends RefCounted:
 
 	func get_local_hand() -> Array[Dictionary]:
 		return local_hand
+
+	func get_acquired_card_ids() -> Array[String]:
+		return acquired_card_ids.duplicate()
 
 	func get_final_groups() -> Array:
 		return final_groups
@@ -494,10 +488,10 @@ func _make_store(spec: Dictionary) -> VisualMatchStore:
 	var phase := str(spec["phase"])
 	store.phase = phase
 	store.participants = [
-		_seat(0, "human-a", "甲", false, 10, 8),
-		_seat(1, "human-b", "乙", false, 4, 8),
-		_seat(2, "bot-c", "机器人丙", true, 2, 8),
-		_seat(3, "bot-d", "机器人丁", true, 1, 8),
+		_seat(0, "human-a", "甲", false, 10, 5),
+		_seat(1, "human-b", "乙", false, 4, 5),
+		_seat(2, "bot-c", "机器人丙", true, 2, 5),
+		_seat(3, "bot-d", "机器人丁", true, 1, 5),
 	]
 	store.contest_rounds = [{
 		"round_index": 0,
@@ -512,12 +506,9 @@ func _make_store(spec: Dictionary) -> VisualMatchStore:
 	}]
 	store.local_hand = [
 		_card("local-2", 2, "clubs", 0),
-		_card("local-5", 5, "spades", 0),
 		_card("local-8", 8, "diamonds", 0),
-		_card("local-10", 10, "hearts", 0),
-		_card("local-j", 11, "clubs", 0),
-		_card("local-q", 12, "diamonds", 0),
-		_card("local-k", 13, "spades", 0),
+		_card("local-q", 12, "hearts", 0),
+		_card("local-k", 13, "hearts", 0),
 		_card("local-a", 14, "hearts", 0),
 	]
 	if phase in ["claim_commit", "claim_reveal"]:
@@ -572,7 +563,7 @@ func _make_store(spec: Dictionary) -> VisualMatchStore:
 			},
 		]
 		store.played_cards = []
-	if phase in ["final_commit", "final_reveal", "finished"]:
+	if phase in ["final_reveal", "finished"]:
 		store.actor_seat_index = -1
 		store.draw_pile_count = 0
 		store.sealed_card_count = 2
@@ -581,13 +572,12 @@ func _make_store(spec: Dictionary) -> VisualMatchStore:
 		store.final_committed = true
 		store.final_groups = [
 			["final-clubs-2", "final-clubs-3", "final-clubs-4"],
-			["final-spades-5", "final-spades-6", "final-spades-7"],
 		]
 		store.participants = [
-			_seat(0, "human-a", "甲", false, 22, 8),
-			_seat(1, "human-b", "乙", false, 25, 8),
-			_seat(2, "bot-c", "机器人丙", true, 25, 8),
-			_seat(3, "bot-d", "机器人丁", true, 10, 8),
+			_seat(0, "human-a", "甲", false, 22, 5),
+			_seat(1, "human-b", "乙", false, 25, 5),
+			_seat(2, "bot-c", "机器人丙", true, 25, 5),
+			_seat(3, "bot-d", "机器人丁", true, 10, 5),
 		]
 		store.final_results = _final_results()
 		store.winner_seat_indexes = [1, 2]
@@ -605,10 +595,8 @@ func _make_store(spec: Dictionary) -> VisualMatchStore:
 			_card("original-diamonds-4", 4, "diamonds", 0),
 			_card("original-hearts-5", 5, "hearts", 0),
 			_card("original-clubs-6", 6, "clubs", 0),
-			_card("original-spades-7", 7, "spades", 0),
-			_card("original-diamonds-8", 8, "diamonds", 0),
-			_card("original-hearts-9", 9, "hearts", 0),
 		]
+		store.acquired_card_ids = [str(awarded_card["id"])]
 		store.turn_number = 6
 		store.pending_discard_seat_indexes = [0]
 		store.claim_events = [{
@@ -687,9 +675,6 @@ func _final_hand() -> Array[Dictionary]:
 		_card("final-clubs-2", 2, "clubs", 0),
 		_card("final-clubs-3", 3, "clubs", 0),
 		_card("final-clubs-4", 4, "clubs", 0),
-		_card("final-spades-5", 5, "spades", 0),
-		_card("final-spades-6", 6, "spades", 0),
-		_card("final-spades-7", 7, "spades", 0),
 		_card("final-diamonds-10", 10, "diamonds", 0),
 		_card("final-hearts-a", 14, "hearts", 0),
 	]
@@ -697,20 +682,18 @@ func _final_hand() -> Array[Dictionary]:
 
 func _final_results() -> Array[Dictionary]:
 	return [
-		_final_result(0, 12, "straight_flush", 10, "pair", 2, "seat0"),
-		_final_result(1, 9, "straight", 5, "flush", 4, "seat1"),
-		_final_result(2, 10, "three_of_a_kind", 8, "pair", 2, "seat2"),
-		_final_result(3, 4, "high_card", 0, "flush", 4, "seat3"),
+		_final_result(0, 10, "straight_flush", 10, "seat0"),
+		_final_result(1, 5, "straight", 5, "seat1"),
+		_final_result(2, 8, "three_of_a_kind", 8, "seat2"),
+		_final_result(3, 4, "flush", 4, "seat3"),
 	]
 
 
 func _final_result(
 	seat_index: int,
 	total_score: int,
-	category_a: String,
-	score_a: int,
-	category_b: String,
-	score_b: int,
+	category: String,
+	score: int,
 	id_prefix: String
 ) -> Dictionary:
 	return {
@@ -722,17 +705,8 @@ func _final_result(
 					_card("%s-a2" % id_prefix, 13, "hearts", 0),
 					_card("%s-a3" % id_prefix, 14, "hearts", 0),
 				],
-				"category": category_a,
-				"score": score_a,
-			},
-			{
-				"cards": [
-					_card("%s-b1" % id_prefix, 2, "clubs", 0),
-					_card("%s-b2" % id_prefix, 2, "spades", 0),
-					_card("%s-b3" % id_prefix, 7, "diamonds", 0),
-				],
-				"category": category_b,
-				"score": score_b,
+				"category": category,
+				"score": score,
 			},
 		],
 		"total_score": total_score,

@@ -5,8 +5,7 @@ import { nextRandomIndex, type RandomSource } from "./random.js";
 export type BotCommand =
   | { readonly type: "play_cards"; readonly cardIds: readonly string[] }
   | { readonly type: "claim"; readonly cardId: string | null }
-  | { readonly type: "discard"; readonly cardId: string; readonly turnNumber: number }
-  | { readonly type: "final_selection"; readonly mode: "best" };
+  | { readonly type: "discard"; readonly cardId: string; readonly turnNumber: number };
 
 export function chooseAutomaticPlayCardIds(view: MatchView): readonly string[] | null {
   const { publicState, privateState } = view;
@@ -38,9 +37,6 @@ export function eligibleBotCommandType(view: MatchView): BotCommand["type"] | nu
   if (publicState.phase === "award_discard" && discardableBotCards(view).length > 0) {
     return "discard";
   }
-  if (publicState.phase === "final_commit" && !privateState.finalCommitted) {
-    return "final_selection";
-  }
   return null;
 }
 
@@ -71,10 +67,6 @@ export function chooseBotCommand(view: MatchView, random: RandomSource): BotComm
       cardId: discardableCards[nextRandomIndex(random, discardableCards.length)].id,
       turnNumber: publicState.turnNumber,
     };
-  }
-
-  if (commandType === "final_selection") {
-    return { type: "final_selection", mode: "best" };
   }
 
   return null;

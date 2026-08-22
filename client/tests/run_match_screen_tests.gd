@@ -37,6 +37,7 @@ class FakeMatchStore extends RefCounted:
 	var _winner_seat_indexes: Array[int] = []
 	var _final_events: Array[Dictionary] = []
 	var _local_hand: Array[Dictionary] = []
+	var _acquired_card_ids: Array[String] = []
 	var _final_groups: Array = []
 	var play_requests: Array[Array] = []
 	var claim_requests: Array[Variant] = []
@@ -50,6 +51,9 @@ class FakeMatchStore extends RefCounted:
 
 	func get_local_hand() -> Array[Dictionary]:
 		return _local_hand
+
+	func get_acquired_card_ids() -> Array[String]:
+		return _acquired_card_ids.duplicate()
 
 	func get_played_cards() -> Array[Dictionary]:
 		return _played_cards
@@ -190,10 +194,10 @@ func _init() -> void:
 func _run() -> void:
 	var store := FakeMatchStore.new()
 	store._participants = [
-		_seat(0, "human-a", "甲", false, 0, 8),
-		_seat(1, "human-b", "乙", false, 2, 8),
-		_seat(2, "bot-c", "机器人丙", true, 4, 8),
-		_seat(3, "bot-d", "机器人丁", true, 1, 8),
+		_seat(0, "human-a", "甲", false, 0, 5),
+		_seat(1, "human-b", "乙", false, 2, 5),
+		_seat(2, "bot-c", "机器人丙", true, 4, 5),
+		_seat(3, "bot-d", "机器人丁", true, 1, 5),
 	]
 	store._participants[1]["hand"] = [_card("secret-opponent-card", 14, "spades", 0)]
 	store._participants[1]["private_claim"] = "secret-opponent-claim"
@@ -233,15 +237,18 @@ func _run() -> void:
 	await _test_deadline_header_uses_absolute_server_time(screen, store)
 	await _test_disconnected_seat_and_bot_takeover_are_visible(screen, store)
 	_expect_equal(screen._hand_cards.size(), 0, "拼点展示期间尚未收到私有手牌")
-	for rank in [2, 5, 8, 11, 12, 13, 14, 10]:
-		store._local_hand.append(_card("local-%s" % rank, rank, "hearts" if rank >= 11 else "clubs", 0))
+	for rank in [2, 14, 8, 12, 13]:
+		store._local_hand.append(_card("local-%s" % rank, rank, "hearts" if rank >= 12 else "clubs", 0))
 	store.private_state_changed.emit()
 	await process_frame
 	await process_frame
 	_test_local_hand_is_readable_and_private(screen)
+	await _test_acquired_outline_yields_to_selection(screen, store)
 	await _test_actor_controls_wait_for_matching_action_context(screen, store)
 	await _test_reconnecting_signal_disables_actor_controls(screen, store)
 	await _test_only_local_actor_can_select_exactly_three_and_play(screen, store)
+	await _test_same_action_refresh_preserves_play_selection(screen, store)
+	await _test_hint_selects_best_three_and_shows_score(screen, store)
 	await _test_claim_commit_shows_played_combination(screen, store)
 	await _test_actor_only_sees_claim_waiting_state(screen, store)
 	await _test_claim_controls_wait_for_matching_action_context(screen, store)
@@ -257,8 +264,6 @@ func _run() -> void:
 	await _test_two_deck_physical_cards_are_distinguishable_at_960(screen, store)
 	await _test_award_recipient_discards_an_original_card(screen, store)
 	await _test_discard_rejection_and_non_recipient_waiting(screen, store)
-	await _test_final_group_editor_locks_exactly_two_groups(screen, store)
-	await _test_best_final_selection_waits_for_authority(screen, store)
 	await _test_final_reveal_and_finished_ranking_are_authoritative(screen, store)
 	await _test_rejected_claim_reenables_controls_without_moving_layout(screen, store)
 	await _test_action_error_is_visible_without_moving_controls(screen, store)
@@ -363,7 +368,7 @@ func _test_disconnected_seat_and_bot_takeover_are_visible(
 
 
 func _test_local_hand_is_readable_and_private(screen: MatchScreen) -> void:
-	_expect_equal(screen._hand_cards.size(), 8, "本地手牌八张")
+	_expect_equal(screen._hand_cards.size(), 5, "本地手牌五张")
 	for card in screen._hand_cards:
 		var rect := card.get_global_rect()
 		_expect(rect.size.x >= 45.0 and rect.size.y >= 60.0, "本地牌保持可读尺寸")
@@ -371,8 +376,41 @@ func _test_local_hand_is_readable_and_private(screen: MatchScreen) -> void:
 		var card_text := _node_text(card)
 		_expect(not card_text.is_empty(), "本地牌显示牌面")
 		_expect(card_text.contains("♣") or card_text.contains("♥"), "本地牌同时显示花色符号")
-	_expect(screen._hand_title_label.text.contains("8"), "本地手牌数量显示")
+	_expect(screen._hand_title_label.text.contains("5"), "本地手牌数量显示")
+	_expect_equal(
+		screen._hand_cards.map(func(card: Button): return str(card.get_meta("card_id", ""))),
+		["local-14", "local-13", "local-12", "local-8", "local-2"],
+		"手牌按点数从大到小排列"
+	)
 	_expect(not _node_text(screen).contains("secret-opponent-card"), "不显示对手私有牌面")
+
+
+func _test_acquired_outline_yields_to_selection(
+	screen: MatchScreen,
+	store: FakeMatchStore
+) -> void:
+	store._acquired_card_ids = ["local-14"]
+	store.private_state_changed.emit()
+	await process_frame
+	await process_frame
+	var acquired := _hand_card_by_id(screen, "local-14")
+	if acquired == null:
+		_failures.append("应能按物理牌标识找到新增手牌")
+		return
+	var normal_style := acquired.get_theme_stylebox("normal") as StyleBoxFlat
+	var pressed_style := acquired.get_theme_stylebox("pressed") as StyleBoxFlat
+	_expect(normal_style != null and normal_style.border_color == Color("#4ea1ff"), "新摸牌显示蓝色外框")
+	acquired.button_pressed = true
+	_expect(pressed_style != null and pressed_style.border_color != Color("#4ea1ff"), "选中框覆盖蓝色外框")
+	acquired.button_pressed = false
+	_expect(
+		(acquired.get_theme_stylebox("normal") as StyleBoxFlat).border_color == Color("#4ea1ff"),
+		"取消选中后恢复蓝色外框"
+	)
+	store._acquired_card_ids.clear()
+	store.private_state_changed.emit()
+	await process_frame
+	await process_frame
 
 
 func _test_actor_controls_wait_for_matching_action_context(
@@ -459,13 +497,91 @@ func _test_only_local_actor_can_select_exactly_three_and_play(
 	_expect(not fourth_card.button_pressed, "被拒绝的第四张不显示选中")
 
 	play_button.pressed.emit()
-	_expect_equal(store.play_requests, [["local-2", "local-5", "local-8"]], "出牌按钮提交三张物理牌标识")
+	_expect_equal(store.play_requests, [["local-14", "local-13", "local-12"]], "出牌按钮提交三张物理牌标识")
 	store.actor_seat_index = 2
 	store.publish()
 	await process_frame
 	await process_frame
 	_expect(play_button.disabled, "行动权移交后禁用出牌")
 	_expect(_selected_card_count(screen) == 0, "行动权移交后清空本地选择")
+
+
+func _test_same_action_refresh_preserves_play_selection(
+	screen: MatchScreen,
+	store: FakeMatchStore
+) -> void:
+	store.actor_seat_index = 0
+	store.publish()
+	await process_frame
+	await process_frame
+	var hint_button := screen.find_child("HintButton", true, false) as Button
+	if hint_button == null:
+		_failures.append("同动作刷新测试需要提示按钮")
+		return
+	hint_button.pressed.emit()
+	_expect_equal(
+		screen._selected_card_ids,
+		["local-14", "local-13", "local-12"],
+		"刷新前已选择三张牌"
+	)
+
+	store._participants[1]["is_connected"] = false
+	store.publish()
+	await process_frame
+	await process_frame
+	_expect_equal(
+		screen._selected_card_ids,
+		["local-14", "local-13", "local-12"],
+		"同动作无关权威刷新按物理牌标识保留选择"
+	)
+	_expect(_selected_card_count(screen) == 3, "同动作刷新恢复三张牌的选中框")
+	_expect(not screen._play_button.disabled, "同动作刷新后出牌按钮仍亮起")
+	_expect(
+		screen._play_preview_label.visible
+		and screen._play_preview_label.text == "同花顺 · +10 分",
+		"同动作刷新后保留牌型得分预览"
+	)
+
+	store.action_id += 1
+	store.private_action_id = store.action_id
+	store._participants[1]["is_connected"] = true
+	store.publish()
+	await process_frame
+	await process_frame
+	_expect(_selected_card_count(screen) == 0, "新动作上下文清空旧选择")
+
+
+func _test_hint_selects_best_three_and_shows_score(
+	screen: MatchScreen,
+	store: FakeMatchStore
+) -> void:
+	store.actor_seat_index = 0
+	store.publish()
+	await process_frame
+	await process_frame
+	var hint_button := screen.find_child("HintButton", true, false) as Button
+	var play_button := screen.find_child("PlayCardsButton", true, false) as Button
+	var preview_label := screen.find_child("PlayPreviewLabel", true, false) as Label
+	if hint_button == null or play_button == null or preview_label == null:
+		_failures.append("行动栏应提供提示按钮和出牌得分预览")
+		return
+	_expect(not hint_button.disabled, "本地行动者可以使用提示")
+	hint_button.pressed.emit()
+	_expect_equal(
+		screen._selected_card_ids,
+		["local-14", "local-13", "local-12"],
+		"提示选中最高分的三张同花顺"
+	)
+	_expect(_selected_card_count(screen) == 3 and not play_button.disabled, "提示后出牌按钮亮起")
+	_expect(preview_label.visible and preview_label.text == "同花顺 · +10 分", "提示后显示精简牌型得分")
+	var selected_card := _hand_card_by_id(screen, "local-12")
+	if selected_card != null:
+		selected_card.button_pressed = false
+	_expect(not preview_label.visible, "不足三张时隐藏得分预览")
+	store.actor_seat_index = 2
+	store.publish()
+	await process_frame
+	await process_frame
 
 
 func _test_claim_commit_shows_played_combination(
@@ -925,12 +1041,9 @@ func _test_award_recipient_discards_an_original_card(
 		_card("original-diamonds-4", 4, "diamonds", 0),
 		_card("original-hearts-5", 5, "hearts", 0),
 		_card("original-clubs-6", 6, "clubs", 0),
-		_card("original-spades-7", 7, "spades", 0),
-		_card("original-diamonds-8", 8, "diamonds", 0),
-		_card("original-hearts-9", 9, "hearts", 0),
 	]
-	var nine_card_hand := original_hand.duplicate(true)
-	nine_card_hand.insert(2, awarded_card)
+	var six_card_hand := original_hand.duplicate(true)
+	six_card_hand.insert(2, awarded_card)
 	store.apply_public_snapshot({
 		"deck_mode": "two",
 		"phase": "award_discard",
@@ -956,20 +1069,23 @@ func _test_award_recipient_discards_an_original_card(
 		}],
 		"discard_events": [],
 	})
-	store.apply_private_snapshot({"hand": nine_card_hand})
+	store._acquired_card_ids = [str(awarded_card["id"])]
+	store.apply_private_snapshot({"hand": six_card_hand})
 	await process_frame
 	await process_frame
 	await _assert_discard_controls_wait_for_matching_action_context(screen, store)
 
 	_expect(_find_visible_label_containing(screen, "阶段：弃牌") != null, "领取牌后进入可见弃牌阶段")
-	_expect(_find_visible_label_containing(screen, "我的手牌（9）") != null, "领取者在弃牌前显示九张手牌")
+	_expect(_find_visible_label_containing(screen, "我的手牌（6）") != null, "领取者在弃牌前显示六张手牌")
 	var protected_card := _find_visible_button_with_content(screen, "本轮获得")
 	_expect(protected_card != null and protected_card.disabled, "本轮获得的牌明确标记且不可弃")
 	if protected_card != null:
 		var protected_text := _node_text(protected_card)
 		_expect(protected_text.contains("A") and protected_text.contains("#2"), "受保护牌显示两副牌实体编号")
-	var original_two := _find_visible_button_with_content(screen, "2")
-	var original_three := _find_visible_button_with_content(screen, "3")
+		var protected_style := protected_card.get_theme_stylebox("disabled") as StyleBoxFlat
+		_expect(protected_style != null and protected_style.border_color == Color("#4ea1ff"), "抢到的牌显示蓝色外框")
+	var original_two := _hand_card_by_id(screen, "original-clubs-2")
+	var original_three := _hand_card_by_id(screen, "original-spades-3")
 	var discard_button := _find_visible_button(screen, "弃牌")
 	if original_two == null or original_three == null or discard_button == null:
 		_failures.append("领取者应看到原手牌选择与弃牌按钮")
@@ -988,7 +1104,7 @@ func _test_award_recipient_discards_an_original_card(
 	var previous_card_rect := Rect2()
 	for card_button in _find_visible_card_buttons(screen):
 		var card_rect := card_button.get_global_rect()
-		_expect(card_rect.position.x >= 0.0 and card_rect.end.x <= 1280.0, "宽屏九张手牌不越界")
+		_expect(card_rect.position.x >= 0.0 and card_rect.end.x <= 1280.0, "宽屏六张手牌不越界")
 		if previous_card_rect.size != Vector2.ZERO:
 			_expect(not previous_card_rect.intersects(card_rect), "宽屏手牌互不重叠")
 		previous_card_rect = card_rect
@@ -1008,6 +1124,7 @@ func _test_award_recipient_discards_an_original_card(
 	_expect_equal(discard_button.get_global_rect(), discard_rect, "提交中弃牌按钮不发生布局位移")
 
 	store.apply_private_snapshot({"hand": original_hand})
+	store._acquired_card_ids.clear()
 	store.apply_public_snapshot({
 		"deck_mode": "one",
 		"phase": "actor_play",
@@ -1037,14 +1154,14 @@ func _assert_discard_controls_wait_for_matching_action_context(
 	store.publish()
 	await process_frame
 	await process_frame
-	var original_card := _find_visible_button_with_content(screen, "2")
+	var original_card := _hand_card_by_id(screen, "original-clubs-2")
 	_expect(original_card != null and original_card.disabled, "弃牌动作编号未配对时原手牌不可操作")
 	_expect(_find_visible_label_containing(screen, "同步中") != null, "弃牌半份快照显示同步中")
 	store.private_action_id = 10
 	store.private_state_changed.emit()
 	await process_frame
 	await process_frame
-	original_card = _find_visible_button_with_content(screen, "2")
+	original_card = _hand_card_by_id(screen, "original-clubs-2")
 	_expect(original_card != null and not original_card.disabled, "弃牌动作编号配对后恢复原手牌")
 
 
@@ -1060,9 +1177,6 @@ func _test_discard_rejection_and_non_recipient_waiting(
 		_card("retry-original-diamonds-4", 4, "diamonds", 0),
 		_card("retry-original-hearts-5", 5, "hearts", 0),
 		_card("retry-original-clubs-6", 6, "clubs", 0),
-		_card("retry-original-spades-7", 7, "spades", 0),
-		_card("retry-original-diamonds-8", 8, "diamonds", 0),
-		_card("retry-original-hearts-9", 9, "hearts", 0),
 	]
 	store.apply_public_snapshot({
 		"phase": "award_discard",
@@ -1084,7 +1198,7 @@ func _test_discard_rejection_and_non_recipient_waiting(
 	await process_frame
 	await process_frame
 
-	var original_two := _find_visible_button_with_content(screen, "2")
+	var original_two := _hand_card_by_id(screen, "retry-original-clubs-2")
 	var discard_button := _find_visible_button(screen, "弃牌")
 	if original_two == null or discard_button == null:
 		_failures.append("弃牌失败恢复测试缺少可见控件")
@@ -1095,7 +1209,7 @@ func _test_discard_rejection_and_non_recipient_waiting(
 	store.reject_action("protected_card", "本轮获得的牌不能弃置，请重新选择")
 	await process_frame
 	await process_frame
-	var retry_two := _find_visible_button_with_content(screen, "2")
+	var retry_two := _hand_card_by_id(screen, "retry-original-clubs-2")
 	var protected_card := _find_visible_button_with_content(screen, "本轮获得")
 	_expect(retry_two != null and not retry_two.disabled, "弃牌失败后恢复原手牌选择")
 	_expect(retry_two != null and not retry_two.button_pressed, "弃牌失败后清空旧选择")
@@ -1104,7 +1218,7 @@ func _test_discard_rejection_and_non_recipient_waiting(
 	_expect(_find_visible_label_containing(screen, "请重新选择") != null, "弃牌失败原因保持可见")
 	_expect_equal(discard_button.get_global_rect(), discard_rect, "弃牌失败不移动提交按钮")
 
-	store.apply_private_snapshot({"hand": hand.slice(0, 8)})
+	store.apply_private_snapshot({"hand": [hand[0], hand[1], hand[3], hand[4], hand[5]]})
 	store.apply_public_snapshot({
 		"phase": "award_discard",
 		"pending_discard_seat_indexes": [2],
@@ -1127,18 +1241,8 @@ func _test_discard_rejection_and_non_recipient_waiting(
 	await process_frame
 	_expect(_find_visible_button(screen, "弃牌") == null, "非领取者不显示弃牌命令")
 	_expect(_find_visible_label_containing(screen, "等待获得牌的参与者弃牌") != null, "非领取者看到等待状态")
-	var waiting_card := _find_visible_button_with_content(screen, "2")
+	var waiting_card := _hand_card_by_id(screen, "retry-original-clubs-2")
 	_expect(waiting_card != null and waiting_card.disabled, "非领取者的手牌保持只读")
-	store.apply_public_snapshot({
-		"phase": "final_commit",
-		"actor_seat_index": -1,
-		"pending_discard_seat_indexes": [],
-	})
-	await process_frame
-	await process_frame
-	_expect(_find_visible_label_containing(screen, "阶段：最终结算") != null, "牌堆耗尽后显示最终选择阶段")
-	_expect(_find_visible_label_containing(screen, "A/B 各选 3 张") != null, "最终选择阶段显示下一步状态")
-	_expect(_find_visible_button(screen, "弃牌") == null, "最终选择阶段不残留弃牌命令")
 	store.apply_public_snapshot({
 		"phase": "actor_play",
 		"actor_seat_index": 0,
@@ -1353,10 +1457,10 @@ func _test_final_reveal_and_finished_ranking_are_authoritative(
 		"draw_pile_count": 0,
 		"sealed_card_count": 2,
 		"seats": [
-			_seat(0, "human-a", "甲", false, 22, 8),
-			_seat(1, "human-b", "乙", false, 25, 8),
-			_seat(2, "bot-c", "机器人丙", true, 25, 8),
-			_seat(3, "bot-d", "机器人丁", true, 10, 8),
+			_seat(0, "human-a", "甲", false, 22, 5),
+			_seat(1, "human-b", "乙", false, 25, 5),
+			_seat(2, "bot-c", "机器人丙", true, 25, 5),
+			_seat(3, "bot-d", "机器人丁", true, 10, 5),
 		],
 		"final_results": results,
 		"winner_seat_indexes": winners,
@@ -1371,7 +1475,6 @@ func _test_final_reveal_and_finished_ranking_are_authoritative(
 		"final_committed": true,
 		"final_groups": [
 			["final-clubs-2", "final-clubs-3", "final-clubs-4"],
-			["final-spades-5", "final-spades-6", "final-spades-7"],
 		],
 	})
 	await process_frame
@@ -1381,22 +1484,21 @@ func _test_final_reveal_and_finished_ranking_are_authoritative(
 	_expect(_find_visible_label_containing(screen, "行动者：无") != null, "终局同步阶段不显示虚构行动者")
 	_expect(_find_visible_label_containing(screen, "最终结算 · 统一揭晓") != null, "中央结算面显示明确标题")
 	for expected in [
-		"甲 · 结算 +12",
-		"乙 · 结算 +9",
-		"机器人丙 · 结算 +10",
+		"甲 · 结算 +10",
+		"乙 · 结算 +5",
+		"机器人丙 · 结算 +8",
 		"机器人丁 · 结算 +4",
 	]:
 		_expect(_find_visible_label_containing(screen, expected) != null, "四席结算显示 %s" % expected)
-	_expect(_find_visible_label_containing(screen, "A · 同花顺 +10") != null, "揭晓 A 组三张牌、牌型与得分")
-	_expect(_find_visible_label_containing(screen, "B · 一对 +2") != null, "揭晓 B 组三张牌、牌型与得分")
+	_expect(_find_visible_label_containing(screen, "同花顺 · +10 分") != null, "揭晓终局三张牌、牌型与得分")
 	_expect(_find_visible_label_containing(screen, "共同胜者：乙、机器人丙") != null, "结算使用服务端共同胜者列表")
 	_expect(_find_visible_button(screen, "锁定分组") == null, "揭晓阶段不残留最终选择命令")
 	_expect(_find_visible_button(screen, "最佳并锁定") == null, "揭晓阶段不残留最佳命令")
 	_assert_final_surface_does_not_overlap_compact_panels(screen)
-	var fourth_group := _find_last_visible_label_containing(screen, "B · 同花 +4")
+	var fourth_group := _find_last_visible_label_containing(screen, "同花 · +4 分")
 	var reveal_title := _find_visible_label_containing(screen, "最终结算 · 统一揭晓")
 	var reveal_panel := _ancestor_panel(reveal_title, screen)
-	_expect(fourth_group != null and reveal_panel != null, "960x540 第四席 B 组结算行可见")
+	_expect(fourth_group != null and reveal_panel != null, "960x540 第四席终局组合行可见")
 	if fourth_group != null and reveal_panel != null:
 		var fourth_rect := fourth_group.get_global_rect()
 		var reveal_rect := reveal_panel.get_global_rect()
@@ -1417,6 +1519,17 @@ func _test_final_reveal_and_finished_ranking_are_authoritative(
 	_expect(_find_visible_label_containing(screen, "第 1 名 · 机器人丙 · 总分 25 · 共同胜者") != null, "同分按席位稳定排列并共享第一名")
 	_expect(_find_visible_label_containing(screen, "第 3 名 · 甲 · 总分 22") != null, "非胜者按权威总分继续排名")
 	_expect(_find_visible_label_containing(screen, "第 4 名 · 机器人丁 · 总分 10") != null, "第四席排名稳定")
+	var return_state := {"requests": 0}
+	var observe_return := func() -> void:
+		return_state["requests"] = int(return_state["requests"]) + 1
+	screen.return_to_lobby_requested.connect(observe_return)
+	var return_button := screen.find_child("ReturnToLobbyButton", true, false) as Button
+	_expect(return_button != null and return_button.visible and not return_button.disabled, "结束态显示可用的返回大厅按钮")
+	if return_button != null:
+		return_button.pressed.emit()
+		return_button.pressed.emit()
+	_expect_equal(return_state["requests"], 1, "返回大厅按钮防止重复请求")
+	screen.return_to_lobby_requested.disconnect(observe_return)
 	_assert_final_surface_does_not_overlap_compact_panels(screen)
 	var final_title := _find_visible_label_containing(screen, "对局结束 · 最终排名")
 	var hand_card := _find_visible_button_with_content(screen, "2♣")
@@ -1438,10 +1551,10 @@ func _test_final_reveal_and_finished_ranking_are_authoritative(
 			_expect(ranking_rect.end.x <= viewport_size.x and ranking_rect.end.y <= viewport_size.y, "排名文本不越出视口")
 
 	store.apply_public_snapshot({"seats": [
-		_seat(0, "human-a", "甲", false, 22, 8),
-		_seat(1, "human-b", "乙", false, 25, 8),
-		_seat(2, "human-c", "丙", true, 25, 8),
-		_seat(3, "bot-d", "机器人丁", true, 10, 8),
+		_seat(0, "human-a", "甲", false, 22, 5),
+		_seat(1, "human-b", "乙", false, 25, 5),
+		_seat(2, "human-c", "丙", true, 25, 5),
+		_seat(3, "bot-d", "机器人丁", true, 10, 5),
 	]})
 	screen.size = Vector2(1280, 720)
 	await process_frame
@@ -1458,10 +1571,10 @@ func _test_final_reveal_and_finished_ranking_are_authoritative(
 	await process_frame
 	_expect(_find_visible_label_containing(screen, "丙（机器人）") != null, "紧凑终局排名仍明确标记机器人接管")
 	store.apply_public_snapshot({"seats": [
-		_seat(0, "human-a", "甲", false, 22, 8),
-		_seat(1, "human-b", "乙", false, 25, 8),
-		_seat(2, "bot-c", "机器人丙", true, 25, 8),
-		_seat(3, "bot-d", "机器人丁", true, 10, 8),
+		_seat(0, "human-a", "甲", false, 22, 5),
+		_seat(1, "human-b", "乙", false, 25, 5),
+		_seat(2, "bot-c", "机器人丙", true, 25, 5),
+		_seat(3, "bot-d", "机器人丁", true, 10, 5),
 	]})
 	await process_frame
 
@@ -1673,6 +1786,13 @@ func _selected_card_count(screen: MatchScreen) -> int:
 	return count
 
 
+func _hand_card_by_id(screen: MatchScreen, card_id: String) -> Button:
+	for hand_card in screen._hand_cards:
+		if str(hand_card.get_meta("card_id", "")) == card_id:
+			return hand_card
+	return null
+
+
 func _seat(
 	seat_index: int,
 	participant_id: String,
@@ -1754,9 +1874,6 @@ func _final_hand() -> Array[Dictionary]:
 		_card("final-clubs-2", 2, "clubs", 0),
 		_card("final-clubs-3", 3, "clubs", 0),
 		_card("final-clubs-4", 4, "clubs", 0),
-		_card("final-spades-5", 5, "spades", 0),
-		_card("final-spades-6", 6, "spades", 0),
-		_card("final-spades-7", 7, "spades", 0),
 		_card("final-diamonds-10", 10, "diamonds", 0),
 		_card("final-hearts-a", 14, "hearts", 0),
 	]
@@ -1766,68 +1883,40 @@ func _final_results() -> Array[Dictionary]:
 	return [
 		_settlement_result(
 			0,
-			12,
+			10,
 			[
 				_card("seat0-hearts-q", 12, "hearts", 0),
 				_card("seat0-hearts-k", 13, "hearts", 0),
 				_card("seat0-hearts-a", 14, "hearts", 0),
 			],
 			"straight_flush",
-			10,
-			[
-				_card("seat0-clubs-2", 2, "clubs", 0),
-				_card("seat0-spades-2", 2, "spades", 0),
-				_card("seat0-diamonds-7", 7, "diamonds", 0),
-			],
-			"pair",
-			2
+			10
 		),
 		_settlement_result(
 			1,
-			9,
+			5,
 			[
 				_card("seat1-clubs-2", 2, "clubs", 0),
 				_card("seat1-spades-3", 3, "spades", 0),
 				_card("seat1-diamonds-4", 4, "diamonds", 0),
 			],
 			"straight",
-			5,
-			[
-				_card("seat1-hearts-6", 6, "hearts", 0),
-				_card("seat1-hearts-9", 9, "hearts", 0),
-				_card("seat1-hearts-j", 11, "hearts", 0),
-			],
-			"flush",
-			4
+			5
 		),
 		_settlement_result(
 			2,
-			10,
+			8,
 			[
 				_card("seat2-clubs-k", 13, "clubs", 0),
 				_card("seat2-spades-k", 13, "spades", 0),
 				_card("seat2-hearts-k", 13, "hearts", 0),
 			],
 			"three_of_a_kind",
-			8,
-			[
-				_card("seat2-clubs-a", 14, "clubs", 0),
-				_card("seat2-spades-a", 14, "spades", 0),
-				_card("seat2-diamonds-5", 5, "diamonds", 0),
-			],
-			"pair",
-			2
+			8
 		),
 		_settlement_result(
 			3,
 			4,
-			[
-				_card("seat3-clubs-2", 2, "clubs", 0),
-				_card("seat3-spades-6", 6, "spades", 0),
-				_card("seat3-diamonds-10", 10, "diamonds", 0),
-			],
-			"high_card",
-			0,
 			[
 				_card("seat3-diamonds-3", 3, "diamonds", 0),
 				_card("seat3-diamonds-8", 8, "diamonds", 0),
@@ -1842,18 +1931,14 @@ func _final_results() -> Array[Dictionary]:
 func _settlement_result(
 	seat_index: int,
 	total_score: int,
-	group_a_cards: Array[Dictionary],
-	group_a_category: String,
-	group_a_score: int,
-	group_b_cards: Array[Dictionary],
-	group_b_category: String,
-	group_b_score: int
+	group_cards: Array[Dictionary],
+	group_category: String,
+	group_score: int
 ) -> Dictionary:
 	return {
 		"seat_index": seat_index,
 		"groups": [
-			{"cards": group_a_cards, "category": group_a_category, "score": group_a_score},
-			{"cards": group_b_cards, "category": group_b_category, "score": group_b_score},
+			{"cards": group_cards, "category": group_category, "score": group_score},
 		],
 		"total_score": total_score,
 	}

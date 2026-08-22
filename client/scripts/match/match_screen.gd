@@ -1,10 +1,13 @@
 extends Control
 class_name MatchScreen
 
+signal return_to_lobby_requested()
+
 ## Dense public match table.  The screen deliberately consumes a very small
 ## store protocol so that private data never has to pass through the scene.
 
 const CombinationCatalog = preload("res://scripts/domain/combination_catalog.gd")
+const CardRules = preload("res://scripts/domain/card_rules.gd")
 const COLOR_BACKGROUND := Color("#121416")
 const COLOR_TABLE := Color("#172321")
 const COLOR_TABLE_LINE := Color("#2b413b")
@@ -15,6 +18,7 @@ const COLOR_TEXT := Color("#f3f4f4")
 const COLOR_MUTED := Color("#9ca3a8")
 const COLOR_GOLD := Color("#e1ad45")
 const COLOR_GREEN := Color("#47b881")
+const COLOR_ACQUIRED := Color("#4ea1ff")
 const COLOR_HEARTS := Color("#ec7777")
 const COLOR_DIAMONDS := Color("#ec7777")
 const COLOR_BLACK_SUIT := Color("#d7dcdf")
@@ -57,6 +61,8 @@ var _hand_row: HBoxContainer
 var _action_bar: PanelContainer
 var _action_prompt_label: Label
 var _action_error_label: Label
+var _play_preview_label: Label
+var _hint_button: Button
 var _play_button: Button
 var _discard_button: Button
 var _submit_claim_button: Button
@@ -65,6 +71,7 @@ var _final_group_a_button: Button
 var _final_group_b_button: Button
 var _lock_final_button: Button
 var _best_final_button: Button
+var _return_to_lobby_button: Button
 
 var _seat_cards: Array[PanelContainer] = []
 var _seat_position_labels: Array[Label] = []
@@ -78,6 +85,7 @@ var _selected_claim_card_id := ""
 var _claim_submission_pending := false
 var _discard_submission_pending := false
 var _final_submission_pending := false
+var _return_to_lobby_pending := false
 var _final_group_mode := ButtonGroup.new()
 var _active_final_group := 0
 var _final_group_ids: Array = [[], []]
@@ -96,6 +104,10 @@ var _time_source := func() -> float:
 
 
 func set_match_store(store: Object) -> void:
+	if _store_override != store:
+		_selected_card_ids.clear()
+		_last_phase = ""
+		_last_action_id = -1
 	_store_override = store
 	if is_inside_tree():
 		_unbind_store()
@@ -356,7 +368,7 @@ func _build_table_area() -> Control:
 	var hand_column := VBoxContainer.new()
 	hand_column.add_theme_constant_override("separation", 4)
 	hand_margin.add_child(hand_column)
-	_hand_title_label = _label("我的手牌（8）", 13, COLOR_TEXT)
+	_hand_title_label = _label("我的手牌（5）", 13, COLOR_TEXT)
 	_hand_title_label.name = "LocalHandTitle"
 	_hand_title_label.custom_minimum_size.y = 20
 	hand_column.add_child(_hand_title_label)
@@ -397,6 +409,19 @@ func _build_table_area() -> Control:
 	_action_error_label.clip_text = true
 	_action_error_label.text_overrun_behavior = TextServer.OVERRUN_TRIM_ELLIPSIS
 	error_slot.add_child(_action_error_label)
+	_hint_button = _build_compact_action_button("提示", 58.0)
+	_hint_button.name = "HintButton"
+	_hint_button.visible = false
+	_hint_button.disabled = true
+	_hint_button.pressed.connect(_on_hint_pressed)
+	action_row.add_child(_hint_button)
+	_play_preview_label = _label("", 12, COLOR_GOLD)
+	_play_preview_label.name = "PlayPreviewLabel"
+	_play_preview_label.custom_minimum_size = Vector2(108, 27)
+	_play_preview_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_RIGHT
+	_play_preview_label.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
+	_play_preview_label.visible = false
+	action_row.add_child(_play_preview_label)
 	_play_button = Button.new()
 	_play_button.name = "PlayCardsButton"
 	_play_button.text = "出牌"
@@ -468,6 +493,11 @@ func _build_table_area() -> Control:
 	_best_final_button = _build_compact_action_button("最佳并锁定", 100.0)
 	_best_final_button.pressed.connect(_on_best_final_pressed)
 	action_row.add_child(_best_final_button)
+	_return_to_lobby_button = _build_compact_action_button("返回大厅", 88.0)
+	_return_to_lobby_button.name = "ReturnToLobbyButton"
+	_return_to_lobby_button.visible = false
+	_return_to_lobby_button.pressed.connect(_on_return_to_lobby_pressed)
+	action_row.add_child(_return_to_lobby_button)
 	return _table_area
 
 
@@ -582,6 +612,7 @@ func _refresh() -> void:
 		_claim_submission_pending = false
 		_discard_submission_pending = false
 		_final_submission_pending = false
+		_return_to_lobby_pending = false
 		_selected_claim_card_id = ""
 		_animated_collision_turns.clear()
 		_animated_reveal_keys.clear()
@@ -595,6 +626,9 @@ func _refresh() -> void:
 		_pass_claim_button.visible = false
 		_pass_claim_button.disabled = true
 		_set_final_controls_visible(false)
+		_hint_button.visible = false
+		_play_preview_label.visible = false
+		_return_to_lobby_button.visible = false
 		_discard_button.visible = false
 		_discard_button.disabled = true
 		_participant_by_seat.clear()
@@ -625,6 +659,7 @@ func _refresh() -> void:
 		_animated_reveal_keys.clear()
 		_stop_reveal_motion()
 		_reset_final_editor()
+		_return_to_lobby_pending = false
 		_last_phase = ""
 		_last_action_id = -1
 		_match_identity = match_identity
@@ -1174,15 +1209,14 @@ func _refresh_final_settlement(phase: String, final_results: Array[Dictionary]) 
 	_play_reveal_motion("final|%s|%d" % [phase, int(_store.get("action_id"))])
 
 
-func _final_group_summary(group_index: int, group: Dictionary) -> String:
+func _final_group_summary(_group_index: int, group: Dictionary) -> String:
 	var card_values: Array[String] = []
 	var raw_cards: Variant = group.get("cards", [])
 	if raw_cards is Array:
 		for raw_card: Variant in raw_cards:
 			if raw_card is Dictionary:
 				card_values.append(_compact_card(raw_card))
-	return "%s · %s +%d · %s" % [
-		"A" if group_index == 0 else "B",
+	return "%s · +%d 分 · %s" % [
 		_combination_text(str(group.get("category", ""))),
 		int(group.get("score", 0)),
 		" ".join(card_values),
@@ -1375,25 +1409,58 @@ func _discarded_cards_text(raw_cards: Variant) -> String:
 
 
 func _refresh_hand() -> void:
+	var previous_selected_card_ids := _selected_card_ids.duplicate()
+	var preserve_selection := _can_preserve_hand_selection()
 	_clear_hand()
-	var hand: Array[Dictionary] = _store.get_local_hand()
+	var hand: Array[Dictionary] = CardRules.sort_cards(_store.get_local_hand())
+	var acquired_card_ids: Array[String] = []
+	if _store.has_method("get_acquired_card_ids"):
+		acquired_card_ids = _store.get_acquired_card_ids()
 	var local_award := _current_local_award()
 	var protected_card_id := str(local_award.get("id", ""))
 	_hand_title_label.text = "我的手牌（%d）" % hand.size()
 	for index in range(hand.size()):
 		var card_id := str(hand[index].get("id", ""))
 		var is_protected := not protected_card_id.is_empty() and card_id == protected_card_id
+		var is_acquired := acquired_card_ids.has(card_id)
+		if (
+			preserve_selection
+			and previous_selected_card_ids.has(card_id)
+			and _can_select_hand_card(card_id, is_protected)
+		):
+			_selected_card_ids.append(card_id)
 		var final_group_index := _final_group_index_for_card(card_id)
-		var card := _build_hand_card(hand[index], index, is_protected, final_group_index)
+		var card := _build_hand_card(
+			hand[index],
+			index,
+			is_protected,
+			is_acquired,
+			final_group_index
+		)
 		card.disabled = not _can_select_hand_card(card_id, is_protected)
-		card.set_pressed_no_signal(final_group_index >= 0)
+		card.set_pressed_no_signal(
+			final_group_index >= 0 or _selected_card_ids.has(card_id)
+		)
 		_hand_row.add_child(card)
 		_hand_cards.append(card)
 	if hand.is_empty():
 		var empty := _label("等待私有手牌", 12, COLOR_MUTED)
 		empty.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
 		_hand_row.add_child(empty)
+	_update_play_selection_controls()
+	_discard_button.disabled = not _can_discard_hand() or _selected_card_ids.size() != 1
 	call_deferred("_on_resized")
+
+
+func _can_preserve_hand_selection() -> bool:
+	if _store == null:
+		return false
+	var phase := str(_store.phase)
+	return (
+		phase in ["actor_play", "award_discard"]
+		and phase == _last_phase
+		and int(_store.get("action_id")) == _last_action_id
+	)
 
 
 func _clear_hand() -> void:
@@ -1404,6 +1471,11 @@ func _clear_hand() -> void:
 	_hand_title_label.text = "我的手牌（0）"
 	if _play_button != null:
 		_play_button.disabled = true
+	if _hint_button != null:
+		_hint_button.disabled = true
+	if _play_preview_label != null:
+		_play_preview_label.visible = false
+		_play_preview_label.text = ""
 	if _discard_button != null:
 		_discard_button.disabled = true
 
@@ -1412,6 +1484,7 @@ func _build_hand_card(
 	card: Dictionary,
 	index: int,
 	is_protected: bool,
+	is_acquired: bool,
 	final_group_index: int
 ) -> Button:
 	var panel := Button.new()
@@ -1420,12 +1493,34 @@ func _build_hand_card(
 	panel.size_flags_horizontal = Control.SIZE_SHRINK_CENTER
 	panel.toggle_mode = true
 	panel.focus_mode = Control.FOCUS_ALL
-	panel.add_theme_stylebox_override("normal", _style_box(COLOR_SURFACE_RAISED, COLOR_BORDER, 1, 4))
-	panel.add_theme_stylebox_override("hover", _style_box(Color("#293032"), COLOR_GREEN, 1, 4))
+	panel.set_meta("card_id", str(card.get("id", "")))
+	panel.add_theme_stylebox_override(
+		"normal",
+		_style_box(
+			COLOR_SURFACE_RAISED,
+			COLOR_ACQUIRED if is_acquired else COLOR_BORDER,
+			2 if is_acquired else 1,
+			4
+		)
+	)
+	panel.add_theme_stylebox_override(
+		"hover",
+		_style_box(
+			Color("#293032"),
+			COLOR_ACQUIRED if is_acquired else COLOR_GREEN,
+			2 if is_acquired else 1,
+			4
+		)
+	)
 	panel.add_theme_stylebox_override("pressed", _style_box(Color("#30362f"), COLOR_GOLD, 3, 4))
 	panel.add_theme_stylebox_override(
 		"disabled",
-		_style_box(COLOR_SURFACE, COLOR_GOLD if is_protected else COLOR_BORDER, 2 if is_protected else 1, 4)
+		_style_box(
+			COLOR_SURFACE,
+			COLOR_ACQUIRED if is_acquired else (COLOR_GOLD if is_protected else COLOR_BORDER),
+			2 if is_acquired or is_protected else 1,
+			4
+		)
 	)
 	var tooltip_parts: Array[String] = [_format_card(card)]
 	if is_protected:
@@ -1549,11 +1644,7 @@ func _show_discard_controls() -> bool:
 
 
 func _show_final_controls() -> bool:
-	return (
-		_store != null
-		and str(_store.phase) == "final_commit"
-		and not bool(_store.get("final_committed"))
-	)
+	return false
 
 
 func _can_edit_final_groups() -> bool:
@@ -1659,7 +1750,7 @@ func _on_hand_card_toggled(pressed: bool, card_id: String, button: Button) -> vo
 			_selected_card_ids.append(card_id)
 	else:
 		_selected_card_ids.erase(card_id)
-	_play_button.disabled = _selected_card_ids.size() != 3
+	_update_play_selection_controls()
 	_discard_button.disabled = not _can_discard_hand() or _selected_card_ids.size() != 1
 
 
@@ -1725,6 +1816,57 @@ func _on_play_pressed() -> void:
 	_store.play_cards(_selected_card_ids.duplicate())
 
 
+func _on_hint_pressed() -> void:
+	if not _can_select_hand():
+		return
+	var best := CardRules.find_best_three(_store.get_local_hand())
+	if best.is_empty():
+		return
+	_selected_card_ids.clear()
+	var raw_card_ids: Variant = best.get("card_ids", [])
+	if raw_card_ids is Array:
+		for raw_card_id: Variant in raw_card_ids:
+			_selected_card_ids.append(str(raw_card_id))
+	for hand_card in _hand_cards:
+		hand_card.set_pressed_no_signal(
+			_selected_card_ids.has(str(hand_card.get_meta("card_id", "")))
+		)
+	_update_play_selection_controls()
+
+
+func _update_play_selection_controls() -> void:
+	_play_button.disabled = not _can_select_hand() or _selected_card_ids.size() != 3
+	_refresh_play_preview()
+
+
+func _refresh_play_preview() -> void:
+	_play_preview_label.visible = false
+	_play_preview_label.text = ""
+	if _play_button.disabled or _selected_card_ids.size() != 3 or _store == null:
+		return
+	var selected_cards: Array = []
+	for card: Dictionary in _store.get_local_hand():
+		if _selected_card_ids.has(str(card.get("id", ""))):
+			selected_cards.append(card)
+	var evaluation := CardRules.evaluate_three(selected_cards)
+	if evaluation.is_empty():
+		return
+	_play_preview_label.text = "%s · +%d 分" % [
+		str(evaluation.get("label", "")),
+		int(evaluation.get("score", 0)),
+	]
+	_play_preview_label.visible = true
+
+
+func _on_return_to_lobby_pressed() -> void:
+	if _store == null or str(_store.phase) != "finished" or _return_to_lobby_pending:
+		return
+	_return_to_lobby_pending = true
+	_return_to_lobby_button.disabled = true
+	_action_prompt_label.text = "正在返回大厅"
+	return_to_lobby_requested.emit()
+
+
 func _on_discard_pressed() -> void:
 	if not _can_discard_hand() or _selected_card_ids.size() != 1:
 		return
@@ -1744,6 +1886,12 @@ func _refresh_action_prompt(phase: String, actor_seat_index: int, local_seat_ind
 	var show_discard_controls := _show_discard_controls()
 	var show_final_controls := _show_final_controls()
 	_play_button.visible = phase not in ["award_discard", "final_commit", "final_reveal", "finished"]
+	_hint_button.visible = phase == "actor_play"
+	_hint_button.disabled = not _can_select_hand()
+	_return_to_lobby_button.visible = phase == "finished"
+	if phase != "finished":
+		_return_to_lobby_pending = false
+	_return_to_lobby_button.disabled = _return_to_lobby_pending
 	_discard_button.visible = show_discard_controls
 	_discard_button.disabled = not _can_discard_hand() or _selected_card_ids.size() != 1
 	_submit_claim_button.visible = show_claim_controls
@@ -1795,18 +1943,14 @@ func _refresh_action_prompt(phase: String, actor_seat_index: int, local_seat_ind
 		else:
 			_action_prompt_label.text = "等待获得牌的参与者弃牌"
 	elif phase == "final_commit":
-		if bool(_store.get("final_committed")):
-			_action_prompt_label.text = "最终选择已锁定：等待统一揭晓"
-		elif _final_submission_pending:
-			_action_prompt_label.text = "最终选择提交中：等待服务器确认"
-		else:
-			_action_prompt_label.text = "最终结算：A/B 各选 3 张"
+		_action_prompt_label.text = "最终结算：服务器正在选择最佳三张"
 	elif phase == "final_reveal":
 		_action_prompt_label.text = "最终组合已统一揭晓：核对结算得分"
 	elif phase == "finished":
 		_action_prompt_label.text = "对局结束：查看最终排名"
 	else:
 		_action_prompt_label.text = "等待服务器状态"
+	_refresh_play_preview()
 
 
 func _current_local_award() -> Dictionary:

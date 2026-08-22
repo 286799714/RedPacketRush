@@ -101,15 +101,15 @@ async function enterSingleAwardDiscard(
   return awardedSeatIndex;
 }
 
-function advanceToFinalCommit(serverRoom: GameRoom): void {
-  for (let step = 0; step < 50 && serverRoom.state.phase !== "final_commit"; step += 1) {
+function advanceToFinalReveal(serverRoom: GameRoom): void {
+  for (let step = 0; step < 80 && serverRoom.state.phase !== "final_reveal"; step += 1) {
     if (serverRoom.state.phase === "claim_reveal") {
       tickClock(serverRoom, 900);
     } else {
       tickClock(serverRoom, serverRoom.state.actionDeadlineSeconds * 1000);
     }
   }
-  assert.strictEqual(serverRoom.state.phase, "final_commit");
+  assert.strictEqual(serverRoom.state.phase, "final_reveal");
 }
 
 async function leaveParticipants(
@@ -212,7 +212,7 @@ describe("game room reconnect and timeout races", () => {
 
     assert.strictEqual(serverRoom.state.phase, "actor_play");
     assert.strictEqual(serverRoom.state.discardEvents.length, 1);
-    assert.strictEqual(serverRoom.state.seats[seatIndex].handCount, 8);
+    assert.strictEqual(serverRoom.state.seats[seatIndex].handCount, 5);
     assert.strictEqual(serverRoom.state.pendingDiscardSeatIndexes.length, 0);
     await expectStaleAction(
       serverRoom,
@@ -223,31 +223,21 @@ describe("game room reconnect and timeout races", () => {
     await leaveParticipants(participants, seatIndex, reconnected);
   });
 
-  it("lets a reconnected finalist commit just before the deadline exactly once", async () => {
+  it("gives a reconnecting finalist the automatic result without settling twice", async () => {
     const result = await startActorPlay(colyseus);
     const { participants, serverRoom } = result;
-    advanceToFinalCommit(serverRoom);
+    advanceToFinalReveal(serverRoom);
     const seatIndex = 0;
-    const actionId = serverRoom.state.actionId;
-    const { reconnected } = await reconnectBeforeDeadline(
+    const { reconnected, privateState } = await reconnectBeforeDeadline(
       colyseus,
       serverRoom,
       participants[seatIndex],
       seatIndex,
     );
-    const handled = serverRoom.waitForMessage("final_selection");
-    reconnected.send("final_selection", { mode: "best", actionId });
-    await handled;
-    tickClock(serverRoom, 1_000);
-
-    assert.strictEqual(serverRoom.state.phase, "final_reveal");
+    assert.strictEqual(serverRoom.state.phase, "finished");
     assert.strictEqual(serverRoom.state.finalEvents.length, 1);
-    await expectStaleAction(
-      serverRoom,
-      reconnected,
-      "final_selection",
-      { mode: "best", actionId },
-    );
+    assert.strictEqual(privateState.finalCommitted, true);
+    assert.strictEqual(privateState.finalGroups.length, 1);
     await leaveParticipants(participants, seatIndex, reconnected);
   });
 
@@ -320,7 +310,7 @@ describe("game room reconnect and timeout races", () => {
       serverRoom.state.phase === "actor_play" || serverRoom.state.phase === "claim_commit",
     );
     assert.strictEqual(serverRoom.state.discardEvents.length, 1);
-    assert.strictEqual(serverRoom.state.seats[seatIndex].handCount, 8);
+    assert.strictEqual(serverRoom.state.seats[seatIndex].handCount, 5);
     assert.strictEqual(serverRoom.state.pendingDiscardSeatIndexes.length, 0);
     const actionId = serverRoom.state.actionId;
     drainImmediateTasks(serverRoom);
@@ -330,20 +320,17 @@ describe("game room reconnect and timeout races", () => {
     await leaveRemainingParticipants(participants, seatIndex);
   });
 
-  it("rejects a finalist reconnect after expiry and commits its bot result exactly once", async () => {
+  it("rejects a finalist reconnect after expiry without settling twice", async () => {
     const result = await startActorPlay(colyseus, 60);
     const { participants, serverRoom } = result;
-    advanceToFinalCommit(serverRoom);
+    advanceToFinalReveal(serverRoom);
     const seatIndex = 0;
     const reconnectionToken = await expireToBot(
       serverRoom,
       participants[seatIndex],
       seatIndex,
     );
-    assert.strictEqual(serverRoom.state.phase, "final_commit");
-    tickClock(serverRoom, 30_000);
-
-    assert.strictEqual(serverRoom.state.phase, "final_reveal");
+    assert.strictEqual(serverRoom.state.phase, "finished");
     assert.strictEqual(serverRoom.state.finalEvents.length, 1);
     drainImmediateTasks(serverRoom);
     assert.strictEqual(serverRoom.state.finalEvents.length, 1);

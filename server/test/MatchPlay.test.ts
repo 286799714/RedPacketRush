@@ -76,9 +76,9 @@ describe("match actor play", () => {
     assert.deepStrictEqual(publicState.playedCards, playedCards);
     assert.strictEqual(publicState.playedCategory, "flush");
     assert.strictEqual(publicState.playedScore, 4);
-    assert.strictEqual(publicState.drawPileCount, 17);
+    assert.strictEqual(publicState.drawPileCount, 29);
     assert.strictEqual(publicState.participants[0].score, 4);
-    assert.strictEqual(publicState.participants[0].handCount, 8);
+    assert.strictEqual(publicState.participants[0].handCount, 5);
     assert.deepStrictEqual(publicState.events.at(-1), {
       type: "cards_played",
       turnNumber: 1,
@@ -92,7 +92,7 @@ describe("match actor play", () => {
     assert.ok(playedCards.every((card) => !actorAfterIds.includes(card.id)));
     assert.strictEqual(
       actorAfterIds.filter((id) => actorHand.some((card) => card.id === id)).length,
-      5,
+      2,
     );
     for (let seatIndex = 1; seatIndex < PARTICIPANTS.length; seatIndex += 1) {
       assert.deepStrictEqual(

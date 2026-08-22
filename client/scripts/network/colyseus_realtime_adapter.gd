@@ -835,7 +835,7 @@ func _normalize_final_results(raw_results: Variant) -> Array[Dictionary]:
 		var raw_groups: Variant = raw_result.get("groups", [])
 		if seat_index < 0 or seat_index >= ROOM_SEAT_COUNT or not raw_groups is Array:
 			continue
-		if raw_groups.size() != 2:
+		if raw_groups.size() != 1:
 			continue
 		var groups: Array[Dictionary] = []
 		var selected_card_ids: Dictionary = {}
@@ -863,7 +863,7 @@ func _normalize_final_results(raw_results: Variant) -> Array[Dictionary]:
 				"category": category,
 				"score": maxi(0, int(raw_group.get("score", 0))),
 			})
-		if not valid or groups.size() != 2:
+		if not valid or groups.size() != 1:
 			continue
 		results_by_seat[seat_index] = {
 			"seat_index": seat_index,
@@ -907,7 +907,7 @@ func _normalize_final_groups(raw_groups: Variant) -> Array:
 		return []
 	if raw_groups.is_empty():
 		return []
-	if raw_groups.size() != 2:
+	if raw_groups.size() != 1:
 		return []
 	var groups: Array = []
 	var selected_card_ids: Dictionary = {}

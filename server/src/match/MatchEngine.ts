@@ -1,5 +1,5 @@
 import {
-  CARD_SUITS,
+  compareCardStrength,
   createPhysicalDeck,
   type DeckMode,
   type PhysicalCard,
@@ -9,7 +9,6 @@ import {
   type CombinationCategory,
 } from "./combinations.js";
 import {
-  evaluateFinalSelection,
   findBestFinalSelection,
   type EvaluatedFinalSelection,
   type FinalCombination,
@@ -24,7 +23,6 @@ export type MatchPhase =
   | "claim_commit"
   | "claim_reveal"
   | "award_discard"
-  | "final_commit"
   | "final_reveal"
   | "finished";
 export type MatchCommandErrorCode =
@@ -39,9 +37,7 @@ export type MatchCommandErrorCode =
   | "invalid_discard"
   | "discard_not_required"
   | "awarded_card_protected"
-  | "stale_turn"
-  | "invalid_final_selection"
-  | "final_selection_already_committed";
+  | "stale_turn";
 
 export class MatchCommandError extends Error {
   public constructor(
@@ -178,7 +174,6 @@ interface ParticipantState extends MatchParticipant {
 }
 
 const REQUIRED_SEAT_INDICES = [0, 1, 2, 3] as const;
-const SUIT_STRENGTH = new Map(CARD_SUITS.map((suit, index) => [suit, index]));
 
 export class MatchEngine {
   private readonly random: RandomSource;
@@ -410,47 +405,6 @@ export class MatchEngine {
     this.openNextTurn();
   }
 
-  public commitFinalSelection(
-    seatIndex: number,
-    groups: readonly (readonly string[])[],
-  ): void {
-    const participant = this.finalCommitParticipant(seatIndex);
-    let selection: EvaluatedFinalSelection;
-    try {
-      selection = evaluateFinalSelection(participant.hand, groups);
-    } catch {
-      throw new MatchCommandError(
-        "invalid_final_selection",
-        "final selection must contain two disjoint owned three-card groups",
-      );
-    }
-    this.commitEvaluatedFinalSelection(seatIndex, selection);
-  }
-
-  public commitBestFinalSelection(seatIndex: number): void {
-    const participant = this.finalCommitParticipant(seatIndex);
-    this.commitEvaluatedFinalSelection(
-      seatIndex,
-      findBestFinalSelection(participant.hand),
-    );
-  }
-
-  public resolveFinalSelectionsAtDeadline(): void {
-    if (this.participants === null || this.phase !== "final_commit") {
-      throw new MatchCommandError("invalid_phase", "final selection commit is not active");
-    }
-    const selections = new Map(this.finalSelections);
-    for (const participant of this.participants) {
-      if (!selections.has(participant.seatIndex)) {
-        selections.set(
-          participant.seatIndex,
-          findBestFinalSelection(participant.hand),
-        );
-      }
-    }
-    this.revealFinalSelections(selections);
-  }
-
   public completeFinalReveal(): void {
     if (this.participants === null || this.phase !== "final_reveal") {
       throw new MatchCommandError("invalid_phase", "final settlement reveal is not active");
@@ -669,48 +623,16 @@ export class MatchEngine {
     return participant;
   }
 
-  private finalCommitParticipant(seatIndex: number): ParticipantState {
-    if (this.participants === null || this.phase !== "final_commit") {
-      throw new MatchCommandError("invalid_phase", "final selection commit is not active");
-    }
-    const participant = this.participants.find((candidate) => candidate.seatIndex === seatIndex);
-    if (!participant) {
-      throw new MatchCommandError(
-        "invalid_final_selection",
-        "seat does not participate in final settlement",
-      );
-    }
-    if (this.finalSelections.has(seatIndex)) {
-      throw new MatchCommandError(
-        "final_selection_already_committed",
-        "final selection has already been committed",
-      );
-    }
-    return participant;
-  }
-
-  private commitEvaluatedFinalSelection(
-    seatIndex: number,
-    selection: EvaluatedFinalSelection,
-  ): void {
+  private revealFinalSelections(): void {
     if (this.participants === null) {
-      throw new Error("cannot commit final selection before the match starts");
+      throw new Error("cannot settle final hands before the match starts");
     }
-    const selections = new Map(this.finalSelections);
-    selections.set(seatIndex, selection);
-    if (selections.size === this.participants.length) {
-      this.revealFinalSelections(selections);
-    } else {
-      this.finalSelections = selections;
-    }
-  }
-
-  private revealFinalSelections(
-    selections: ReadonlyMap<number, EvaluatedFinalSelection>,
-  ): void {
-    if (this.participants === null || this.phase !== "final_commit") {
-      throw new MatchCommandError("invalid_phase", "final selection commit is not active");
-    }
+    const selections = new Map<number, EvaluatedFinalSelection>(
+      this.participants.map((participant) => [
+        participant.seatIndex,
+        findBestFinalSelection(participant.hand),
+      ]),
+    );
     const results = this.participants.map((participant) => {
       const selection = selections.get(participant.seatIndex);
       if (!selection) {
@@ -770,8 +692,8 @@ export class MatchEngine {
       this.actorSeatIndex = selectNextActor(this.claimAwards, this.actorSeatIndex);
     }
     for (const participant of this.participants) {
-      if (participant.hand.length !== 8) {
-        throw new Error("every hand must contain eight cards at a turn boundary");
+      if (participant.hand.length !== 5) {
+        throw new Error("every hand must contain five cards at a turn boundary");
       }
     }
 
@@ -785,7 +707,7 @@ export class MatchEngine {
     if (this.drawPile.length < 3) {
       this.sealedCards.push(...this.drawPile.splice(0));
       this.actorSeatIndex = -1;
-      this.phase = "final_commit";
+      this.revealFinalSelections();
     } else {
       this.phase = "actor_play";
     }
@@ -876,13 +798,6 @@ function validateSettings(settings: MatchSettings): void {
   }
 }
 
-function compareCardStrength(left: PhysicalCard, right: PhysicalCard): number {
-  if (left.rank !== right.rank) {
-    return left.rank - right.rank;
-  }
-  return (SUIT_STRENGTH.get(left.suit) ?? -1) - (SUIT_STRENGTH.get(right.suit) ?? -1);
-}
-
 function selectNextActor(
   awards: readonly ClaimAward[],
   currentActorSeatIndex: number,
@@ -915,7 +830,7 @@ function dealOpeningHands(
   participants: ParticipantState[],
   drawPile: PhysicalCard[],
 ): void {
-  const handSize = 8;
+  const handSize = 5;
   const requiredCards = participants.length * handSize;
   if (drawPile.length < requiredCards) {
     throw new Error("deck exhausted before opening hands were complete");

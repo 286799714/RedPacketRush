@@ -402,14 +402,14 @@ describe("game room secret claims", () => {
     }]);
     assert.deepStrictEqual(
       publicState.seats.map((seat: { handCount: number }) => seat.handCount),
-      participants.map((_, seatIndex) => seatIndex === actorSeatIndex ? 8 : 9),
+      participants.map((_, seatIndex) => seatIndex === actorSeatIndex ? 5 : 6),
     );
 
     for (let seatIndex = 0; seatIndex < privateStates.length; seatIndex += 1) {
       const privateState = privateStates[seatIndex];
       assert.strictEqual(privateState.seatIndex, seatIndex);
       assert.strictEqual(privateState.participantId, participants[seatIndex].sessionId);
-      assert.strictEqual(privateState.hand.length, seatIndex === actorSeatIndex ? 8 : 9);
+      assert.strictEqual(privateState.hand.length, seatIndex === actorSeatIndex ? 5 : 6);
       assert.strictEqual(privateState.claimCommitted, seatIndex !== actorSeatIndex);
       assert.strictEqual(
         privateState.claimCardId,

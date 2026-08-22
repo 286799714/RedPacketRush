@@ -96,7 +96,7 @@ function assertRejectedWithoutMutation(
 }
 
 describe("match award discard and actor rotation", () => {
-  it("holds recipients at nine and accepts only pre-award hand cards", () => {
+  it("holds recipients at six and accepts only pre-award hand cards", () => {
     const engine = startedEngine();
     const { actorSeatIndex, originalHands } = playFirstThree(engine);
     const claimantSeats = [0, 1, 2, 3].filter((seatIndex) => seatIndex !== actorSeatIndex);
@@ -111,7 +111,7 @@ describe("match award discard and actor rotation", () => {
     assert.deepStrictEqual(publicState.pendingDiscardSeatIndexes, claimantSeats.slice(0, 2));
     assert.deepStrictEqual(
       publicState.participants.map((participant) => participant.handCount),
-      [0, 1, 2, 3].map((seatIndex) => claimantSeats.slice(0, 2).includes(seatIndex) ? 9 : 8),
+      [0, 1, 2, 3].map((seatIndex) => claimantSeats.slice(0, 2).includes(seatIndex) ? 6 : 5),
     );
     assertRejectedWithoutMutation(
       engine,
@@ -158,8 +158,8 @@ describe("match award discard and actor rotation", () => {
     publicState = engine.view(0).publicState;
     assert.strictEqual(publicState.phase, "award_discard");
     assert.deepStrictEqual(publicState.pendingDiscardSeatIndexes, [claimantSeats[1]]);
-    assert.strictEqual(publicState.participants[claimantSeats[0]].handCount, 8);
-    assert.strictEqual(publicState.participants[claimantSeats[1]].handCount, 9);
+    assert.strictEqual(publicState.participants[claimantSeats[0]].handCount, 5);
+    assert.strictEqual(publicState.participants[claimantSeats[1]].handCount, 6);
     assert.deepStrictEqual(discardEvents(publicState), [{
       type: "card_discarded",
       turnNumber: 1,
@@ -204,7 +204,7 @@ describe("match award discard and actor rotation", () => {
     assert.deepStrictEqual(publicState.claimAwards, []);
     assert.strictEqual(publicState.playedCategory, null);
     assert.strictEqual(publicState.playedScore, 0);
-    assert.ok(publicState.participants.every((participant) => participant.handCount === 8));
+    assert.ok(publicState.participants.every((participant) => participant.handCount === 5));
     assert.deepStrictEqual(
       views.map((view) => ({
         claimCommitted: view.privateState.claimCommitted,
@@ -252,25 +252,25 @@ describe("match award discard and actor rotation", () => {
   });
 
   it("ignores deck-copy identity and breaks exact award ties clockwise", () => {
-    const engine = startedEngine(new SeededRandomSource(5), "two");
+    const engine = startedEngine(new SeededRandomSource(26), "two");
     const actorSeatIndex = engine.view(0).publicState.actorSeatIndex;
-    assert.strictEqual(actorSeatIndex, 3);
+    assert.strictEqual(actorSeatIndex, 0);
     const originalHands = PARTICIPANTS.map(({ seatIndex }) => engine.view(seatIndex).privateState.hand);
     const actorHand = originalHands[actorSeatIndex];
-    const duplicateCards = actorHand.filter((card) => card.rank === 2 && card.suit === "clubs");
+    const duplicateCards = actorHand.filter((card) => card.rank === 7 && card.suit === "diamonds");
     assert.deepStrictEqual(duplicateCards.map((card) => card.copyIndex).sort(), [0, 1]);
     const thirdCard = actorHand.find((card) => !duplicateCards.some(({ id }) => id === card.id));
     assert.ok(thirdCard);
     engine.playCards(actorSeatIndex, [...duplicateCards.map((card) => card.id), thirdCard.id]);
 
-    engine.commitClaim(0, duplicateCards[0].id);
-    engine.commitClaim(1, null);
-    engine.commitClaim(2, duplicateCards[1].id);
+    engine.commitClaim(1, duplicateCards[0].id);
+    engine.commitClaim(2, null);
+    engine.commitClaim(3, duplicateCards[1].id);
     engine.completeClaimReveal();
-    discardOriginalCards(engine, [0, 2], originalHands);
+    discardOriginalCards(engine, [1, 3], originalHands);
 
     assert.strictEqual(engine.view(0).publicState.phase, "actor_play");
-    assert.strictEqual(engine.view(0).publicState.actorSeatIndex, 0);
+    assert.strictEqual(engine.view(0).publicState.actorSeatIndex, 1);
   });
 
   it("uses suit strength after equal awarded ranks", () => {
@@ -342,7 +342,7 @@ describe("match award discard and actor rotation", () => {
       assert.ok(originalHands[event.seatIndex].some((card) => card.id === event.card.id));
       assert.ok(!playedCards.some((card) => card.id === event.card.id));
     }
-    assert.ok(state.participants.every((participant) => participant.handCount === 8));
+    assert.ok(state.participants.every((participant) => participant.handCount === 5));
     assertRejectedWithoutMutation(
       engine,
       () => engine.resolveDiscardAtDeadline(),
@@ -354,7 +354,7 @@ describe("match award discard and actor rotation", () => {
     const engine = startedEngine();
     const actorSeatIndex = engine.view(0).publicState.actorSeatIndex;
 
-    for (let turn = 1; turn <= 6; turn += 1) {
+    for (let turn = 1; turn <= 10; turn += 1) {
       const actorHand = engine.view(actorSeatIndex).privateState.hand;
       engine.playCards(actorSeatIndex, actorHand.slice(0, 3).map((card) => card.id));
       for (const seatIndex of [0, 1, 2, 3]) {
@@ -366,7 +366,7 @@ describe("match award discard and actor rotation", () => {
       engine.completeClaimReveal();
       assert.strictEqual(
         engine.view(0).publicState.phase,
-        turn < 6 ? "actor_play" : "final_commit",
+        turn < 10 ? "actor_play" : "final_reveal",
       );
     }
 
@@ -375,8 +375,8 @@ describe("match award discard and actor rotation", () => {
     assert.strictEqual(state.actorSeatIndex, -1);
     assert.strictEqual(state.drawPileCount, 0);
     assert.strictEqual(state.sealedCardCount, 2);
-    assert.strictEqual(state.discardedCards.length, 18);
-    assert.ok(state.participants.every((participant) => participant.handCount === 8));
+    assert.strictEqual(state.discardedCards.length, 30);
+    assert.ok(state.participants.every((participant) => participant.handCount === 5));
     const allCardIds = [
       ...views.flatMap((view) => view.privateState.hand.map((card) => card.id)),
       ...state.discardedCards.map((card) => card.id),

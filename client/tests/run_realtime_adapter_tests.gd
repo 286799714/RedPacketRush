@@ -245,7 +245,6 @@ func _test_final_selection_intentions_are_sent_to_active_room() -> void:
 		adapter.queue_free()
 		return
 	var groups := [
-		["clubs-2", "clubs-3", "clubs-4"],
 		["hearts-q", "hearts-k", "hearts-a"],
 	]
 
@@ -289,10 +288,10 @@ func _test_match_public_state_is_normalized_without_private_fields() -> void:
 		"hand": [{"id": "leaked-local"}],
 		"hands": {"session-b": [{"id": "leaked-other"}]},
 		"seats": [
-			_raw_seat(0, "session-a", "甲", false, 0, 8),
-			_raw_seat(1, "session-b", "乙", false, 0, 8),
-			_raw_seat(2, "bot-c", "机器人 3", true, 0, 8),
-			_raw_seat(3, "bot-d", "机器人 4", true, 0, 8),
+		_raw_seat(0, "session-a", "甲", false, 0, 5),
+		_raw_seat(1, "session-b", "乙", false, 0, 5),
+		_raw_seat(2, "bot-c", "机器人 3", true, 0, 5),
+		_raw_seat(3, "bot-d", "机器人 4", true, 0, 5),
 		],
 		"contestRounds": [{
 			"roundIndex": 0,
@@ -316,7 +315,7 @@ func _test_match_public_state_is_normalized_without_private_fields() -> void:
 	_expect_equal(snapshot.get("first_actor_seat_index"), 2, "首位行动席位规范化")
 	_expect_equal(snapshot.get("draw_pile_count"), 20, "牌堆数量规范化")
 	_expect_equal(snapshot["seats"][2].get("score"), 0, "公开分数规范化")
-	_expect_equal(snapshot["seats"][2].get("hand_count"), 8, "公开手牌数量规范化")
+	_expect_equal(snapshot["seats"][2].get("hand_count"), 5, "公开手牌数量规范化")
 	_expect_equal(snapshot.get("contest_rounds"), [{
 		"round_index": 0,
 		"reveals": [{
@@ -347,7 +346,7 @@ func _test_match_continuity_fields_are_normalized_from_whitelist() -> void:
 	var room := client.queue_join_room("continuity-room")
 	adapter.join_game_room("continuity-room", "甲")
 	room.emit_joined()
-	var disconnected_seat := _raw_seat(1, "session-b", "乙", false, 6, 8)
+	var disconnected_seat := _raw_seat(1, "session-b", "乙", false, 6, 5)
 	disconnected_seat["connected"] = false
 	disconnected_seat["reconnectionToken"] = "must-not-pass"
 	room.emit_state({
@@ -564,7 +563,6 @@ func _test_local_final_confirmation_is_normalized_privately() -> void:
 	adapter.join_game_room("private-room", "甲")
 	room.emit_joined()
 	var groups := [
-		["clubs-2", "clubs-3", "clubs-4"],
 		["hearts-q", "hearts-k", "hearts-a"],
 	]
 	room.message_received.emit("match_private_state", {
@@ -793,17 +791,8 @@ func _test_public_final_settlement_is_normalized_without_private_progress() -> v
 				"score": 10,
 				"privateChoice": "drop",
 			},
-			{
-				"cards": [
-					_raw_card("clubs-2", 2, "clubs", 0),
-					_raw_card("spades-2", 2, "spades", 0),
-					_raw_card("diamonds-7", 7, "diamonds", 0),
-				],
-				"category": "pair",
-				"score": 2,
-			},
 		],
-		"totalScore": 22,
+		"totalScore": 10,
 		"selectionOwner": "drop",
 	}
 	var raw_final_event := {
@@ -833,17 +822,8 @@ func _test_public_final_settlement_is_normalized_without_private_progress() -> v
 				"category": "straight_flush",
 				"score": 10,
 			},
-			{
-				"cards": [
-					_card("clubs-2", 2, "clubs", 0),
-					_card("spades-2", 2, "spades", 0),
-					_card("diamonds-7", 7, "diamonds", 0),
-				],
-				"category": "pair",
-				"score": 2,
-			},
 		],
-		"total_score": 22,
+		"total_score": 10,
 	}
 	var snapshot: Dictionary = observed["snapshot"]
 	_expect_equal(snapshot.get("final_results"), [expected_result], "终局结果仅保留公开白名单")

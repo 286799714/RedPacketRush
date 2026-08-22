@@ -35,7 +35,6 @@ function matchView(overrides: {
   claimCommitted?: boolean;
   claimAwards?: MatchView["publicState"]["claimAwards"];
   pendingDiscardSeatIndexes?: readonly number[];
-  finalCommitted?: boolean;
 } = {}): MatchView {
   const seatIndex = overrides.seatIndex ?? 1;
   return {
@@ -61,10 +60,10 @@ function matchView(overrides: {
     privateState: {
       seatIndex,
       participantId: `participant-${seatIndex}`,
-      hand: overrides.hand ?? Array.from({ length: 8 }, (_, index) => card(index)),
+      hand: overrides.hand ?? Array.from({ length: 5 }, (_, index) => card(index)),
       claimCommitted: overrides.claimCommitted ?? false,
       claimCardId: null,
-      finalCommitted: overrides.finalCommitted ?? false,
+      finalCommitted: false,
       finalGroups: [],
     },
   };
@@ -74,9 +73,9 @@ describe("bot policy", () => {
   it("selects one seeded legal three-card play for the actor", () => {
     const view = matchView();
 
-    assert.deepStrictEqual(chooseBotCommand(view, new FixedRandomSource(55)), {
+    assert.deepStrictEqual(chooseBotCommand(view, new FixedRandomSource(9)), {
       type: "play_cards",
-      cardIds: ["card-5", "card-6", "card-7"],
+      cardIds: ["card-2", "card-3", "card-4"],
     });
   });
 
@@ -108,33 +107,19 @@ describe("bot policy", () => {
   });
 
   it("never selects the protected award as a discard", () => {
-    const hand = Array.from({ length: 9 }, (_, index) => card(index));
+    const hand = Array.from({ length: 6 }, (_, index) => card(index));
     const view = matchView({
       phase: "award_discard",
       hand,
       pendingDiscardSeatIndexes: [1],
-      claimAwards: [{ seatIndex: 1, card: hand[8], source: "unique" }],
+      claimAwards: [{ seatIndex: 1, card: hand[5], source: "unique" }],
     });
 
-    assert.deepStrictEqual(chooseBotCommand(view, new FixedRandomSource(7)), {
+    assert.deepStrictEqual(chooseBotCommand(view, new FixedRandomSource(4)), {
       type: "discard",
-      cardId: "card-7",
+      cardId: "card-4",
       turnNumber: 3,
     });
-  });
-
-  it("uses the engine's best-selection command during final settlement", () => {
-    assert.deepStrictEqual(chooseBotCommand(
-      matchView({ phase: "final_commit" }),
-      new FixedRandomSource(0),
-    ), {
-      type: "final_selection",
-      mode: "best",
-    });
-    assert.strictEqual(chooseBotCommand(
-      matchView({ phase: "final_commit", finalCommitted: true }),
-      new FixedRandomSource(0),
-    ), null);
   });
 
   it("uses the first three cards for the deterministic actor deadline fallback", () => {

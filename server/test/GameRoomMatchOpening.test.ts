@@ -59,22 +59,22 @@ describe("game room match opening", () => {
     assert.strictEqual(publicState.phase, "actor_play");
     assert.ok(observedPhases.includes("point_contest"));
     assert.ok(Number.isInteger(publicState.actorSeatIndex));
-    assert.strictEqual(publicState.drawPileCount, 20);
+    assert.strictEqual(publicState.drawPileCount, 32);
     assert.strictEqual(publicState.contestRounds.length >= 1, true);
     assert.deepStrictEqual(
       publicState.seats.map((seat: { score: number; handCount: number }) => ({
         score: seat.score,
         handCount: seat.handCount,
       })),
-      Array.from({ length: 4 }, () => ({ score: 0, handCount: 8 })),
+      Array.from({ length: 4 }, () => ({ score: 0, handCount: 5 })),
     );
     assert.ok(!Object.hasOwn(publicState, "hand"));
     assert.ok(publicState.seats.every((seat: object) => !Object.hasOwn(seat, "hand")));
 
     assert.strictEqual(privateState.participantId, host.sessionId);
     assert.strictEqual(privateState.seatIndex, 0);
-    assert.strictEqual(privateState.hand.length, 8);
-    assert.strictEqual(new Set(privateState.hand.map((card: { id: string }) => card.id)).size, 8);
+    assert.strictEqual(privateState.hand.length, 5);
+    assert.strictEqual(new Set(privateState.hand.map((card: { id: string }) => card.id)).size, 5);
 
     await host.leave();
   });
@@ -110,13 +110,13 @@ describe("game room match opening", () => {
     for (const [seatIndex, privateState] of privateStates.entries()) {
       assert.strictEqual(privateState.seatIndex, seatIndex);
       assert.strictEqual(privateState.participantId, participants[seatIndex].sessionId);
-      assert.strictEqual(privateState.hand.length, 8);
+      assert.strictEqual(privateState.hand.length, 5);
     }
     const allPrivateCardIds = privateStates.flatMap((privateState) => (
       privateState.hand.map((card: { id: string }) => card.id)
     ));
-    assert.strictEqual(allPrivateCardIds.length, 32);
-    assert.strictEqual(new Set(allPrivateCardIds).size, 32);
+    assert.strictEqual(allPrivateCardIds.length, 20);
+    assert.strictEqual(new Set(allPrivateCardIds).size, 20);
     const synchronizedState = serverRoom.state.toJSON();
     assert.ok(!Object.hasOwn(synchronizedState, "hand"));
     assert.ok(synchronizedState.seats.every(

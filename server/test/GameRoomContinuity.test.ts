@@ -246,7 +246,7 @@ describe("game room action continuity", () => {
       drainImmediateTasks(serverRoom);
       assert.strictEqual(serverRoom.state.phase, "claim_commit");
       assert.strictEqual(serverRoom.state.playEvents.length, 1);
-      assert.strictEqual(serverRoom.state.seats[actorSeatIndex].handCount, 8);
+      assert.strictEqual(serverRoom.state.seats[actorSeatIndex].handCount, 5);
     } else {
       const handled = serverRoom.waitForMessage("play_cards");
       host.send("play_cards", {
@@ -271,8 +271,8 @@ describe("game room action continuity", () => {
 
     const finished = serverRoom.state.toJSON();
     assert.strictEqual(finished.phase, "finished");
-    assert.strictEqual(finished.turnNumber, 6);
-    assert.strictEqual(finished.playEvents.length, 6);
+    assert.strictEqual(finished.turnNumber, 10);
+    assert.strictEqual(finished.playEvents.length, 10);
     assert.strictEqual(finished.finalResults.length, 4);
     assert.strictEqual(finished.finalEvents.length, 1);
     assert.ok(finished.winnerSeatIndexes.length >= 1);
@@ -281,7 +281,7 @@ describe("game room action continuity", () => {
     assert.strictEqual(finished.actionDeadlineAtUnixMs, 0);
     assert.deepStrictEqual(
       finished.seats.map((seat: { handCount: number }) => seat.handCount),
-      [8, 8, 8, 8],
+      [5, 5, 5, 5],
     );
 
     await host.leave();
@@ -319,7 +319,7 @@ describe("game room action continuity", () => {
     assert.strictEqual(privateState.participantId, sessionId);
     assert.strictEqual(privateState.seatIndex, seatIndex);
     assert.strictEqual(privateState.actionId, serverRoom.state.actionId);
-    assert.strictEqual(privateState.hand.length, 8);
+    assert.strictEqual(privateState.hand.length, 5);
     assert.deepStrictEqual(reconnected.state.toJSON(), serverRoom.state.toJSON());
     assert.strictEqual(serverRoom.clients.length, 4);
     assert.strictEqual(new Set(serverRoom.clients.map((client) => client.sessionId)).size, 4);

@@ -4,158 +4,52 @@ import { ColyseusTestServer } from "@colyseus/testing";
 import appConfig from "../src/app.config.js";
 import type { PhysicalCard } from "../src/match/cards.js";
 import { GameRoom } from "../src/rooms/GameRoom.js";
+import {
+  startActorPlay,
+  tickClock,
+} from "./gameRoomTestDriver.js";
 import { getTestServer } from "./testServer.js";
 
-interface PrivateMatchState {
+interface FinalPrivateMatchState {
   seatIndex: number;
   participantId: string;
   hand: PhysicalCard[];
-  claimCommitted: boolean;
-  claimCardId: string | null;
   finalCommitted: boolean;
   finalGroups: string[][];
   actionId: number;
 }
 
-interface UntypedMessageRoom {
-  onMessage(type: string, callback: (payload: unknown) => void): () => void;
+interface MessageParticipant {
+  waitForMessage(type: string, timeout?: number): Promise<unknown>;
 }
 
-function onRoomMessage(
-  participant: unknown,
-  type: string,
-  callback: (payload: unknown) => void,
-): () => void {
-  return (participant as UntypedMessageRoom).onMessage(type, callback);
-}
-
-function tickClock(serverRoom: GameRoom, elapsedMilliseconds: number): void {
-  serverRoom.clock.currentTime -= elapsedMilliseconds;
-  serverRoom.clock.tick();
-}
-
-async function waitUntil(condition: () => boolean, timeoutMilliseconds = 1000): Promise<void> {
-  const deadline = Date.now() + timeoutMilliseconds;
-  while (!condition()) {
-    if (Date.now() >= deadline) {
-      throw new Error("timed out waiting for synchronized room state");
-    }
-    await new Promise((resolve) => setTimeout(resolve, 10));
-  }
-}
-
-async function startFinalCommit(colyseus: ColyseusTestServer<typeof appConfig>) {
-  const host = await colyseus.sdk.create("game", {
-    nickname: "甲",
-    displayName: "最终结算测试",
-    deckMode: "one",
-    actionDeadlineSeconds: 15,
-  });
-  const participants = [
-    host,
-    await colyseus.sdk.joinById(host.roomId, { nickname: "乙" }),
-    await colyseus.sdk.joinById(host.roomId, { nickname: "丙" }),
-    await colyseus.sdk.joinById(host.roomId, { nickname: "丁" }),
-  ];
-  const serverRoom = colyseus.getRoomById<GameRoom>(host.roomId);
-  for (const participant of participants) {
-    const handled = serverRoom.waitForMessage("set_ready");
-    participant.send("set_ready", { ready: true });
-    await handled;
-  }
-  const openingStatePromises = participants.map((participant) => (
-    participant.waitForMessage("match_private_state", 2000) as Promise<PrivateMatchState>
-  ));
-  const startHandled = serverRoom.waitForMessage("start");
-  host.send("start", null);
-  await startHandled;
-  tickClock(serverRoom, 900);
-  let privateStates = await Promise.all(openingStatePromises);
-  assert.strictEqual(serverRoom.state.phase, "actor_play");
-
-  for (let turn = 0; turn < 6; turn += 1) {
-    const actorSeatIndex = serverRoom.state.actorSeatIndex;
-    const playUpdates = participants.map((participant) => participant.waitForMessage(
+async function waitForFinalPrivateState(
+  participant: MessageParticipant,
+): Promise<FinalPrivateMatchState> {
+  for (let attempt = 0; attempt < 30; attempt += 1) {
+    const privateState = await participant.waitForMessage(
       "match_private_state",
       1000,
-    ) as Promise<PrivateMatchState>);
-    let handled = serverRoom.waitForMessage("play_cards");
-    participants[actorSeatIndex].send("play_cards", {
-      cardIds: privateStates[actorSeatIndex].hand.slice(0, 3).map((card) => card.id),
-      actionId: serverRoom.state.actionId,
-    });
-    const [, ...updatedPrivateStates] = await Promise.all([handled, ...playUpdates]);
-    privateStates = updatedPrivateStates;
-
-    const claimantSeats = participants
-      .map((_, seatIndex) => seatIndex)
-      .filter((seatIndex) => seatIndex !== actorSeatIndex);
-    for (let claimantIndex = 0; claimantIndex < claimantSeats.length; claimantIndex += 1) {
-      const seatIndex = claimantSeats[claimantIndex];
-      const privateUpdates = claimantIndex === claimantSeats.length - 1
-        ? participants.map((participant) => (
-          participant.waitForMessage("match_private_state", 1000) as Promise<PrivateMatchState>
-        ))
-        : [participants[seatIndex].waitForMessage(
-          "match_private_state",
-          1000,
-        ) as Promise<PrivateMatchState>];
-      handled = serverRoom.waitForMessage("claim");
-      participants[seatIndex].send("claim", {
-        cardId: null,
-        actionId: serverRoom.state.actionId,
-      });
-      await handled;
-      const updates = await Promise.all(privateUpdates);
-      if (claimantIndex === claimantSeats.length - 1) {
-        privateStates = updates;
-      } else {
-        privateStates[seatIndex] = updates[0];
-      }
+    ) as FinalPrivateMatchState;
+    if (privateState.finalCommitted) {
+      return privateState;
     }
-    assert.strictEqual(serverRoom.state.phase, "claim_reveal");
-
-    const turnBoundaryStates = participants.map((participant) => (
-      participant.waitForMessage("match_private_state", 1000) as Promise<PrivateMatchState>
-    ));
-    tickClock(serverRoom, 900);
-    privateStates = await Promise.all(turnBoundaryStates);
   }
-
-  assert.strictEqual(serverRoom.state.phase, "final_commit");
-  assert.strictEqual(serverRoom.state.actorSeatIndex, -1);
-  await Promise.all(participants.map((participant) => waitUntil(() => (
-    participant.state.phase === "final_commit"
-    && participant.state.actorSeatIndex === -1
-  ))));
-  assert.strictEqual(serverRoom.state.sealedCardCount, 2);
-  return { participants, serverRoom, privateStates };
+  throw new Error("final private state was not received");
 }
 
-function firstLegalGroups(privateState: PrivateMatchState): string[][] {
-  const ids = privateState.hand.map((card) => card.id);
-  return [ids.slice(0, 3), ids.slice(3, 6)];
-}
-
-async function expectFinalSelectionError(
-  serverRoom: GameRoom,
-  participant: Awaited<ReturnType<typeof startFinalCommit>>["participants"][number],
-  payload: unknown,
-  expectedCode: string,
-): Promise<void> {
-  const before = serverRoom.state.toJSON();
-  const handled = serverRoom.waitForMessage("final_selection");
-  const rejected = participant.waitForMessage("room_error", 1000);
-  participant.send("final_selection", isRecordPayload(payload)
-    ? { ...payload, actionId: serverRoom.state.actionId }
-    : payload);
-  const [, error] = await Promise.all([handled, rejected]);
-  assert.strictEqual(error.code, expectedCode);
-  assert.deepStrictEqual(serverRoom.state.toJSON(), before);
-}
-
-function isRecordPayload(payload: unknown): payload is Record<string, unknown> {
-  return typeof payload === "object" && payload !== null && !Array.isArray(payload);
+function advanceToLastClaimReveal(serverRoom: GameRoom): void {
+  for (let step = 0; step < 80; step += 1) {
+    if (serverRoom.state.phase === "claim_reveal" && serverRoom.state.turnNumber === 10) {
+      return;
+    }
+    if (serverRoom.state.phase === "claim_reveal") {
+      tickClock(serverRoom, 900);
+    } else {
+      tickClock(serverRoom, serverRoom.state.actionDeadlineSeconds * 1000);
+    }
+  }
+  throw new Error("match did not reach the final claim reveal");
 }
 
 describe("game room final settlement", () => {
@@ -167,120 +61,80 @@ describe("game room final settlement", () => {
     await colyseus.cleanup();
   });
 
-  it("validates manual messages atomically and acknowledges a commit only to its owner", async () => {
-    const { participants, serverRoom, privateStates } = await startFinalCommit(colyseus);
-    const groups = firstLegalGroups(privateStates[0]);
+  it("automatically reveals one best group for every player with no commit wait", async () => {
+    const { participants, serverRoom } = await startActorPlay(colyseus);
+    advanceToLastClaimReveal(serverRoom);
 
-    await expectFinalSelectionError(serverRoom, participants[0], null, "invalid_payload");
-    await expectFinalSelectionError(
-      serverRoom,
-      participants[0],
-      { mode: "manual", groups: [groups[0]] },
-      "invalid_payload",
+    const before = serverRoom.state.toJSON();
+    assert.strictEqual(before.phase, "claim_reveal");
+    assert.strictEqual(before.turnNumber, 10);
+    assert.strictEqual(before.finalResults.length, 0);
+    assert.deepStrictEqual(
+      before.seats.map((seat: { handCount: number }) => seat.handCount),
+      [5, 5, 5, 5],
     );
-    await expectFinalSelectionError(
-      serverRoom,
-      participants[0],
-      { mode: "manual", groups: [groups[0], [groups[0][0], ...groups[1].slice(1)]] },
-      "invalid_final_selection",
-    );
+    const finalPrivateMessages = participants.map((participant) => (
+      waitForFinalPrivateState(participant)
+    ));
 
-    const publicBefore = serverRoom.state.toJSON();
-    const privateMessages = participants.map((): PrivateMatchState[] => []);
-    const publicStateChanges = participants.map(() => 0);
-    participants.forEach((participant, seatIndex) => {
-      onRoomMessage(participant, "match_private_state", (payload) => {
-        privateMessages[seatIndex].push(payload as PrivateMatchState);
-      });
-      participant.onStateChange(() => {
-        publicStateChanges[seatIndex] += 1;
-      });
-    });
-    await new Promise((resolve) => setTimeout(resolve, 50));
-    publicStateChanges.fill(0);
-    const acknowledged = participants[0].waitForMessage(
-      "match_private_state",
-      1000,
-    ) as Promise<PrivateMatchState>;
-    const handled = serverRoom.waitForMessage("final_selection");
-    participants[0].send("final_selection", {
-      mode: "manual",
-      groups,
-      actionId: serverRoom.state.actionId,
-    });
-    const [, privateState] = await Promise.all([handled, acknowledged]);
-    await new Promise((resolve) => setTimeout(resolve, 50));
-
-    assert.deepStrictEqual(serverRoom.state.toJSON(), publicBefore);
-    assert.strictEqual(privateState.finalCommitted, true);
-    assert.strictEqual(privateState.finalGroups.length, 2);
-    assert.deepStrictEqual(privateMessages.map((messages) => messages.length), [1, 0, 0, 0]);
-    assert.deepStrictEqual(publicStateChanges, [0, 0, 0, 0]);
-    assert.ok(!Object.hasOwn(serverRoom.state.toJSON(), "finalCommitCount"));
-    assert.ok(!Object.hasOwn(serverRoom.state.toJSON(), "finalGroups"));
-    await expectFinalSelectionError(
-      serverRoom,
-      participants[0],
-      { mode: "best" },
-      "final_selection_already_committed",
+    tickClock(serverRoom, 900);
+    const revealed = serverRoom.state.toJSON();
+    const privateStates = await Promise.all(finalPrivateMessages);
+    assert.strictEqual(revealed.phase, "final_reveal");
+    assert.strictEqual(revealed.actorSeatIndex, -1);
+    assert.strictEqual(revealed.actionDeadlineAtUnixMs, 0);
+    assert.strictEqual(revealed.drawPileCount, 0);
+    assert.strictEqual(revealed.sealedCardCount, 2);
+    assert.strictEqual(revealed.finalResults.length, 4);
+    assert.ok(revealed.finalResults.every((result: { groups: unknown[] }) => (
+      result.groups.length === 1
+    )));
+    assert.deepStrictEqual(revealed.finalEvents, [{
+      results: revealed.finalResults,
+      winnerSeatIndexes: revealed.winnerSeatIndexes,
+    }]);
+    assert.ok(revealed.winnerSeatIndexes.length >= 1);
+    assert.deepStrictEqual(privateStates.map((privateState) => ({
+      handCount: privateState.hand.length,
+      finalCommitted: privateState.finalCommitted,
+      finalGroupCount: privateState.finalGroups.length,
+    })), Array.from({ length: 4 }, () => ({
+      handCount: 5,
+      finalCommitted: true,
+      finalGroupCount: 1,
+    })));
+    assert.deepStrictEqual(
+      revealed.seats.map((seat: { score: number }, seatIndex: number) => (
+        seat.score - before.seats[seatIndex].score
+      )),
+      revealed.finalResults.map((result: { totalScore: number }) => result.totalScore),
     );
 
     await Promise.all(participants.map((participant) => participant.leave()));
   });
 
-  it("reveals the fourth commit to everyone then finishes after the display interval", async () => {
-    const { participants, serverRoom } = await startFinalCommit(colyseus);
-    for (let seatIndex = 0; seatIndex < 3; seatIndex += 1) {
-      const acknowledged = participants[seatIndex].waitForMessage(
-        "match_private_state",
-        1000,
-      );
-      const handled = serverRoom.waitForMessage("final_selection");
-      participants[seatIndex].send("final_selection", {
-        mode: "best",
-        actionId: serverRoom.state.actionId,
-      });
-      await Promise.all([handled, acknowledged]);
-      assert.strictEqual(serverRoom.state.phase, "final_commit");
-      assert.strictEqual(serverRoom.state.finalResults.length, 0);
-    }
-
-    const revealMessages = participants.map((participant) => (
-      participant.waitForMessage("match_private_state", 1000) as Promise<PrivateMatchState>
-    ));
-    const handled = serverRoom.waitForMessage("final_selection");
-    participants[3].send("final_selection", {
-      mode: "best",
-      actionId: serverRoom.state.actionId,
-    });
-    await Promise.all([handled, ...revealMessages]);
-
+  it("finishes after the reveal interval without adding final scores twice", async () => {
+    const { participants, serverRoom } = await startActorPlay(colyseus);
+    advanceToLastClaimReveal(serverRoom);
+    tickClock(serverRoom, 900);
     const revealed = serverRoom.state.toJSON();
-    assert.strictEqual(revealed.phase, "final_reveal");
-    assert.strictEqual(revealed.actorSeatIndex, -1);
-    assert.strictEqual(revealed.finalResults.length, 4);
-    assert.ok(revealed.finalResults.every((result: { groups: unknown[] }) => result.groups.length === 2));
-    assert.ok(revealed.winnerSeatIndexes.length >= 1);
-    assert.deepStrictEqual(revealed.finalEvents, [{
-      results: revealed.finalResults,
-      winnerSeatIndexes: revealed.winnerSeatIndexes,
-    }]);
-    await expectFinalSelectionError(
-      serverRoom,
-      participants[3],
-      { mode: "best" },
-      "invalid_phase",
-    );
-
     const finishedMessages = participants.map((participant) => (
       participant.waitForMessage("match_private_state", 1000)
     ));
+
     tickClock(serverRoom, 900);
     await Promise.all(finishedMessages);
-    assert.strictEqual(serverRoom.state.phase, "finished");
-    assert.strictEqual(serverRoom.state.actorSeatIndex, -1);
-    assert.deepStrictEqual(serverRoom.state.toJSON().finalResults, revealed.finalResults);
-    assert.deepStrictEqual(serverRoom.state.toJSON().winnerSeatIndexes, revealed.winnerSeatIndexes);
+
+    const finished = serverRoom.state.toJSON();
+    assert.strictEqual(finished.phase, "finished");
+    assert.strictEqual(finished.actorSeatIndex, -1);
+    assert.strictEqual(finished.finalEvents.length, 1);
+    assert.deepStrictEqual(finished.finalResults, revealed.finalResults);
+    assert.deepStrictEqual(finished.winnerSeatIndexes, revealed.winnerSeatIndexes);
+    assert.deepStrictEqual(
+      finished.seats.map((seat: { score: number }) => seat.score),
+      revealed.seats.map((seat: { score: number }) => seat.score),
+    );
 
     await Promise.all(participants.map((participant) => participant.leave()));
   });

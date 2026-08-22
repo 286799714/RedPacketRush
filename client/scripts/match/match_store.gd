@@ -38,11 +38,17 @@ var _final_results: Array[Dictionary] = []
 var _winner_seat_indexes: Array[int] = []
 var _final_events: Array[Dictionary] = []
 var _local_hand: Array[Dictionary] = []
+var _acquired_card_ids: Array[String] = []
 var _final_groups: Array = []
 var _activated := false
 var _private_action_id := -1
 var _public_action_snapshot_fresh := false
 var _private_action_snapshot_fresh := false
+var _pending_added_card_ids: Array[String] = []
+var _pending_acquisition_context: Dictionary = {}
+var _known_acquisition_event_keys: Dictionary = {}
+var _has_hand_baseline := false
+var _has_public_event_baseline := false
 
 
 func _init(adapter: Object) -> void:
@@ -102,6 +108,10 @@ func get_local_hand() -> Array[Dictionary]:
 	return _duplicate_dictionary_array(_local_hand)
 
 
+func get_acquired_card_ids() -> Array[String]:
+	return _acquired_card_ids.duplicate()
+
+
 func get_final_groups() -> Array:
 	return _final_groups.duplicate(true)
 
@@ -153,8 +163,18 @@ func submit_best_final_selection() -> void:
 
 
 func _on_game_room_state_changed(snapshot: Dictionary) -> void:
-	room_id = str(snapshot.get("room_id", ""))
-	local_participant_id = str(snapshot.get("local_participant_id", ""))
+	var next_room_id := str(snapshot.get("room_id", ""))
+	var next_local_participant_id := str(snapshot.get("local_participant_id", ""))
+	if (
+		(not room_id.is_empty() and next_room_id != room_id)
+		or (
+			not local_participant_id.is_empty()
+			and next_local_participant_id != local_participant_id
+		)
+	):
+		_reset_acquisition_tracking()
+	room_id = next_room_id
+	local_participant_id = next_local_participant_id
 	status = str(snapshot.get("status", ""))
 	deck_mode = str(snapshot.get("deck_mode", "one"))
 	phase = str(snapshot.get("phase", ""))
@@ -245,6 +265,9 @@ func _on_game_room_state_changed(snapshot: Dictionary) -> void:
 			if raw_event is Dictionary:
 				_final_events.append(raw_event.duplicate(true))
 
+	_observe_public_acquisition_events()
+	_try_resolve_acquisition_highlight()
+
 	state_changed.emit()
 	if status == "started" and not _activated:
 		_activated = true
@@ -260,10 +283,30 @@ func _on_match_private_state_changed(snapshot: Dictionary) -> void:
 	if not raw_hand is Array:
 		return
 
-	_local_hand.clear()
+	var next_hand: Array[Dictionary] = []
 	for raw_card: Variant in raw_hand:
 		if raw_card is Dictionary:
-			_local_hand.append(raw_card.duplicate(true))
+			next_hand.append(raw_card.duplicate(true))
+	var next_hand_ids := _card_id_set(next_hand)
+	if not _has_hand_baseline:
+		_has_hand_baseline = true
+		_pending_added_card_ids.clear()
+		_acquired_card_ids.clear()
+	else:
+		var previous_hand_ids := _card_id_set(_local_hand)
+		var newly_added_card_ids: Array[String] = []
+		for card in next_hand:
+			var card_id := str(card.get("id", ""))
+			if not card_id.is_empty() and not previous_hand_ids.has(card_id):
+				newly_added_card_ids.append(card_id)
+		if not newly_added_card_ids.is_empty():
+			_pending_added_card_ids = newly_added_card_ids
+	_local_hand = next_hand
+	_acquired_card_ids = _filter_card_ids_in_hand(_acquired_card_ids, next_hand_ids)
+	_pending_added_card_ids = _filter_card_ids_in_hand(
+		_pending_added_card_ids,
+		next_hand_ids
+	)
 	claim_committed = bool(snapshot.get("claim_committed", false))
 	claim_card_id = snapshot.get("claim_card_id", null)
 	final_committed = bool(snapshot.get("final_committed", false))
@@ -273,7 +316,148 @@ func _on_match_private_state_changed(snapshot: Dictionary) -> void:
 	var raw_final_groups: Variant = snapshot.get("final_groups", [])
 	if raw_final_groups is Array:
 		_final_groups = raw_final_groups.duplicate(true)
+	_try_resolve_acquisition_highlight()
 	private_state_changed.emit()
+
+
+func _observe_public_acquisition_events() -> void:
+	var local_seat_index := _local_seat_index()
+	if local_seat_index < 0:
+		return
+	var newest_context: Dictionary = {}
+	for event in _play_events:
+		if int(event.get("actor_seat_index", -1)) != local_seat_index:
+			continue
+		var event_key := _play_acquisition_event_key(event)
+		if event_key.is_empty() or _known_acquisition_event_keys.has(event_key):
+			continue
+		_known_acquisition_event_keys[event_key] = true
+		var candidate := {
+			"type": "draw",
+			"turn_number": int(event.get("turn_number", 0)),
+			"event_key": event_key,
+		}
+		if _is_newer_acquisition_context(candidate, newest_context):
+			newest_context = candidate
+	for event in _claim_events:
+		var turn := int(event.get("turn_number", 0))
+		var raw_awards: Variant = event.get("awards", [])
+		if not raw_awards is Array:
+			continue
+		for raw_award: Variant in raw_awards:
+			if (
+				not raw_award is Dictionary
+				or int(raw_award.get("seat_index", -1)) != local_seat_index
+			):
+				continue
+			var raw_card: Variant = raw_award.get("card", {})
+			if not raw_card is Dictionary:
+				continue
+			var card_id := str(raw_card.get("id", ""))
+			if card_id.is_empty():
+				continue
+			var event_key := "award:%d:%d:%s" % [turn, local_seat_index, card_id]
+			if _known_acquisition_event_keys.has(event_key):
+				continue
+			_known_acquisition_event_keys[event_key] = true
+			var candidate := {
+				"type": "award",
+				"turn_number": turn,
+				"card_id": card_id,
+				"event_key": event_key,
+			}
+			if _is_newer_acquisition_context(candidate, newest_context):
+				newest_context = candidate
+
+	if not _has_public_event_baseline:
+		_has_public_event_baseline = true
+		return
+	if not newest_context.is_empty():
+		_pending_acquisition_context = newest_context
+
+
+func _try_resolve_acquisition_highlight() -> void:
+	if _pending_acquisition_context.is_empty() or _pending_added_card_ids.is_empty():
+		return
+	var context_type := str(_pending_acquisition_context.get("type", ""))
+	if context_type == "award":
+		var awarded_card_id := str(_pending_acquisition_context.get("card_id", ""))
+		if not _pending_added_card_ids.has(awarded_card_id):
+			return
+		_acquired_card_ids.clear()
+		_acquired_card_ids.append(awarded_card_id)
+	elif context_type == "draw":
+		if _pending_added_card_ids.size() != 3:
+			return
+		_acquired_card_ids = _pending_added_card_ids.duplicate()
+	else:
+		return
+	_pending_added_card_ids.clear()
+	_pending_acquisition_context.clear()
+
+
+func _play_acquisition_event_key(event: Dictionary) -> String:
+	var raw_cards: Variant = event.get("cards", [])
+	if not raw_cards is Array:
+		return ""
+	var played_card_ids: Array[String] = []
+	for raw_card: Variant in raw_cards:
+		if raw_card is Dictionary:
+			var card_id := str(raw_card.get("id", ""))
+			if not card_id.is_empty():
+				played_card_ids.append(card_id)
+	played_card_ids.sort()
+	return "draw:%d:%d:%s" % [
+		int(event.get("turn_number", 0)),
+		int(event.get("actor_seat_index", -1)),
+		",".join(played_card_ids),
+	]
+
+
+func _is_newer_acquisition_context(candidate: Dictionary, current: Dictionary) -> bool:
+	if current.is_empty():
+		return true
+	var candidate_turn := int(candidate.get("turn_number", 0))
+	var current_turn := int(current.get("turn_number", 0))
+	if candidate_turn != current_turn:
+		return candidate_turn > current_turn
+	return (
+		str(candidate.get("type", "")) == "award"
+		and str(current.get("type", "")) != "award"
+	)
+
+
+func _local_seat_index() -> int:
+	for participant in _participants:
+		if str(participant.get("participant_id", "")) == local_participant_id:
+			return int(participant.get("seat_index", -1))
+	return -1
+
+
+func _card_id_set(cards: Array[Dictionary]) -> Dictionary:
+	var result := {}
+	for card in cards:
+		var card_id := str(card.get("id", ""))
+		if not card_id.is_empty():
+			result[card_id] = true
+	return result
+
+
+func _filter_card_ids_in_hand(card_ids: Array[String], hand_ids: Dictionary) -> Array[String]:
+	var result: Array[String] = []
+	for card_id in card_ids:
+		if hand_ids.has(card_id):
+			result.append(card_id)
+	return result
+
+
+func _reset_acquisition_tracking() -> void:
+	_acquired_card_ids.clear()
+	_pending_added_card_ids.clear()
+	_pending_acquisition_context.clear()
+	_known_acquisition_event_keys.clear()
+	_has_hand_baseline = false
+	_has_public_event_baseline = false
 
 
 func _on_room_action_failed(code: String, message: String) -> void:
@@ -285,6 +469,7 @@ func _on_game_room_connection_changed(state: String, detail: String) -> void:
 	if state != "connected":
 		_public_action_snapshot_fresh = false
 		_private_action_snapshot_fresh = false
+		_reset_acquisition_tracking()
 	connection_changed.emit(state, detail)
 
 
@@ -296,6 +481,7 @@ func _on_game_room_joined(_joined_room_id: String) -> void:
 	_private_action_id = -1
 	_public_action_snapshot_fresh = false
 	_private_action_snapshot_fresh = false
+	_reset_acquisition_tracking()
 	state_changed.emit()
 
 
@@ -331,6 +517,7 @@ func _on_game_room_left(code: int, reason: String) -> void:
 	_winner_seat_indexes.clear()
 	_final_events.clear()
 	_local_hand.clear()
+	_reset_acquisition_tracking()
 	_final_groups.clear()
 	_activated = false
 	state_changed.emit()

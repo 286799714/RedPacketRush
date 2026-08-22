@@ -612,7 +612,7 @@ describe("four-participant room readiness", () => {
     handled = serverRoom.waitForMessage("start");
     host.send("start", null);
     await handled;
-    assert.strictEqual((await privateStateReceived).hand.length, 8);
+    assert.strictEqual((await privateStateReceived).hand.length, 5);
 
     assert.strictEqual(serverRoom.state.status, "started");
     assert.strictEqual(serverRoom.metadata.status, "started");

@@ -64,8 +64,15 @@ func _on_match_activated() -> void:
 		_room_screen = null
 	_match_screen = MatchScene.instantiate()
 	_match_screen.set_match_store(_match_store)
+	_match_screen.return_to_lobby_requested.connect(_on_match_return_to_lobby_requested)
 	add_child(_match_screen)
 	_current_surface = "match"
+
+
+func _on_match_return_to_lobby_requested() -> void:
+	if _current_surface != "match" or _adapter == null:
+		return
+	_adapter.leave_game_room()
 
 
 func _on_game_room_left(_code: int, _reason: String) -> void:
