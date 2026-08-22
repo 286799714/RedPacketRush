@@ -1,6 +1,6 @@
 # Five-card Hand and Match UX
 
-**Status:** ready-for-agent
+**Status:** done
 
 ## Problem Statement
 
@@ -101,3 +101,9 @@ The current match deals eight cards, requires two disjoint three-card groups at 
 - Adding server round trips for each hint or preview update.
 - Persisting blue highlight state across leaving a room or restarting the client.
 - Redesigning the lobby or the rest of the match table beyond the controls required here.
+
+## Delivery
+
+- Implemented in `93d5479` (`feat: 完成五张手牌与自动终局`).
+- Verified with Node.js 24.19, Godot 4.7.1, the full repository suite, the 16-state delivery matrix, and the four-client Native SDK smoke test.
+- Independent Spec/Standards review found no blocking or high-severity issues. Its selection-refresh finding was repaired and re-reviewed before delivery.
