@@ -42,7 +42,12 @@
 ## Commits
 
 - `52d8110` — `feat: 完善回合公示与真实牌面`
+- `c584dc9` — `fix: 调整牌桌公示位置与牌面尺寸`
 
 ## Comments
 
 - The previous five-card UX spec explicitly kept protected awards out of scope; this newer feature changes that rule intentionally.
+- Follow-up clarification: “玩家前面” is the inward table area between each player information box and the table center, not an overlay on the information box. Public play, award, and discard panels now use that radial placement.
+- Follow-up TDD first failed on information-box overlap, distance from center, center-prompt overlap, undersized public cards, and card-face padding. The layout and card rendering were then revised until all geometry assertions passed.
+- Follow-up visual review covered `play_reveal`, `claim_reveal`, `award_discard`, and `discard_reveal` at 960×540 and 1280×720. Card faces are readable, touch their thin presentation outlines, and do not overlap player information or the compact discard prompt.
+- Follow-up full verification passed: Node.js 24.19, 128 server tests, TypeScript build, Godot parse, 9 headless runners, and 18 delivery scenarios.
