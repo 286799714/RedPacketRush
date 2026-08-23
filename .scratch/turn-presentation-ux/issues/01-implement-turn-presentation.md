@@ -1,6 +1,6 @@
 # 01 - Implement turn presentation and card-face UX
 
-**Status:** claimed
+**Status:** done
 
 - [x] Remove awarded-card discard protection from authoritative rules and bot policy.
 - [x] Add server-owned play and discard presentation phases with 3s/4s/2s timing.
@@ -10,7 +10,7 @@
 - [x] Extend rule, room, store, screen, and delivery-capture tests.
 - [x] Update domain and operator documentation.
 - [x] Complete Standards review, Spec review, and full verification.
-- [ ] Commit the completed implementation.
+- [x] Commit the completed implementation.
 
 ## TDD slices
 
@@ -38,6 +38,10 @@
 - `scripts/verify.ps1 -SkipInstall`: Node.js 24.19, 128 server tests, TypeScript build, Godot parse, 9 headless runners, and 18 delivery scenarios passed.
 - GPU delivery capture produced 18 nonblank scenarios at both 960×540 and 1280×720; the four turn-presentation states were visually inspected after the overlap repair.
 - `git diff --check`: passed (line-ending conversion notices only).
+
+## Commits
+
+- `52d8110` — `feat: 完善回合公示与真实牌面`
 
 ## Comments
 
