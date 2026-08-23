@@ -1,6 +1,6 @@
 # Red Packet Rush
 
-Red Packet Rush 是一个固定四人参加的中文纸牌对战原型：玩家在大厅发现房间，在等待房间配置一副或两副牌，随后进行点数抢先、三牌出牌、暗抢、获牌弃牌和最终结算。Colyseus 服务端是唯一规则权威，Godot 客户端只呈现公开状态并提交意图。
+Red Packet Rush 是一个固定四人参加的中文纸牌对战原型：玩家在大厅发现房间，在等待房间配置一副或两副牌，随后进行点数抢先、三牌出牌、暗抢、获牌弃牌和最终结算。Colyseus 服务端是唯一规则权威，Godot 客户端只呈现公开状态并提交意图。牌桌使用 CC0 传统扑克牌面，并在玩家席位区域依次公示出牌、抢牌所得和弃牌。
 
 > **运行前请先读**：本交付已验证 Windows x86_64 desktop 和 Android arm64 调试包。需要 Node.js 22+、Godot 4.7.1 stable（64 位、单精度）和仓库内锁定的 Colyseus Native SDK `godot-v0.17.11`。项目使用 GDScript，不要求 Mono；不要用 Godot 双精度构建，也不要用未锁定的 SDK `main`。
 
@@ -98,12 +98,12 @@ npm --prefix .\server ci
 | --- | --- |
 | 大厅 | 连接状态、可加入房间和创建入口 |
 | 等待房间 | 四个席位、准备状态、房主设置和机器人填充 |
-| 牌局 | 点数抢先、当前行动者、牌堆/分数/事件、排序后的五张手牌、提示与出牌得分 |
-| 抢牌与弃牌 | 私有选择确认、同步揭晓、获牌后的弃牌 |
+| 牌局 | 点数抢先、当前行动者、牌堆/分数/事件、排序后的五张真实牌面、提示与出牌得分；出牌后公示三秒再开放抢牌 |
+| 抢牌与弃牌 | 私有选择确认、四秒同步揭晓、席位前蓝框显示抢牌所得；获牌者可弃任意一张牌，全部弃完后公示两秒 |
 | 最终结算 | 五张中自动选择的最高分三牌组合、排名、并列胜者和返回大厅入口 |
 
 ## 原型限制
 
 本项目不包含账号、持久化、密码房、好友/聊天、观战、晚加入、Android 正式签名、主机/Web 正式导出、可验证生产随机数或生产级反作弊。Playground 和 Monitor 只为本地开发开放；部署时应关闭它们、启用认证与 TLS，并重新评估 Native SDK beta 的平台兼容性。
 
-服务端的详细命令、房间设置和目录边界见 [`server/README.md`](server/README.md)；规则词汇和设计取舍见 [`CONTEXT.md`](CONTEXT.md)、[`docs/adr/0001-use-colyseus-native-sdk-with-gdscript.md`](docs/adr/0001-use-colyseus-native-sdk-with-gdscript.md) 和 [`docs/research/godot-colyseus-integration.md`](docs/research/godot-colyseus-integration.md)。
+服务端的详细命令、房间设置和目录边界见 [`server/README.md`](server/README.md)；扑克牌素材来源与 CC0 授权见 [`client/assets/cards/ATTRIBUTION.md`](client/assets/cards/ATTRIBUTION.md)；规则词汇和设计取舍见 [`CONTEXT.md`](CONTEXT.md)、[`docs/adr/0001-use-colyseus-native-sdk-with-gdscript.md`](docs/adr/0001-use-colyseus-native-sdk-with-gdscript.md) 和 [`docs/research/godot-colyseus-integration.md`](docs/research/godot-colyseus-integration.md)。

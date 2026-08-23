@@ -73,6 +73,8 @@ async function enterClaimCommit(
     actionId: serverRoom.state.actionId,
   });
   await handled;
+  assert.strictEqual(serverRoom.state.phase, "play_reveal");
+  tickClock(serverRoom, 3_000);
   assert.strictEqual(serverRoom.state.phase, "claim_commit");
 }
 
@@ -96,15 +98,19 @@ async function enterSingleAwardDiscard(
     await handled;
   }
   assert.strictEqual(serverRoom.state.phase, "claim_reveal");
-  tickClock(serverRoom, 900);
+  tickClock(serverRoom, 4_000);
   assert.strictEqual(serverRoom.state.phase, "award_discard");
   return awardedSeatIndex;
 }
 
 function advanceToFinalReveal(serverRoom: GameRoom): void {
   for (let step = 0; step < 80 && serverRoom.state.phase !== "final_reveal"; step += 1) {
-    if (serverRoom.state.phase === "claim_reveal") {
-      tickClock(serverRoom, 900);
+    if (serverRoom.state.phase === "play_reveal") {
+      tickClock(serverRoom, 3_000);
+    } else if (serverRoom.state.phase === "claim_reveal") {
+      tickClock(serverRoom, 4_000);
+    } else if (serverRoom.state.phase === "discard_reveal") {
+      tickClock(serverRoom, 2_000);
     } else {
       tickClock(serverRoom, serverRoom.state.actionDeadlineSeconds * 1000);
     }
@@ -158,7 +164,7 @@ describe("game room reconnect and timeout races", () => {
     await handled;
     tickClock(serverRoom, 1_000);
 
-    assert.strictEqual(serverRoom.state.phase, "claim_commit");
+    assert.strictEqual(serverRoom.state.phase, "play_reveal");
     assert.strictEqual(serverRoom.state.playEvents.length, 1);
     await expectStaleAction(serverRoom, reconnected, "play_cards", { cardIds, actionId });
     await leaveParticipants(participants, seatIndex, reconnected);
@@ -210,7 +216,7 @@ describe("game room reconnect and timeout races", () => {
     await handled;
     tickClock(serverRoom, 1_000);
 
-    assert.strictEqual(serverRoom.state.phase, "actor_play");
+    assert.strictEqual(serverRoom.state.phase, "discard_reveal");
     assert.strictEqual(serverRoom.state.discardEvents.length, 1);
     assert.strictEqual(serverRoom.state.seats[seatIndex].handCount, 5);
     assert.strictEqual(serverRoom.state.pendingDiscardSeatIndexes.length, 0);
@@ -251,7 +257,7 @@ describe("game room reconnect and timeout races", () => {
       seatIndex,
     );
 
-    assert.strictEqual(serverRoom.state.phase, "claim_commit");
+    assert.strictEqual(serverRoom.state.phase, "play_reveal");
     assert.strictEqual(serverRoom.state.playEvents.length, 1);
     const actionId = serverRoom.state.actionId;
     drainImmediateTasks(serverRoom);
@@ -306,9 +312,7 @@ describe("game room reconnect and timeout races", () => {
       seatIndex,
     );
 
-    assert.ok(
-      serverRoom.state.phase === "actor_play" || serverRoom.state.phase === "claim_commit",
-    );
+    assert.strictEqual(serverRoom.state.phase, "discard_reveal");
     assert.strictEqual(serverRoom.state.discardEvents.length, 1);
     assert.strictEqual(serverRoom.state.seats[seatIndex].handCount, 5);
     assert.strictEqual(serverRoom.state.pendingDiscardSeatIndexes.length, 0);

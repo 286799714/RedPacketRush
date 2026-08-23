@@ -59,10 +59,15 @@ function advanceCurrentPhase(serverRoom: GameRoom): void {
   }
   if (
     serverRoom.state.phase === "point_contest"
-    || serverRoom.state.phase === "claim_reveal"
     || serverRoom.state.phase === "final_reveal"
   ) {
     tickClock(serverRoom, 900);
+  } else if (serverRoom.state.phase === "play_reveal") {
+    tickClock(serverRoom, 3_000);
+  } else if (serverRoom.state.phase === "claim_reveal") {
+    tickClock(serverRoom, 4_000);
+  } else if (serverRoom.state.phase === "discard_reveal") {
+    tickClock(serverRoom, 2_000);
   } else {
     tickClock(serverRoom, serverRoom.state.actionDeadlineSeconds * 1000);
   }
@@ -149,6 +154,8 @@ describe("game room action continuity", () => {
       actionId: serverRoom.state.actionId,
     });
     await Promise.all([handled, ...playUpdates]);
+    assert.strictEqual(serverRoom.state.phase, "play_reveal");
+    tickClock(serverRoom, 3_000);
     assert.strictEqual(serverRoom.state.phase, "claim_commit");
     const claimActionId = serverRoom.state.actionId;
     const claimDeadline = serverRoom.state.actionDeadlineAtUnixMs;
@@ -194,7 +201,7 @@ describe("game room action continuity", () => {
     await handled;
     const snapshots = await Promise.all(updates);
 
-    assert.strictEqual(serverRoom.state.phase, "claim_commit");
+    assert.strictEqual(serverRoom.state.phase, "play_reveal");
     assert.ok(snapshots.every((snapshot) => snapshot.actionId === serverRoom.state.actionId));
     assert.deepStrictEqual(
       snapshots.map((snapshot) => snapshot.participantId),
@@ -226,7 +233,7 @@ describe("game room action continuity", () => {
     drainImmediateTasks(serverRoom);
     const snapshots = await Promise.all(updates);
 
-    assert.strictEqual(serverRoom.state.phase, "claim_commit");
+    assert.strictEqual(serverRoom.state.phase, "play_reveal");
     assert.ok(snapshots.every((snapshot) => snapshot.actionId === serverRoom.state.actionId));
     assert.deepStrictEqual(
       snapshots.map((snapshot) => snapshot.participantId),
@@ -244,7 +251,7 @@ describe("game room action continuity", () => {
 
     if (actorIsBot) {
       drainImmediateTasks(serverRoom);
-      assert.strictEqual(serverRoom.state.phase, "claim_commit");
+      assert.strictEqual(serverRoom.state.phase, "play_reveal");
       assert.strictEqual(serverRoom.state.playEvents.length, 1);
       assert.strictEqual(serverRoom.state.seats[actorSeatIndex].handCount, 5);
     } else {
@@ -254,6 +261,8 @@ describe("game room action continuity", () => {
         actionId: serverRoom.state.actionId,
       });
       await handled;
+      assert.strictEqual(serverRoom.state.phase, "play_reveal");
+      tickClock(serverRoom, 3_000);
       drainImmediateTasks(serverRoom);
       assert.strictEqual(serverRoom.state.phase, "claim_reveal");
       assert.strictEqual(serverRoom.state.revealedClaims.length, 3);
@@ -352,6 +361,8 @@ describe("game room action continuity", () => {
     assert.strictEqual(takenOverSeat.participantId, sessionId);
     assert.strictEqual(takenOverSeat.connected, false);
     assert.strictEqual(takenOverSeat.ready, true);
+    assert.strictEqual(serverRoom.state.phase, "play_reveal");
+    tickClock(serverRoom, 3_000);
     assert.strictEqual(serverRoom.state.phase, "claim_commit");
     drainImmediateTasks(serverRoom);
 
@@ -393,7 +404,7 @@ describe("game room action continuity", () => {
     assert.strictEqual(serverRoom.state.seats[actorSeatIndex].participantId, sessionId);
     assert.strictEqual(serverRoom.state.seats[actorSeatIndex].connected, false);
     drainImmediateTasks(serverRoom);
-    assert.strictEqual(serverRoom.state.phase, "claim_commit");
+    assert.strictEqual(serverRoom.state.phase, "play_reveal");
     assert.strictEqual(serverRoom.state.playEvents.length, 1);
 
     await Promise.all(participants

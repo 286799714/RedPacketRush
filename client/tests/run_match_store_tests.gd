@@ -650,6 +650,7 @@ func _test_actor_draw_highlights_exactly_three_new_physical_cards() -> void:
 		["drawn-hearts-9", "drawn-spades-10", "drawn-clubs-j"],
 		"本地行动者出牌后只高亮三张新摸的物理牌"
 	)
+	_expect_equal(match_store.get_acquired_card_source(), "play", "摸牌标记记录为出牌获得")
 	adapter.publish_game_room_state(public_snapshot)
 	adapter.publish_match_private_state({
 		"participant_id": "human-a",
@@ -708,6 +709,7 @@ func _test_claim_award_replaces_draw_highlights_during_award_discard() -> void:
 		["awarded-hearts-a"],
 		"抢到的牌在 award_discard 阶段替换旧摸牌高亮"
 	)
+	_expect_equal(match_store.get_acquired_card_source(), "claim", "抢牌标记记录为抢牌获得")
 
 
 func _test_acquisition_highlights_follow_the_authoritative_hand_and_clear_on_leave() -> void:

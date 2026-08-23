@@ -97,7 +97,7 @@ The current match deals eight cards, requires two disjoint three-card groups at 
 
 ## Out of Scope
 
-- Changing combination categories, scores, Ace behavior, claim resolution, or the protected-award discard rule.
+- Changing combination categories, scores, Ace behavior, claim resolution, or the protected-award discard rule. The protected-award clause was later superseded by `.scratch/turn-presentation-ux/spec.md`.
 - Adding server round trips for each hint or preview update.
 - Persisting blue highlight state across leaving a room or restarting the client.
 - Redesigning the lobby or the rest of the match table beyond the controls required here.

@@ -77,8 +77,5 @@ function discardableBotCards(view: MatchView) {
   if (!publicState.pendingDiscardSeatIndexes.includes(privateState.seatIndex)) {
     return [];
   }
-  const protectedCardId = publicState.claimAwards.find(
-    (award) => award.seatIndex === privateState.seatIndex,
-  )?.card.id;
-  return privateState.hand.filter((card) => card.id !== protectedCardId);
+  return privateState.hand;
 }

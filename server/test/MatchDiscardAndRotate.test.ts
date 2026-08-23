@@ -51,6 +51,7 @@ function playFirstThree(engine: MatchEngine): {
     actorSeatIndex,
     originalHands[actorSeatIndex].slice(0, 3).map((card) => card.id),
   );
+  engine.completePlayReveal();
   return { actorSeatIndex, originalHands };
 }
 
@@ -66,6 +67,7 @@ function discardOriginalCards(
       engine.view(0).publicState.turnNumber,
     );
   }
+  engine.completeDiscardReveal();
 }
 
 function discardEvents(publicState: PublicMatchState): CardDiscardedEvent[] {
@@ -96,7 +98,7 @@ function assertRejectedWithoutMutation(
 }
 
 describe("match award discard and actor rotation", () => {
-  it("holds recipients at six and accepts only pre-award hand cards", () => {
+  it("holds recipients at six and allows the awarded card itself to be discarded", () => {
     const engine = startedEngine();
     const { actorSeatIndex, originalHands } = playFirstThree(engine);
     const claimantSeats = [0, 1, 2, 3].filter((seatIndex) => seatIndex !== actorSeatIndex);
@@ -125,15 +127,10 @@ describe("match award discard and actor rotation", () => {
 
     engine.completeClaimReveal();
     assert.strictEqual(engine.view(0).publicState.phase, "award_discard");
-    const protectedCardId = engine.view(0).publicState.claimAwards.find(
+    const awardedCard = engine.view(0).publicState.claimAwards.find(
       (award) => award.seatIndex === claimantSeats[0],
-    )?.card.id;
-    assert.ok(protectedCardId);
-    assertRejectedWithoutMutation(
-      engine,
-      () => engine.discardCard(claimantSeats[0], protectedCardId, publicState.turnNumber),
-      "awarded_card_protected",
-    );
+    )?.card;
+    assert.ok(awardedCard);
     assertRejectedWithoutMutation(
       engine,
       () => engine.discardCard(
@@ -153,7 +150,7 @@ describe("match award discard and actor rotation", () => {
       "discard_not_required",
     );
 
-    const discardedCard = originalHands[claimantSeats[0]][0];
+    const discardedCard = awardedCard;
     engine.discardCard(claimantSeats[0], discardedCard.id, publicState.turnNumber);
     publicState = engine.view(0).publicState;
     assert.strictEqual(publicState.phase, "award_discard");
@@ -178,7 +175,7 @@ describe("match award discard and actor rotation", () => {
     );
   });
 
-  it("waits for every discard then selects the strongest award by rank and suit", () => {
+  it("keeps every discard public during a buffer before selecting the next actor", () => {
     const engine = startedEngine();
     const { actorSeatIndex, originalHands } = playFirstThree(engine);
     assert.strictEqual(actorSeatIndex, 0);
@@ -195,27 +192,35 @@ describe("match award discard and actor rotation", () => {
     assert.strictEqual(engine.view(0).publicState.actorSeatIndex, actorSeatIndex);
 
     engine.discardCard(2, originalHands[2][0].id, 1);
-    const views = PARTICIPANTS.map(({ seatIndex }) => engine.view(seatIndex));
-    const publicState = views[0].publicState;
+    let views = PARTICIPANTS.map(({ seatIndex }) => engine.view(seatIndex));
+    let publicState = views[0].publicState;
+    assert.strictEqual(publicState.phase, "discard_reveal");
+    assert.strictEqual(publicState.actorSeatIndex, actorSeatIndex);
+    assert.deepStrictEqual(publicState.pendingDiscardSeatIndexes, []);
+    assert.strictEqual(publicState.claimAwards.length, 3);
+    assert.strictEqual(discardEvents(publicState).length, 3);
+    assert.ok(publicState.participants.every((participant) => participant.handCount === 5));
+    assertRejectedWithoutMutation(
+      engine,
+      () => engine.discardCard(2, originalHands[2][1].id, 1),
+      "invalid_phase",
+    );
+
+    engine.completeDiscardReveal();
+    views = PARTICIPANTS.map(({ seatIndex }) => engine.view(seatIndex));
+    publicState = views[0].publicState;
     assert.strictEqual(publicState.phase, "actor_play");
     assert.strictEqual(publicState.actorSeatIndex, 2);
-    assert.deepStrictEqual(publicState.pendingDiscardSeatIndexes, []);
     assert.deepStrictEqual(publicState.revealedClaims, []);
     assert.deepStrictEqual(publicState.claimAwards, []);
     assert.strictEqual(publicState.playedCategory, null);
     assert.strictEqual(publicState.playedScore, 0);
-    assert.ok(publicState.participants.every((participant) => participant.handCount === 5));
     assert.deepStrictEqual(
       views.map((view) => ({
         claimCommitted: view.privateState.claimCommitted,
         claimCardId: view.privateState.claimCardId,
       })),
       views.map(() => ({ claimCommitted: false, claimCardId: null as string | null })),
-    );
-    assertRejectedWithoutMutation(
-      engine,
-      () => engine.discardCard(2, originalHands[2][1].id, 1),
-      "invalid_phase",
     );
   });
 
@@ -232,6 +237,7 @@ describe("match award discard and actor rotation", () => {
     engine.discardCard(1, firstTurn.originalHands[1][0].id, 1);
     engine.discardCard(3, firstTurn.originalHands[3][0].id, 1);
     engine.discardCard(2, firstTurn.originalHands[2][0].id, 1);
+    engine.completeDiscardReveal();
     assert.strictEqual(engine.view(0).publicState.actorSeatIndex, 2);
 
     const secondTurn = playFirstThree(engine);
@@ -262,6 +268,7 @@ describe("match award discard and actor rotation", () => {
     const thirdCard = actorHand.find((card) => !duplicateCards.some(({ id }) => id === card.id));
     assert.ok(thirdCard);
     engine.playCards(actorSeatIndex, [...duplicateCards.map((card) => card.id), thirdCard.id]);
+    engine.completePlayReveal();
 
     engine.commitClaim(1, duplicateCards[0].id);
     engine.commitClaim(2, null);
@@ -288,6 +295,7 @@ describe("match award discard and actor rotation", () => {
     assert.ok(diamondsFive);
     assert.ok(thirdCard);
     engine.playCards(actorSeatIndex, [clubsFive.id, diamondsFive.id, thirdCard.id]);
+    engine.completePlayReveal();
 
     engine.commitClaim(0, diamondsFive.id);
     engine.commitClaim(1, null);
@@ -319,7 +327,7 @@ describe("match award discard and actor rotation", () => {
     assert.deepStrictEqual(nextState.claimAwards, []);
   });
 
-  it("auto-discards legal older cards for every pending recipient at deadline", () => {
+  it("auto-discards legal cards for every pending recipient at deadline", () => {
     const engine = startedEngine();
     const { actorSeatIndex, originalHands } = playFirstThree(engine);
     const claimantSeats = [0, 1, 2, 3].filter((seatIndex) => seatIndex !== actorSeatIndex);
@@ -329,9 +337,9 @@ describe("match award discard and actor rotation", () => {
 
     engine.resolveDiscardAtDeadline();
 
-    const state = engine.view(0).publicState;
+    let state = engine.view(0).publicState;
     const publicDiscardEvents = discardEvents(state);
-    assert.strictEqual(state.phase, "actor_play");
+    assert.strictEqual(state.phase, "discard_reveal");
     assert.deepStrictEqual(state.pendingDiscardSeatIndexes, []);
     assert.strictEqual(publicDiscardEvents.length, 3);
     assert.deepStrictEqual(
@@ -348,6 +356,9 @@ describe("match award discard and actor rotation", () => {
       () => engine.resolveDiscardAtDeadline(),
       "invalid_phase",
     );
+    engine.completeDiscardReveal();
+    state = engine.view(0).publicState;
+    assert.strictEqual(state.phase, "actor_play");
   });
 
   it("seals the final one-deck remainder instead of opening an undrawable turn", () => {
@@ -357,6 +368,7 @@ describe("match award discard and actor rotation", () => {
     for (let turn = 1; turn <= 10; turn += 1) {
       const actorHand = engine.view(actorSeatIndex).privateState.hand;
       engine.playCards(actorSeatIndex, actorHand.slice(0, 3).map((card) => card.id));
+      engine.completePlayReveal();
       for (const seatIndex of [0, 1, 2, 3]) {
         if (seatIndex !== actorSeatIndex) {
           engine.commitClaim(seatIndex, null);

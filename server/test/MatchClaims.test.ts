@@ -33,6 +33,7 @@ function engineAtClaimCommit(random: MaxIndexRandom): MatchEngine {
   engine.completePointContest();
   const actorHand = engine.view(0).privateState.hand;
   engine.playCards(0, actorHand.slice(0, 3).map((card) => card.id));
+  engine.completePlayReveal();
   return engine;
 }
 

@@ -11,9 +11,11 @@ enum Surface { LOBBY, ROOM, MATCH }
 const VIEWPORT_SIZES := [Vector2i(960, 540), Vector2i(1280, 720)]
 const VALID_MATCH_PHASES := [
 	"actor_play",
+	"play_reveal",
 	"claim_commit",
 	"claim_reveal",
 	"award_discard",
+	"discard_reveal",
 	"final_reveal",
 	"finished",
 ]
@@ -82,6 +84,11 @@ const SCENARIOS := [
 	},
 	{
 		"surface": Surface.MATCH,
+		"label": "play-reveal",
+		"phase": "play_reveal",
+	},
+	{
+		"surface": Surface.MATCH,
 		"label": "claim-commit-selected",
 		"phase": "claim_commit",
 		"selected_claim_index": 1,
@@ -94,9 +101,14 @@ const SCENARIOS := [
 	},
 	{
 		"surface": Surface.MATCH,
-		"label": "award-discard-protected",
+		"label": "award-discard-any-card",
 		"phase": "award_discard",
 		"deck_mode": "two",
+	},
+	{
+		"surface": Surface.MATCH,
+		"label": "discard-reveal-buffer",
+		"phase": "discard_reveal",
 	},
 	{
 		"surface": Surface.MATCH,
@@ -168,6 +180,7 @@ class VisualMatchStore extends RefCounted:
 	var final_events: Array[Dictionary] = []
 	var local_hand: Array[Dictionary] = []
 	var acquired_card_ids: Array[String] = []
+	var acquired_card_source := ""
 	var final_groups: Array = []
 
 	func get_participants() -> Array[Dictionary]:
@@ -205,6 +218,9 @@ class VisualMatchStore extends RefCounted:
 
 	func get_acquired_card_ids() -> Array[String]:
 		return acquired_card_ids.duplicate()
+
+	func get_acquired_card_source() -> String:
+		return acquired_card_source
 
 	func get_final_groups() -> Array:
 		return final_groups
@@ -511,7 +527,7 @@ func _make_store(spec: Dictionary) -> VisualMatchStore:
 		_card("local-k", 13, "hearts", 0),
 		_card("local-a", 14, "hearts", 0),
 	]
-	if phase in ["claim_commit", "claim_reveal"]:
+	if phase in ["play_reveal", "claim_commit", "claim_reveal"]:
 		store.actor_seat_index = 1
 		store.turn_number = 2
 		store.played_cards = [
@@ -586,7 +602,7 @@ func _make_store(spec: Dictionary) -> VisualMatchStore:
 			"results": store.final_results,
 			"winner_seat_indexes": store.winner_seat_indexes,
 		}]
-	if phase == "award_discard":
+	if phase in ["award_discard", "discard_reveal"]:
 		var awarded_card := _card("award-hearts-a-copy-1", 14, "hearts", 1)
 		store.local_hand = [
 			_card("original-clubs-2", 2, "clubs", 0),
@@ -597,8 +613,11 @@ func _make_store(spec: Dictionary) -> VisualMatchStore:
 			_card("original-clubs-6", 6, "clubs", 0),
 		]
 		store.acquired_card_ids = [str(awarded_card["id"])]
+		store.acquired_card_source = "claim"
 		store.turn_number = 6
-		store.pending_discard_seat_indexes = [0]
+		store.pending_discard_seat_indexes.clear()
+		if phase == "award_discard":
+			store.pending_discard_seat_indexes.append(0)
 		store.claim_events = [{
 			"turn_number": 6,
 			"claims": [
@@ -609,6 +628,25 @@ func _make_store(spec: Dictionary) -> VisualMatchStore:
 			"awards": [{"seat_index": 0, "card": awarded_card, "source": "unique"}],
 			"discarded_cards": [],
 		}]
+		if phase == "discard_reveal":
+			var east_discard := _card("east-discard", 9, "diamonds", 0)
+			var north_discard := _card("north-discard", 13, "spades", 0)
+			store.local_hand = store.local_hand.slice(0, 5)
+			store.acquired_card_ids.clear()
+			store.acquired_card_source = ""
+			store.claim_events[0]["awards"] = [
+				{"seat_index": 0, "card": awarded_card, "source": "unique"},
+				{"seat_index": 1, "card": east_discard, "source": "collision"},
+				{"seat_index": 2, "card": north_discard, "source": "collision"},
+			]
+			store.discard_events = [
+				{"turn_number": 6, "seat_index": 0, "card": awarded_card},
+				{"turn_number": 6, "seat_index": 1, "card": east_discard},
+				{"turn_number": 6, "seat_index": 2, "card": north_discard},
+			]
+	if phase == "actor_play":
+		store.acquired_card_ids = ["local-a"]
+		store.acquired_card_source = "play"
 	store.connection_state = str(spec.get("connection_state", store.connection_state))
 	store.deck_mode = str(spec.get("deck_mode", store.deck_mode))
 	for raw_override in spec.get("participant_overrides", []):

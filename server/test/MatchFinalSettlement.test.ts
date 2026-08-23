@@ -29,6 +29,7 @@ function playPassingTurn(engine: MatchEngine): void {
   const actorSeatIndex = engine.view(0).publicState.actorSeatIndex;
   const actorHand = engine.view(actorSeatIndex).privateState.hand;
   engine.playCards(actorSeatIndex, actorHand.slice(0, 3).map((card) => card.id));
+  engine.completePlayReveal();
   for (const { seatIndex } of PARTICIPANTS) {
     if (seatIndex !== actorSeatIndex) {
       engine.commitClaim(seatIndex, null);

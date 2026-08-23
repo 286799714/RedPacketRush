@@ -39,6 +39,7 @@ var _winner_seat_indexes: Array[int] = []
 var _final_events: Array[Dictionary] = []
 var _local_hand: Array[Dictionary] = []
 var _acquired_card_ids: Array[String] = []
+var _acquired_card_source := ""
 var _final_groups: Array = []
 var _activated := false
 var _private_action_id := -1
@@ -110,6 +111,10 @@ func get_local_hand() -> Array[Dictionary]:
 
 func get_acquired_card_ids() -> Array[String]:
 	return _acquired_card_ids.duplicate()
+
+
+func get_acquired_card_source() -> String:
+	return _acquired_card_source
 
 
 func get_final_groups() -> Array:
@@ -303,6 +308,8 @@ func _on_match_private_state_changed(snapshot: Dictionary) -> void:
 			_pending_added_card_ids = newly_added_card_ids
 	_local_hand = next_hand
 	_acquired_card_ids = _filter_card_ids_in_hand(_acquired_card_ids, next_hand_ids)
+	if _acquired_card_ids.is_empty():
+		_acquired_card_source = ""
 	_pending_added_card_ids = _filter_card_ids_in_hand(
 		_pending_added_card_ids,
 		next_hand_ids
@@ -386,10 +393,12 @@ func _try_resolve_acquisition_highlight() -> void:
 			return
 		_acquired_card_ids.clear()
 		_acquired_card_ids.append(awarded_card_id)
+		_acquired_card_source = "claim"
 	elif context_type == "draw":
 		if _pending_added_card_ids.size() != 3:
 			return
 		_acquired_card_ids = _pending_added_card_ids.duplicate()
+		_acquired_card_source = "play"
 	else:
 		return
 	_pending_added_card_ids.clear()
@@ -453,6 +462,7 @@ func _filter_card_ids_in_hand(card_ids: Array[String], hand_ids: Dictionary) -> 
 
 func _reset_acquisition_tracking() -> void:
 	_acquired_card_ids.clear()
+	_acquired_card_source = ""
 	_pending_added_card_ids.clear()
 	_pending_acquisition_context.clear()
 	_known_acquisition_event_keys.clear()

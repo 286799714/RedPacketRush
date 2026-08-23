@@ -20,9 +20,11 @@ export type ActionDeadlineSeconds = (typeof ACTION_DEADLINES)[number];
 export type MatchPhase =
   | "point_contest"
   | "actor_play"
+  | "play_reveal"
   | "claim_commit"
   | "claim_reveal"
   | "award_discard"
+  | "discard_reveal"
   | "final_reveal"
   | "finished";
 export type MatchCommandErrorCode =
@@ -36,7 +38,6 @@ export type MatchCommandErrorCode =
   | "claim_already_committed"
   | "invalid_discard"
   | "discard_not_required"
-  | "awarded_card_protected"
   | "stale_turn";
 
 export class MatchCommandError extends Error {
@@ -193,7 +194,6 @@ export class MatchEngine {
   private discardedCards: PhysicalCard[] = [];
   private sealedCards: PhysicalCard[] = [];
   private pendingDiscardSeatIndexes = new Set<number>();
-  private protectedAwardCardIds = new Map<number, string>();
   private finalSelections = new Map<number, EvaluatedFinalSelection>();
   private finalResults: FinalResult[] = [];
   private winnerSeatIndexes: number[] = [];
@@ -295,7 +295,7 @@ export class MatchEngine {
     this.playedCategory = combination.category;
     this.playedScore = combination.score;
     this.turnNumber += 1;
-    this.phase = "claim_commit";
+    this.phase = "play_reveal";
     this.events.push(Object.freeze({
       type: "cards_played",
       turnNumber: this.turnNumber,
@@ -304,6 +304,13 @@ export class MatchEngine {
       category: combination.category,
       score: combination.score,
     }));
+  }
+
+  public completePlayReveal(): void {
+    if (this.participants === null || this.phase !== "play_reveal") {
+      throw new MatchCommandError("invalid_phase", "play reveal is not active");
+    }
+    this.phase = "claim_commit";
   }
 
   public commitClaim(seatIndex: number, cardId: string | null): void {
@@ -373,16 +380,9 @@ export class MatchEngine {
     if (!card) {
       throw new MatchCommandError("card_not_owned", "card is not owned by the participant");
     }
-    if (this.protectedAwardCardIds.get(seatIndex) === card.id) {
-      throw new MatchCommandError(
-        "awarded_card_protected",
-        "the card awarded this turn cannot be discarded",
-      );
-    }
-
     this.recordDiscard(participant, card);
     if (this.pendingDiscardSeatIndexes.size === 0) {
-      this.openNextTurn();
+      this.phase = "discard_reveal";
     }
   }
 
@@ -392,8 +392,7 @@ export class MatchEngine {
     }
     const plannedDiscards = [...this.pendingDiscardSeatIndexes].map((seatIndex) => {
       const participant = this.participantAt(seatIndex);
-      const protectedCardId = this.protectedAwardCardIds.get(seatIndex);
-      const card = participant.hand.find((candidate) => candidate.id !== protectedCardId);
+      const card = participant.hand[0];
       if (!card) {
         throw new Error("award recipient has no legal card to discard");
       }
@@ -401,6 +400,13 @@ export class MatchEngine {
     });
     for (const { participant, card } of plannedDiscards) {
       this.recordDiscard(participant, card);
+    }
+    this.phase = "discard_reveal";
+  }
+
+  public completeDiscardReveal(): void {
+    if (this.participants === null || this.phase !== "discard_reveal") {
+      throw new MatchCommandError("invalid_phase", "discard reveal is not active");
     }
     this.openNextTurn();
   }
@@ -597,10 +603,6 @@ export class MatchEngine {
     this.pendingDiscardSeatIndexes = new Set(
       awards.map((award) => award.seatIndex).sort((left, right) => left - right),
     );
-    this.protectedAwardCardIds = new Map(awards.map((award) => [
-      award.seatIndex,
-      award.card.id,
-    ]));
     this.discardedCards.push(...discardedCards);
     this.playedCards = [];
     this.phase = "claim_reveal";
@@ -670,7 +672,6 @@ export class MatchEngine {
   private recordDiscard(participant: ParticipantState, card: PhysicalCard): void {
     participant.hand = participant.hand.filter((candidate) => candidate.id !== card.id);
     this.pendingDiscardSeatIndexes.delete(participant.seatIndex);
-    this.protectedAwardCardIds.delete(participant.seatIndex);
     this.discardedCards.push(card);
     const event: CardDiscardedEvent = Object.freeze({
       type: "card_discarded",
@@ -700,7 +701,6 @@ export class MatchEngine {
     this.claimChoices.clear();
     this.revealedClaims = [];
     this.claimAwards = [];
-    this.protectedAwardCardIds.clear();
     this.playedCards = [];
     this.playedCategory = null;
     this.playedScore = 0;

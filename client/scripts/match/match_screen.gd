@@ -8,6 +8,7 @@ signal return_to_lobby_requested()
 
 const CombinationCatalog = preload("res://scripts/domain/combination_catalog.gd")
 const CardRules = preload("res://scripts/domain/card_rules.gd")
+const CardFaceCatalog = preload("res://scripts/presentation/card_face_catalog.gd")
 const COLOR_BACKGROUND := Color("#121416")
 const COLOR_TABLE := Color("#172321")
 const COLOR_TABLE_LINE := Color("#2b413b")
@@ -28,6 +29,8 @@ const SEAT_HEIGHT := 58.0
 const HAND_PANEL_HEIGHT := 138.0
 const CARD_WIDTH := 68.0
 const CARD_HEIGHT := 82.0
+const SEAT_ACTION_WIDTH := 146.0
+const SEAT_ACTION_HEIGHT := 88.0
 
 var _store_override: Object
 var _store: Object
@@ -78,6 +81,7 @@ var _seat_position_labels: Array[Label] = []
 var _seat_name_labels: Array[Label] = []
 var _seat_detail_labels: Array[Label] = []
 var _seat_role_labels: Array[Label] = []
+var _seat_action_panels: Array[PanelContainer] = []
 var _hand_cards: Array[Button] = []
 var _selected_card_ids: Array[String] = []
 var _claim_choice_group := ButtonGroup.new()
@@ -354,6 +358,7 @@ func _build_table_area() -> Control:
 
 	for seat_index in range(4):
 		_build_seat_card(seat_index)
+		_build_seat_action_panel(seat_index)
 
 	_hand_panel = PanelContainer.new()
 	_hand_panel.name = "LocalHandPanel"
@@ -607,6 +612,18 @@ func _build_seat_card(seat_index: int) -> PanelContainer:
 	return panel
 
 
+func _build_seat_action_panel(seat_index: int) -> PanelContainer:
+	var panel := PanelContainer.new()
+	panel.name = "SeatAction%d" % seat_index
+	panel.custom_minimum_size = Vector2(SEAT_ACTION_WIDTH, SEAT_ACTION_HEIGHT)
+	panel.visible = false
+	panel.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	panel.add_theme_stylebox_override("panel", _style_box(COLOR_SURFACE, COLOR_BORDER, 1, 5))
+	_table_area.add_child(panel)
+	_seat_action_panels.append(panel)
+	return panel
+
+
 func _refresh() -> void:
 	if _store == null:
 		_claim_submission_pending = false
@@ -642,6 +659,7 @@ func _refresh() -> void:
 		_refresh_seats(-1, -1)
 		_refresh_history([], [], [], [], [])
 		_refresh_played_combination("")
+		_refresh_seat_actions("")
 		_clear_hand()
 		return
 
@@ -715,6 +733,7 @@ func _refresh() -> void:
 		final_events
 	)
 	_refresh_played_combination(phase)
+	_refresh_seat_actions(phase)
 	_refresh_hand()
 	_refresh_action_prompt(phase, actor_seat_index, local_seat_index)
 	_last_phase = phase
@@ -1044,19 +1063,21 @@ func _refresh_latest_contest(round_data: Dictionary) -> void:
 			if not reveal is Dictionary:
 				continue
 			var reveal_data: Dictionary = reveal
-			var chip := _label(
-				"%s\n%s" % [
-					_participant_name(int(reveal_data.get("seat_index", -1))),
-					_format_card(reveal_data.get("card", {})),
-				],
-				11,
+			var chip := VBoxContainer.new()
+			chip.custom_minimum_size = Vector2(54, 78)
+			chip.add_theme_constant_override("separation", 2)
+			var participant := _label(
+				_participant_name(int(reveal_data.get("seat_index", -1))),
+				10,
 				COLOR_TEXT
 			)
-			chip.custom_minimum_size = Vector2(58, 35)
-			chip.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
-			chip.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
-			chip.clip_text = true
-			chip.text_overrun_behavior = TextServer.OVERRUN_TRIM_ELLIPSIS
+			participant.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+			participant.clip_text = true
+			participant.text_overrun_behavior = TextServer.OVERRUN_TRIM_ELLIPSIS
+			chip.add_child(participant)
+			var reveal_card: Variant = reveal_data.get("card", {})
+			if reveal_card is Dictionary:
+				chip.add_child(_build_card_face(reveal_card, Vector2(38, 59)))
 			_contest_reveal_row.add_child(chip)
 
 
@@ -1106,17 +1127,20 @@ func _refresh_played_combination(phase: String) -> void:
 		if show_claim_controls:
 			var choice := Button.new()
 			choice.name = "ClaimCard%d" % index
+			# Keep the semantic button name for keyboard/test discovery; the visual is the texture child.
 			choice.text = _format_card(cards[index])
 			choice.toggle_mode = true
 			choice.button_group = _claim_choice_group
 			choice.disabled = not can_choose_claim
-			choice.custom_minimum_size = Vector2(72, 42)
-			choice.add_theme_font_size_override("font_size", 12)
-			choice.add_theme_color_override("font_color", _suit_color(cards[index].get("suit", "")))
+			choice.custom_minimum_size = Vector2(58, 82)
+			choice.add_theme_font_size_override("font_size", 1)
+			for color_name in ["font_color", "font_hover_color", "font_pressed_color", "font_disabled_color"]:
+				choice.add_theme_color_override(color_name, Color.TRANSPARENT)
 			choice.add_theme_stylebox_override("normal", _style_box(COLOR_SURFACE_RAISED, COLOR_BORDER, 1, 4))
 			choice.add_theme_stylebox_override("hover", _style_box(Color("#29332f"), COLOR_GREEN, 1, 4))
 			choice.add_theme_stylebox_override("pressed", _style_box(Color("#30362f"), COLOR_GOLD, 3, 4))
 			choice.add_theme_stylebox_override("disabled", _style_box(COLOR_SURFACE, COLOR_BORDER, 1, 4))
+			_add_card_face_to_button(choice, cards[index])
 			choice.toggled.connect(_on_claim_card_toggled.bind(str(cards[index].get("id", "")), choice))
 			if str(cards[index].get("id", "")) == _selected_claim_card_id:
 				choice.set_pressed_no_signal(true)
@@ -1124,16 +1148,168 @@ func _refresh_played_combination(phase: String) -> void:
 		else:
 			var read_only := PanelContainer.new()
 			read_only.name = "PlayedCard%d" % index
-			read_only.custom_minimum_size = Vector2(72, 42)
+			read_only.custom_minimum_size = Vector2(58, 82)
 			read_only.add_theme_stylebox_override("panel", _style_box(COLOR_SURFACE_RAISED, COLOR_BORDER, 1, 4))
-			var value := _label(_format_card(cards[index]), 12, _suit_color(cards[index].get("suit", "")))
-			value.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
-			value.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
-			value.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
-			read_only.add_child(value)
+			var card_margin := MarginContainer.new()
+			card_margin.add_theme_constant_override("margin_left", 4)
+			card_margin.add_theme_constant_override("margin_top", 4)
+			card_margin.add_theme_constant_override("margin_right", 4)
+			card_margin.add_theme_constant_override("margin_bottom", 4)
+			read_only.add_child(card_margin)
+			card_margin.add_child(_build_card_face(cards[index], Vector2(46, 72)))
 			chip = read_only
 		_played_cards_row.add_child(chip)
 	call_deferred("_on_resized")
+
+
+func _add_card_face_to_button(button: Button, card: Dictionary) -> void:
+	var face := _build_card_face(card, Vector2(46, 72))
+	face.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
+	face.offset_left = 5
+	face.offset_top = 5
+	face.offset_right = -5
+	face.offset_bottom = -5
+	button.add_child(face)
+	var accessible_name := _label(_format_card(card), 1, Color.TRANSPARENT)
+	accessible_name.name = "AccessibleCardName"
+	accessible_name.visible = false
+	button.add_child(accessible_name)
+	button.tooltip_text = _format_card(card)
+
+
+func _refresh_seat_actions(phase: String) -> void:
+	for panel in _seat_action_panels:
+		panel.visible = false
+		for child in panel.get_children():
+			child.free()
+	if _store == null:
+		return
+	if phase == "play_reveal":
+		var play_event := _current_play_event()
+		var cards: Array[Dictionary] = []
+		var actor_seat_index := int(_store.actor_seat_index)
+		var category := str(_store.played_category)
+		var score := int(_store.played_score)
+		if not play_event.is_empty():
+			actor_seat_index = int(play_event.get("actor_seat_index", actor_seat_index))
+			category = str(play_event.get("category", category))
+			score = int(play_event.get("score", score))
+			cards = _dictionary_cards(play_event.get("cards", []))
+		elif _store.has_method("get_played_cards"):
+			cards = _store.get_played_cards()
+		_set_seat_action(
+			actor_seat_index,
+			"出牌 · %s · +%d 分" % [_combination_text(category), score],
+			cards,
+			COLOR_GOLD
+		)
+		_set_contest_status("出牌公示", "查看行动者本回合出的牌")
+		return
+	var claim_event := _current_claim_event()
+	var awards_by_seat := _claim_event_awards_by_seat(claim_event)
+	if phase == "claim_reveal":
+		for raw_seat_index: Variant in awards_by_seat.keys():
+			var seat_index := int(raw_seat_index)
+			var award: Dictionary = awards_by_seat[raw_seat_index]
+			var card: Variant = award.get("card", {})
+			if card is Dictionary:
+				_set_seat_action(seat_index, "抢牌获得", [card], COLOR_ACQUIRED)
+		return
+	if phase not in ["award_discard", "discard_reveal"]:
+		return
+	var discarded_by_seat: Dictionary = {}
+	if _store.has_method("get_discard_events"):
+		for discard_event: Dictionary in _store.get_discard_events():
+			if int(discard_event.get("turn_number", 0)) == int(_store.turn_number):
+				discarded_by_seat[int(discard_event.get("seat_index", -1))] = discard_event.get("card", {})
+	for raw_seat_index: Variant in awards_by_seat.keys():
+		var seat_index := int(raw_seat_index)
+		if discarded_by_seat.has(seat_index):
+			var discarded_card: Variant = discarded_by_seat[seat_index]
+			if discarded_card is Dictionary:
+				_set_seat_action(seat_index, "弃牌", [discarded_card], COLOR_GOLD)
+		else:
+			var award: Dictionary = awards_by_seat[raw_seat_index]
+			var awarded_card: Variant = award.get("card", {})
+			if awarded_card is Dictionary:
+				_set_seat_action(seat_index, "抢牌获得", [awarded_card], COLOR_ACQUIRED)
+	for raw_seat_index: Variant in discarded_by_seat.keys():
+		var seat_index := int(raw_seat_index)
+		if awards_by_seat.has(seat_index):
+			continue
+		var discarded_card: Variant = discarded_by_seat[raw_seat_index]
+		if discarded_card is Dictionary:
+			_set_seat_action(seat_index, "弃牌", [discarded_card], COLOR_GOLD)
+	if phase == "discard_reveal":
+		_set_contest_status("弃牌完成", "即将进入下一回合")
+	elif _is_local_discard_pending():
+		_set_contest_status("你需要弃置一张牌", "可选择任意一张手牌")
+	else:
+		_set_contest_status("等待其他玩家弃牌", "已完成的弃牌会在玩家前方公示")
+
+
+func _set_contest_status(title: String, detail: String) -> void:
+	for child in _contest_reveal_row.get_children():
+		child.free()
+	_contest_title_label.text = title
+	_contest_detail_label.text = detail
+
+
+func _set_seat_action(
+	seat_index: int,
+	title: String,
+	cards: Array,
+	border_color: Color
+) -> void:
+	if seat_index < 0 or seat_index >= _seat_action_panels.size() or cards.is_empty():
+		return
+	var panel := _seat_action_panels[seat_index]
+	panel.add_theme_stylebox_override("panel", _style_box(Color("#19211f"), border_color, 2, 5))
+	var margin := MarginContainer.new()
+	margin.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	margin.add_theme_constant_override("margin_left", 5)
+	margin.add_theme_constant_override("margin_top", 4)
+	margin.add_theme_constant_override("margin_right", 5)
+	margin.add_theme_constant_override("margin_bottom", 4)
+	panel.add_child(margin)
+	var column := VBoxContainer.new()
+	column.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	column.add_theme_constant_override("separation", 2)
+	margin.add_child(column)
+	var title_label := _label(title, 10, border_color)
+	title_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	title_label.clip_text = true
+	title_label.text_overrun_behavior = TextServer.OVERRUN_TRIM_ELLIPSIS
+	column.add_child(title_label)
+	var row := HBoxContainer.new()
+	row.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	row.alignment = BoxContainer.ALIGNMENT_CENTER
+	row.add_theme_constant_override("separation", 3)
+	column.add_child(row)
+	var face_size := Vector2(30, 47) if cards.size() > 1 else Vector2(38, 59)
+	for raw_card: Variant in cards:
+		if raw_card is Dictionary:
+			row.add_child(_build_card_face(raw_card, face_size))
+	panel.visible = true
+
+
+func _current_play_event() -> Dictionary:
+	if _store == null or not _store.has_method("get_play_events"):
+		return {}
+	var play_events: Array[Dictionary] = _store.get_play_events()
+	for index in range(play_events.size() - 1, -1, -1):
+		if int(play_events[index].get("turn_number", 0)) == int(_store.turn_number):
+			return play_events[index]
+	return play_events[play_events.size() - 1] if not play_events.is_empty() else {}
+
+
+func _dictionary_cards(raw_cards: Variant) -> Array[Dictionary]:
+	var cards: Array[Dictionary] = []
+	if raw_cards is Array:
+		for raw_card: Variant in raw_cards:
+			if raw_card is Dictionary:
+				cards.append(raw_card)
+	return cards
 
 
 func _refresh_final_settlement(phase: String, final_results: Array[Dictionary]) -> void:
@@ -1416,28 +1592,28 @@ func _refresh_hand() -> void:
 	var acquired_card_ids: Array[String] = []
 	if _store.has_method("get_acquired_card_ids"):
 		acquired_card_ids = _store.get_acquired_card_ids()
-	var local_award := _current_local_award()
-	var protected_card_id := str(local_award.get("id", ""))
+	var acquired_card_source := ""
+	if _store.has_method("get_acquired_card_source"):
+		acquired_card_source = str(_store.get_acquired_card_source())
 	_hand_title_label.text = "我的手牌（%d）" % hand.size()
 	for index in range(hand.size()):
 		var card_id := str(hand[index].get("id", ""))
-		var is_protected := not protected_card_id.is_empty() and card_id == protected_card_id
 		var is_acquired := acquired_card_ids.has(card_id)
 		if (
 			preserve_selection
 			and previous_selected_card_ids.has(card_id)
-			and _can_select_hand_card(card_id, is_protected)
+			and _can_select_hand_card(card_id)
 		):
 			_selected_card_ids.append(card_id)
 		var final_group_index := _final_group_index_for_card(card_id)
 		var card := _build_hand_card(
 			hand[index],
 			index,
-			is_protected,
 			is_acquired,
+			acquired_card_source,
 			final_group_index
 		)
-		card.disabled = not _can_select_hand_card(card_id, is_protected)
+		card.disabled = not _can_select_hand_card(card_id)
 		card.set_pressed_no_signal(
 			final_group_index >= 0 or _selected_card_ids.has(card_id)
 		)
@@ -1483,8 +1659,8 @@ func _clear_hand() -> void:
 func _build_hand_card(
 	card: Dictionary,
 	index: int,
-	is_protected: bool,
 	is_acquired: bool,
+	acquired_card_source: String,
 	final_group_index: int
 ) -> Button:
 	var panel := Button.new()
@@ -1517,18 +1693,22 @@ func _build_hand_card(
 		"disabled",
 		_style_box(
 			COLOR_SURFACE,
-			COLOR_ACQUIRED if is_acquired else (COLOR_GOLD if is_protected else COLOR_BORDER),
-			2 if is_acquired or is_protected else 1,
+			COLOR_ACQUIRED if is_acquired else COLOR_BORDER,
+			2 if is_acquired else 1,
 			4
 		)
 	)
 	var tooltip_parts: Array[String] = [_format_card(card)]
-	if is_protected:
-		tooltip_parts.append("本轮获得，不可弃")
+	if is_acquired:
+		tooltip_parts.append(_acquisition_text(acquired_card_source))
 	if final_group_index >= 0:
 		tooltip_parts.append("%s 组" % ("A" if final_group_index == 0 else "B"))
 	panel.tooltip_text = " · ".join(tooltip_parts)
 	panel.toggled.connect(_on_hand_card_toggled.bind(str(card.get("id", "")), panel))
+	var accessible_name := _label(_format_card(card), 1, Color.TRANSPARENT)
+	accessible_name.name = "AccessibleCardName"
+	accessible_name.visible = false
+	panel.add_child(accessible_name)
 	var margin := MarginContainer.new()
 	margin.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	margin.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
@@ -1541,36 +1721,43 @@ func _build_hand_card(
 	column.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	column.add_theme_constant_override("separation", 0)
 	margin.add_child(column)
-	var rank_row := HBoxContainer.new()
-	rank_row.alignment = BoxContainer.ALIGNMENT_CENTER
-	rank_row.add_theme_constant_override("separation", 3)
-	column.add_child(rank_row)
-	var rank := _label(_rank_text(int(card.get("rank", 0))), 20, COLOR_TEXT)
-	rank.name = "Rank"
-	rank.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
-	rank.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
-	rank.size_flags_vertical = Control.SIZE_EXPAND_FILL
-	rank_row.add_child(rank)
+	var face := _build_card_face(card, Vector2(38, 49))
+	face.size_flags_horizontal = Control.SIZE_SHRINK_CENTER
+	face.size_flags_vertical = Control.SIZE_EXPAND_FILL
+	column.add_child(face)
 	if _store != null and str(_store.deck_mode) == "two":
 		var copy_marker := _label("#%d" % (int(card.get("copy_index", 0)) + 1), 10, COLOR_MUTED)
-		copy_marker.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
-		rank_row.add_child(copy_marker)
-	var suit := _label(_suit_text(card.get("suit", "")), 15, _suit_color(card.get("suit", "")))
-	suit.name = "Suit"
-	suit.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
-	suit.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
-	column.add_child(suit)
-	if is_protected:
-		var protected_marker := _label("本轮获得", 10, COLOR_GOLD)
-		protected_marker.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
-		protected_marker.clip_text = true
-		column.add_child(protected_marker)
+		copy_marker.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+		copy_marker.custom_minimum_size.y = 11
+		column.add_child(copy_marker)
+	if is_acquired:
+		var acquired_marker := _label(_acquisition_text(acquired_card_source), 9, COLOR_ACQUIRED)
+		acquired_marker.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+		acquired_marker.clip_text = true
+		column.add_child(acquired_marker)
 	elif final_group_index >= 0:
 		var group_marker := _label("%s组" % ("A" if final_group_index == 0 else "B"), 10, COLOR_GOLD)
 		group_marker.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 		group_marker.clip_text = true
 		column.add_child(group_marker)
 	return panel
+
+
+func _build_card_face(card: Dictionary, minimum_size: Vector2) -> TextureRect:
+	var face := TextureRect.new()
+	face.name = "CardFace"
+	face.custom_minimum_size = minimum_size
+	face.expand_mode = TextureRect.EXPAND_IGNORE_SIZE
+	face.stretch_mode = TextureRect.STRETCH_KEEP_ASPECT_CENTERED
+	face.texture_filter = CanvasItem.TEXTURE_FILTER_LINEAR_WITH_MIPMAPS
+	face.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	face.texture = CardFaceCatalog.texture_for(card)
+	face.tooltip_text = _format_card(card)
+	return face
+
+
+func _acquisition_text(source: String) -> String:
+	return "出牌获得" if source == "play" else "抢牌获得"
 
 
 func _can_select_hand() -> bool:
@@ -1615,14 +1802,13 @@ func _refresh_connection_label() -> void:
 	_connection_label.text = "剩余 %d 秒" % ceili(remaining_ms / 1000.0)
 
 
-func _can_select_hand_card(card_id: String, is_protected: bool) -> bool:
+func _can_select_hand_card(card_id: String) -> bool:
 	if _can_select_hand():
 		return true
 	if _can_edit_final_groups():
 		return not card_id.is_empty()
 	return (
 		_can_discard_hand()
-		and not is_protected
 		and not card_id.is_empty()
 	)
 
@@ -1732,9 +1918,7 @@ func _on_hand_card_toggled(pressed: bool, card_id: String, button: Button) -> vo
 	if _store != null and str(_store.phase) == "final_commit":
 		_on_final_hand_card_toggled(card_id, button)
 		return
-	var protected_card_id := str(_current_local_award().get("id", ""))
-	var is_protected := not protected_card_id.is_empty() and card_id == protected_card_id
-	if not _can_select_hand_card(card_id, is_protected):
+	if not _can_select_hand_card(card_id):
 		button.set_pressed_no_signal(false)
 		return
 	if pressed:
@@ -1885,7 +2069,7 @@ func _refresh_action_prompt(phase: String, actor_seat_index: int, local_seat_ind
 	var can_choose_claim := _can_choose_claim()
 	var show_discard_controls := _show_discard_controls()
 	var show_final_controls := _show_final_controls()
-	_play_button.visible = phase not in ["award_discard", "final_commit", "final_reveal", "finished"]
+	_play_button.visible = phase in ["actor_play", "claim_commit"]
 	_hint_button.visible = phase == "actor_play"
 	_hint_button.disabled = not _can_select_hand()
 	_return_to_lobby_button.visible = phase == "finished"
@@ -1921,6 +2105,8 @@ func _refresh_action_prompt(phase: String, actor_seat_index: int, local_seat_ind
 			_action_prompt_label.text = "轮到你：从手牌选择三张牌出牌"
 		else:
 			_action_prompt_label.text = "等待 %s 出牌" % _participant_name(actor_seat_index)
+	elif phase == "play_reveal":
+		_action_prompt_label.text = "出牌公示中：查看行动者出的牌、牌型与加点"
 	elif phase == "claim_commit":
 		if actor_seat_index == local_seat_index:
 			_action_prompt_label.text = "本轮由你出牌：等待其他参与者抢牌"
@@ -1937,11 +2123,13 @@ func _refresh_action_prompt(phase: String, actor_seat_index: int, local_seat_ind
 		if _discard_submission_pending and show_discard_controls:
 			_action_prompt_label.text = "弃牌提交中：等待服务器确认"
 		elif show_discard_controls:
-			_action_prompt_label.text = "你获得了 %s：请选择一张原手牌弃置" % _format_card(local_award)
+			_action_prompt_label.text = "你获得了 %s：请选择任意一张手牌弃置" % _format_card(local_award)
 		elif not local_award.is_empty():
 			_action_prompt_label.text = "弃牌已完成：等待其他参与者"
 		else:
 			_action_prompt_label.text = "等待获得牌的参与者弃牌"
+	elif phase == "discard_reveal":
+		_action_prompt_label.text = "弃牌公示中：即将进入下一回合"
 	elif phase == "final_commit":
 		_action_prompt_label.text = "最终结算：服务器正在选择最佳三张"
 	elif phase == "final_reveal":
@@ -1991,6 +2179,9 @@ func _on_resized() -> void:
 	)
 	for seat_panel in _seat_cards:
 		seat_panel.visible = not compact_final_settlement
+	if compact_final_settlement:
+		for action_panel in _seat_action_panels:
+			action_panel.visible = false
 	var seat_width := minf(SEAT_WIDTH, maxf(150.0, (width - 36.0) * 0.28))
 	var seat_height := SEAT_HEIGHT
 	for seat_panel in _seat_cards:
@@ -2014,6 +2205,18 @@ func _on_resized() -> void:
 	for seat_index in range(4):
 		_seat_cards[seat_index].position = seat_positions.get(seat_index, Vector2.ZERO)
 		_seat_cards[seat_index].size = Vector2(seat_width, seat_height)
+		var seat_position: Vector2 = seat_positions.get(seat_index, Vector2.ZERO)
+		var action_size := Vector2(SEAT_ACTION_WIDTH, SEAT_ACTION_HEIGHT)
+		# Presentation cards temporarily occupy their owner's compact seat region.
+		# This keeps all four reveals distinct at the minimum supported viewport.
+		var action_position := Vector2(
+			seat_position.x + (seat_width - action_size.x) * 0.5,
+			seat_position.y + (seat_height - action_size.y) * 0.5
+		)
+		action_position.x = clampf(action_position.x, 4.0, maxf(4.0, width - action_size.x - 4.0))
+		action_position.y = clampf(action_position.y, 4.0, maxf(4.0, stage_height - action_size.y - 4.0))
+		_seat_action_panels[seat_index].position = action_position
+		_seat_action_panels[seat_index].size = action_size
 
 	# Four public reveals must fit in the center at the minimum supported width.
 	var contest_width := minf(280.0, maxf(220.0, width * 0.42))
@@ -2156,12 +2359,16 @@ func _phase_text(phase: String) -> String:
 			return "拼点"
 		"actor_play":
 			return "出牌"
+		"play_reveal":
+			return "出牌公示"
 		"claim_commit":
 			return "抢牌"
 		"claim_reveal":
 			return "抢牌揭晓"
 		"award_discard":
 			return "弃牌"
+		"discard_reveal":
+			return "弃牌公示"
 		"final_commit":
 			return "最终结算"
 		"final_reveal":

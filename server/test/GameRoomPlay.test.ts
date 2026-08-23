@@ -36,6 +36,11 @@ async function waitUntil(condition: () => boolean, timeoutMs = 2000): Promise<vo
   }
 }
 
+function tickClock(serverRoom: GameRoom, elapsedMilliseconds: number): void {
+  serverRoom.clock.currentTime -= elapsedMilliseconds;
+  serverRoom.clock.tick();
+}
+
 function chooseHighestScoringCombination(hand: readonly PhysicalCard[]): PhysicalCard[] {
   let selected = [hand[0], hand[1], hand[2]];
   for (let first = 0; first < hand.length - 2; first += 1) {
@@ -223,8 +228,11 @@ describe("game room actor play", () => {
       actionId: serverRoom.state.actionId,
     });
     await handled;
+    await waitUntil(() => serverRoom.state.phase === "play_reveal");
+    assert.strictEqual(serverRoom.state.actionDeadlineAtUnixMs, 0);
+    tickClock(serverRoom, 3_000);
     await waitUntil(() => serverRoom.state.phase === "claim_commit");
-    await waitUntil(() => replacementMessages.every((messages) => messages.length === 1));
+    await waitUntil(() => replacementMessages.every((messages) => messages.length === 2));
     await waitUntil(() => participants.every(
       (participant) => participant.state.phase === "claim_commit",
     ));
@@ -259,8 +267,8 @@ describe("game room actor play", () => {
       2,
     );
     for (let seatIndex = 0; seatIndex < participants.length; seatIndex += 1) {
-      assert.strictEqual(replacementMessages[seatIndex].length, 1);
-      const [privateState] = replacementMessages[seatIndex];
+      assert.strictEqual(replacementMessages[seatIndex].length, 2);
+      const privateState = replacementMessages[seatIndex].at(-1)!;
       assert.strictEqual(privateState.actionId, serverRoom.state.actionId);
       if (seatIndex !== actorSeatIndex) {
         assert.deepStrictEqual(privateState.hand, openingStates[seatIndex].hand);

@@ -69,7 +69,7 @@ describe("match actor play", () => {
 
     const afterViews = PARTICIPANTS.map(({ seatIndex }) => engine.view(seatIndex));
     const publicState = afterViews[0].publicState;
-    assert.strictEqual(publicState.phase, "claim_commit");
+    assert.strictEqual(publicState.phase, "play_reveal");
     assert.strictEqual(publicState.actorSeatIndex, 0);
     assert.strictEqual(publicState.firstActorSeatIndex, 0);
     assert.strictEqual(publicState.turnNumber, 1);
@@ -100,6 +100,15 @@ describe("match actor play", () => {
         beforeViews[seatIndex].privateState,
       );
     }
+
+    assert.throws(
+      () => engine.commitClaim(1, playedCards[0].id),
+      (error: unknown) => (
+        error instanceof MatchCommandError && error.code === "invalid_phase"
+      ),
+    );
+    engine.completePlayReveal();
+    assert.strictEqual(engine.view(0).publicState.phase, "claim_commit");
   });
 
   it("rejects play outside actor-play phase without changing state or randomness", () => {

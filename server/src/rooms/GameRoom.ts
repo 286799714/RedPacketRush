@@ -86,7 +86,9 @@ const ROOM_ERRORS = {
 } as const satisfies Record<string, RoomError>;
 
 const POINT_CONTEST_DISPLAY_MILLISECONDS = 900;
-const CLAIM_REVEAL_DISPLAY_MILLISECONDS = 900;
+const PLAY_REVEAL_DISPLAY_MILLISECONDS = 3_000;
+const CLAIM_REVEAL_DISPLAY_MILLISECONDS = 4_000;
+const DISCARD_REVEAL_DISPLAY_MILLISECONDS = 2_000;
 const FINAL_REVEAL_DISPLAY_MILLISECONDS = 900;
 const RECONNECTION_GRACE_MILLISECONDS = 30_000;
 const MAX_ACTION_ID = 0xffff_ffff;
@@ -925,6 +927,8 @@ export class GameRoom extends Room<{
   private resolvePhaseTimer(matchEngine: MatchEngine, phase: MatchPhase): void {
     if (phase === "point_contest") {
       matchEngine.completePointContest();
+    } else if (phase === "play_reveal") {
+      matchEngine.completePlayReveal();
     } else if (phase === "actor_play") {
       const actorSeatIndex = matchEngine.view(0).publicState.actorSeatIndex;
       const cardIds = chooseAutomaticPlayCardIds(matchEngine.view(actorSeatIndex));
@@ -938,6 +942,8 @@ export class GameRoom extends Room<{
       matchEngine.completeClaimReveal();
     } else if (phase === "award_discard") {
       matchEngine.resolveDiscardAtDeadline();
+    } else if (phase === "discard_reveal") {
+      matchEngine.completeDiscardReveal();
     } else if (phase === "final_reveal") {
       matchEngine.completeFinalReveal();
     } else {
@@ -952,8 +958,14 @@ export class GameRoom extends Room<{
     if (phase === "point_contest") {
       return POINT_CONTEST_DISPLAY_MILLISECONDS;
     }
+    if (phase === "play_reveal") {
+      return PLAY_REVEAL_DISPLAY_MILLISECONDS;
+    }
     if (phase === "claim_reveal") {
       return CLAIM_REVEAL_DISPLAY_MILLISECONDS;
+    }
+    if (phase === "discard_reveal") {
+      return DISCARD_REVEAL_DISPLAY_MILLISECONDS;
     }
     if (phase === "final_reveal") {
       return FINAL_REVEAL_DISPLAY_MILLISECONDS;

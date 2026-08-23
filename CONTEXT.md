@@ -45,8 +45,12 @@ The participant whose turn it is to play and score three cards.
 _Avoid_: Host, room owner, winner
 
 **Turn**:
-One actor play, score, and draw followed by the other participants' simultaneous claims, claim resolution, required discards, and selection of the next actor.
+One actor play, score, and draw followed by its public reveal, the other participants' simultaneous claims, claim resolution, required discards, a public discard buffer, and selection of the next actor.
 _Avoid_: Round, match
+
+**Play reveal**:
+The non-actionable three-second interval after an actor plays, when that participant's three cards, combination, and added score are displayed before claims open.
+_Avoid_: Actor play, claim reveal
 
 **Combination**:
 Three cards scored once as their highest category: high card, pair, flush, straight, three of a kind, or straight flush.
@@ -55,6 +59,10 @@ _Avoid_: Hand, meld
 **Claim**:
 A non-actor's secret choice to compete for one of the three cards played this turn.
 _Avoid_: Draw, take, bid
+
+**Claim reveal**:
+The non-actionable four-second interval when all secret claims resolve simultaneously and every awarded card is displayed at its recipient's seat.
+_Avoid_: Claim, play reveal
 
 **Pass**:
 A non-actor's secret choice not to claim a played card, worth one point when choices are revealed.
@@ -65,8 +73,12 @@ The resolution when multiple participants claim the same card: after unique awar
 _Avoid_: Tie, point contest
 
 **Awarded card**:
-A played card received through either a unique claim or a collision draw; its recipient must keep it for the current turn and discard a different card.
+A played card received through either a unique claim or a collision draw; its recipient temporarily holds six cards and may discard any one of them, including the awarded card.
 _Avoid_: Drawn card, played card
+
+**Discard reveal**:
+The non-actionable two-second interval after every required discard is public, during which all discarded cards remain displayed before the next actor is selected.
+_Avoid_: Award discard, final reveal
 
 **Final settlement**:
 The automatic endgame selection of the highest-scoring three-card combination from each participant's five-card hand, with the other two cards unused.

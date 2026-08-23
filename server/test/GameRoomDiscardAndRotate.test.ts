@@ -57,6 +57,8 @@ async function startClaimCommit(colyseus: ColyseusTestServer<typeof appConfig>) 
     actionId: serverRoom.state.actionId,
   });
   await Promise.all([handled, ...playUpdates]);
+  assert.strictEqual(serverRoom.state.phase, "play_reveal");
+  tickClock(serverRoom, 3_000);
   assert.strictEqual(serverRoom.state.phase, "claim_commit");
   return { participants, serverRoom, openingStates, actorSeatIndex };
 }
@@ -78,7 +80,7 @@ async function revealUniqueAwards(
     await handled;
   }
   assert.strictEqual(serverRoom.state.phase, "claim_reveal");
-  tickClock(serverRoom, 900);
+  tickClock(serverRoom, 4_000);
   assert.strictEqual(serverRoom.state.phase, "award_discard");
   return claimantSeats;
 }
@@ -113,7 +115,7 @@ describe("game room award discard and actor rotation", () => {
     await colyseus.cleanup();
   });
 
-  it("projects public discard progress and opens the next turn after the last command", async () => {
+  it("projects every discard, buffers the completed reveal, then opens the next turn", async () => {
     const { participants, serverRoom, openingStates, actorSeatIndex } = await startClaimCommit(colyseus);
     const claimantSeats = await revealUniqueAwards(participants, serverRoom, actorSeatIndex);
     const awards = serverRoom.state.claimAwards.toJSON();
@@ -136,12 +138,17 @@ describe("game room award discard and actor rotation", () => {
       assert.strictEqual(serverRoom.state.seats[seatIndex].handCount, 5);
       assert.strictEqual(
         serverRoom.state.phase,
-        index < claimantSeats.length - 1 ? "award_discard" : "actor_play",
+        index < claimantSeats.length - 1 ? "award_discard" : "discard_reveal",
       );
     }
 
-    assert.strictEqual(serverRoom.state.actorSeatIndex, strongestAward.seatIndex);
+    assert.strictEqual(serverRoom.state.actorSeatIndex, actorSeatIndex);
     assert.deepStrictEqual(serverRoom.state.pendingDiscardSeatIndexes.toJSON(), []);
+    assert.strictEqual(serverRoom.state.claimAwards.length, 3);
+    assert.strictEqual(serverRoom.state.actionDeadlineAtUnixMs, 0);
+    tickClock(serverRoom, 2_000);
+    assert.strictEqual(serverRoom.state.phase, "actor_play");
+    assert.strictEqual(serverRoom.state.actorSeatIndex, strongestAward.seatIndex);
     assert.deepStrictEqual(serverRoom.state.claimAwards.toJSON(), []);
     assert.deepStrictEqual(serverRoom.state.revealedClaims.toJSON(), []);
     assert.deepStrictEqual(
@@ -161,23 +168,17 @@ describe("game room award discard and actor rotation", () => {
     await Promise.all(participants.map((participant) => participant.leave()));
   });
 
-  it("rejects malformed, protected, unowned, and duplicate discard messages atomically", async () => {
+  it("accepts an awarded card while rejecting malformed, unowned, stale, and duplicate discards", async () => {
     const { participants, serverRoom, openingStates, actorSeatIndex } = await startClaimCommit(colyseus);
     const claimantSeats = await revealUniqueAwards(participants, serverRoom, actorSeatIndex);
     const firstSeat = claimantSeats[0];
-    const protectedCardId = serverRoom.state.claimAwards.find(
+    const awardedCardId = serverRoom.state.claimAwards.find(
       (award) => award.seatIndex === firstSeat,
     )?.card.id;
-    assert.ok(protectedCardId);
+    assert.ok(awardedCardId);
 
     await expectDiscardError(serverRoom, participants[firstSeat], null, "invalid_payload");
     await expectDiscardError(serverRoom, participants[firstSeat], { cardId: null }, "invalid_payload");
-    await expectDiscardError(
-      serverRoom,
-      participants[firstSeat],
-      { cardId: protectedCardId, turnNumber: serverRoom.state.turnNumber },
-      "awarded_card_protected",
-    );
     await expectDiscardError(
       serverRoom,
       participants[firstSeat],
@@ -196,7 +197,7 @@ describe("game room award discard and actor rotation", () => {
 
     let handled = serverRoom.waitForMessage("discard");
     participants[firstSeat].send("discard", {
-      cardId: openingStates[firstSeat].hand[0].id,
+      cardId: awardedCardId,
       turnNumber: serverRoom.state.turnNumber,
       actionId: serverRoom.state.actionId,
     });
@@ -216,13 +217,18 @@ describe("game room award discard and actor rotation", () => {
 
     tickClock(serverRoom, 15_000);
 
-    const resolved = serverRoom.state.toJSON();
-    assert.strictEqual(resolved.phase, "actor_play");
+    let resolved = serverRoom.state.toJSON();
+    assert.strictEqual(resolved.phase, "discard_reveal");
     assert.deepStrictEqual(resolved.seats.map((seat: { handCount: number }) => seat.handCount), [5, 5, 5, 5]);
     assert.strictEqual(resolved.discardEvents.length, 3);
+    tickClock(serverRoom, 2_000);
+    resolved = serverRoom.state.toJSON();
+    assert.strictEqual(resolved.phase, "actor_play");
     tickClock(serverRoom, 15_000);
+    assert.strictEqual(serverRoom.state.phase, "play_reveal");
+    tickClock(serverRoom, 3_000);
     assert.strictEqual(serverRoom.state.phase, "claim_commit");
-    assert.strictEqual(serverRoom.state.actionId, resolved.actionId + 1);
+    assert.strictEqual(serverRoom.state.actionId, resolved.actionId + 2);
     assert.strictEqual(serverRoom.state.turnNumber, 2);
     assert.strictEqual(serverRoom.state.discardEvents.length, 3);
     await Promise.all(participants.map((participant) => participant.leave()));
@@ -243,7 +249,7 @@ describe("game room award discard and actor rotation", () => {
     }
     assert.strictEqual(serverRoom.state.phase, "claim_reveal");
 
-    tickClock(serverRoom, 900);
+    tickClock(serverRoom, 4_000);
 
     assert.strictEqual(serverRoom.state.phase, "actor_play");
     assert.strictEqual(serverRoom.state.actorSeatIndex, actorSeatIndex);

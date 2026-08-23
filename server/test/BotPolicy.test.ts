@@ -106,7 +106,7 @@ describe("bot policy", () => {
     );
   });
 
-  it("never selects the protected award as a discard", () => {
+  it("may select the awarded card itself as a discard", () => {
     const hand = Array.from({ length: 6 }, (_, index) => card(index));
     const view = matchView({
       phase: "award_discard",
@@ -115,9 +115,9 @@ describe("bot policy", () => {
       claimAwards: [{ seatIndex: 1, card: hand[5], source: "unique" }],
     });
 
-    assert.deepStrictEqual(chooseBotCommand(view, new FixedRandomSource(4)), {
+    assert.deepStrictEqual(chooseBotCommand(view, new FixedRandomSource(5)), {
       type: "discard",
-      cardId: "card-4",
+      cardId: "card-5",
       turnNumber: 3,
     });
   });

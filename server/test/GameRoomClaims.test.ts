@@ -72,6 +72,12 @@ async function startClaimCommit(colyseus: ColyseusTestServer<typeof appConfig>) 
     actionId: serverRoom.state.actionId,
   });
   await Promise.all([handled, ...replacementStatesReceived]);
+  assert.strictEqual(serverRoom.state.phase, "play_reveal");
+  const claimCommitStatesReceived = participants.map((participant) => (
+    participant.waitForMessage("match_private_state", 2000)
+  ));
+  tickClock(serverRoom, 3_000);
+  await Promise.all(claimCommitStatesReceived);
   assert.strictEqual(serverRoom.state.phase, "claim_commit");
 
   return { participants, serverRoom, actorSeatIndex };
@@ -263,13 +269,15 @@ describe("game room secret claims", () => {
       assert.strictEqual(privateStates[seatIndex].claimCommitted, false);
       assert.strictEqual(privateStates[seatIndex].claimCardId, null);
     }
-    tickClock(serverRoom, 900);
+    tickClock(serverRoom, 4_000);
     assert.strictEqual(serverRoom.state.phase, "actor_play");
     assert.strictEqual(serverRoom.state.claimEvents.length, 1);
     const actorActionId = serverRoom.state.actionId;
     tickClock(serverRoom, 15_000);
+    assert.strictEqual(serverRoom.state.phase, "play_reveal");
+    tickClock(serverRoom, 3_000);
     assert.strictEqual(serverRoom.state.phase, "claim_commit");
-    assert.strictEqual(serverRoom.state.actionId, actorActionId + 1);
+    assert.strictEqual(serverRoom.state.actionId, actorActionId + 2);
     assert.strictEqual(serverRoom.state.turnNumber, 2);
     assert.strictEqual(serverRoom.state.claimEvents.length, 1);
     assert.strictEqual(serverRoom.state.playEvents.length, 2);

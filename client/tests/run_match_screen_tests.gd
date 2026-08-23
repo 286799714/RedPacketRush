@@ -38,6 +38,7 @@ class FakeMatchStore extends RefCounted:
 	var _final_events: Array[Dictionary] = []
 	var _local_hand: Array[Dictionary] = []
 	var _acquired_card_ids: Array[String] = []
+	var _acquired_card_source := ""
 	var _final_groups: Array = []
 	var play_requests: Array[Array] = []
 	var claim_requests: Array[Variant] = []
@@ -54,6 +55,9 @@ class FakeMatchStore extends RefCounted:
 
 	func get_acquired_card_ids() -> Array[String]:
 		return _acquired_card_ids.duplicate()
+
+	func get_acquired_card_source() -> String:
+		return _acquired_card_source
 
 	func get_played_cards() -> Array[Dictionary]:
 		return _played_cards
@@ -373,9 +377,8 @@ func _test_local_hand_is_readable_and_private(screen: MatchScreen) -> void:
 		var rect := card.get_global_rect()
 		_expect(rect.size.x >= 45.0 and rect.size.y >= 60.0, "本地牌保持可读尺寸")
 		_expect(rect.end.x <= 960.0 and rect.end.y <= 540.0, "本地牌不越出视口")
-		var card_text := _node_text(card)
-		_expect(not card_text.is_empty(), "本地牌显示牌面")
-		_expect(card_text.contains("♣") or card_text.contains("♥"), "本地牌同时显示花色符号")
+		var face := card.find_child("CardFace", true, false) as TextureRect
+		_expect(face != null and face.texture != null, "本地牌使用真实扑克牌面纹理")
 	_expect(screen._hand_title_label.text.contains("5"), "本地手牌数量显示")
 	_expect_equal(
 		screen._hand_cards.map(func(card: Button): return str(card.get_meta("card_id", ""))),
@@ -390,6 +393,7 @@ func _test_acquired_outline_yields_to_selection(
 	store: FakeMatchStore
 ) -> void:
 	store._acquired_card_ids = ["local-14"]
+	store._acquired_card_source = "play"
 	store.private_state_changed.emit()
 	await process_frame
 	await process_frame
@@ -400,6 +404,7 @@ func _test_acquired_outline_yields_to_selection(
 	var normal_style := acquired.get_theme_stylebox("normal") as StyleBoxFlat
 	var pressed_style := acquired.get_theme_stylebox("pressed") as StyleBoxFlat
 	_expect(normal_style != null and normal_style.border_color == Color("#4ea1ff"), "新摸牌显示蓝色外框")
+	_expect(_node_text(acquired).contains("出牌获得"), "出牌摸到的新牌显示出牌获得")
 	acquired.button_pressed = true
 	_expect(pressed_style != null and pressed_style.border_color != Color("#4ea1ff"), "选中框覆盖蓝色外框")
 	acquired.button_pressed = false
@@ -408,6 +413,7 @@ func _test_acquired_outline_yields_to_selection(
 		"取消选中后恢复蓝色外框"
 	)
 	store._acquired_card_ids.clear()
+	store._acquired_card_source = ""
 	store.private_state_changed.emit()
 	await process_frame
 	await process_frame
@@ -592,7 +598,7 @@ func _test_claim_commit_shows_played_combination(
 	if played_panel == null:
 		_failures.append("抢牌阶段应提供公开出牌区域")
 		return
-	store.phase = "claim_commit"
+	store.phase = "play_reveal"
 	store.actor_seat_index = 0
 	store.turn_number = 1
 	store._played_cards = [
@@ -609,6 +615,19 @@ func _test_claim_commit_shows_played_combination(
 		"category": "straight_flush",
 		"score": 10,
 	}]
+	store.publish()
+	await process_frame
+	await process_frame
+	var actor_reveal := screen.find_child("SeatAction0", true, false) as PanelContainer
+	_expect(actor_reveal != null and actor_reveal.visible, "出牌公示阶段在行动者前方显示出牌")
+	if actor_reveal != null:
+		_expect(_node_text(actor_reveal).contains("出牌 · 同花顺 · +10 分"), "行动者前方显示牌型与加点")
+		_expect(_texture_rect_count(actor_reveal) == 3, "行动者前方显示三张真实牌面")
+	_expect(not played_panel.visible, "独立出牌公示不占用中央抢牌区域")
+
+	store.phase = "claim_commit"
+	store.action_id += 1
+	store.private_action_id = store.action_id
 	store.publish()
 	await process_frame
 	await process_frame
@@ -819,6 +838,14 @@ func _test_claim_reveal_shows_simultaneous_outcomes_and_public_history(
 	_expect(history_text.contains("不抢 +1 分"), "历史记录 Pass 得分")
 	_expect(history_text.contains("弃置"), "历史记录公共弃牌")
 	_expect(history_text.contains("第 2 回合 · 抢牌揭晓"), "历史追加当前抢牌结果")
+	for seat_index in [1, 2, 3]:
+		var award_panel := screen.find_child("SeatAction%d" % seat_index, true, false) as PanelContainer
+		_expect(award_panel != null and award_panel.visible, "席位 %d 前方公示抢到的牌" % seat_index)
+		if award_panel != null:
+			var style := award_panel.get_theme_stylebox("panel") as StyleBoxFlat
+			_expect(style != null and style.border_color == Color("#4ea1ff"), "抢到的牌使用蓝框")
+			_expect(_node_text(award_panel).contains("抢牌获得"), "抢牌公示显示抢牌获得")
+			_expect(_texture_rect_count(award_panel) == 1, "抢牌公示显示真实牌面")
 
 
 func _test_reveal_motion_honors_reduced_motion(
@@ -1070,6 +1097,7 @@ func _test_award_recipient_discards_an_original_card(
 		"discard_events": [],
 	})
 	store._acquired_card_ids = [str(awarded_card["id"])]
+	store._acquired_card_source = "claim"
 	store.apply_private_snapshot({"hand": six_card_hand})
 	await process_frame
 	await process_frame
@@ -1077,13 +1105,14 @@ func _test_award_recipient_discards_an_original_card(
 
 	_expect(_find_visible_label_containing(screen, "阶段：弃牌") != null, "领取牌后进入可见弃牌阶段")
 	_expect(_find_visible_label_containing(screen, "我的手牌（6）") != null, "领取者在弃牌前显示六张手牌")
-	var protected_card := _find_visible_button_with_content(screen, "本轮获得")
-	_expect(protected_card != null and protected_card.disabled, "本轮获得的牌明确标记且不可弃")
-	if protected_card != null:
-		var protected_text := _node_text(protected_card)
-		_expect(protected_text.contains("A") and protected_text.contains("#2"), "受保护牌显示两副牌实体编号")
-		var protected_style := protected_card.get_theme_stylebox("disabled") as StyleBoxFlat
-		_expect(protected_style != null and protected_style.border_color == Color("#4ea1ff"), "抢到的牌显示蓝色外框")
+	_expect(screen._contest_title_label.text == "你需要弃置一张牌", "弃牌阶段中央不再显示最新拼点")
+	var awarded_button := _hand_card_by_id(screen, str(awarded_card["id"]))
+	_expect(awarded_button != null and not awarded_button.disabled, "抢牌获得的牌也可以选择弃置")
+	if awarded_button != null:
+		_expect(_node_text(awarded_button).contains("抢牌获得"), "抢牌获得的牌显示抢牌获得")
+		_expect(_texture_rect_count(awarded_button) == 1, "抢牌获得的牌显示真实牌面")
+		var awarded_style := awarded_button.get_theme_stylebox("normal") as StyleBoxFlat
+		_expect(awarded_style != null and awarded_style.border_color == Color("#4ea1ff"), "抢到的牌显示蓝色外框")
 	var original_two := _hand_card_by_id(screen, "original-clubs-2")
 	var original_three := _hand_card_by_id(screen, "original-spades-3")
 	var discard_button := _find_visible_button(screen, "弃牌")
@@ -1092,6 +1121,10 @@ func _test_award_recipient_discards_an_original_card(
 		return
 	_expect(not original_two.disabled and not original_three.disabled, "领取者可以选择原手牌")
 	_expect(discard_button.disabled, "未选牌时不能提交弃牌")
+	if awarded_button != null:
+		awarded_button.button_pressed = true
+		_expect(not discard_button.disabled, "选中抢牌获得的牌后可以提交弃牌")
+		awarded_button.button_pressed = false
 	original_two.button_pressed = true
 	_expect(not discard_button.disabled, "选中一张原手牌后可以提交弃牌")
 	original_three.button_pressed = true
@@ -1125,11 +1158,12 @@ func _test_award_recipient_discards_an_original_card(
 
 	store.apply_private_snapshot({"hand": original_hand})
 	store._acquired_card_ids.clear()
+	store._acquired_card_source = ""
 	store.apply_public_snapshot({
 		"deck_mode": "one",
-		"phase": "actor_play",
-		"actor_seat_index": 2,
-		"turn_number": 7,
+		"phase": "discard_reveal",
+		"actor_seat_index": 1,
+		"turn_number": 6,
 		"pending_discard_seat_indexes": [],
 		"discard_events": [{
 			"turn_number": 6,
@@ -1141,6 +1175,19 @@ func _test_award_recipient_discards_an_original_card(
 	await process_frame
 	await process_frame
 	_expect(_find_visible_button(screen, "弃牌") == null, "弃牌完成后隐藏提交命令")
+	_expect(screen._contest_title_label.text == "弃牌完成", "全部弃牌后中央显示缓冲状态")
+	var discard_reveal := screen.find_child("SeatAction0", true, false) as PanelContainer
+	_expect(discard_reveal != null and discard_reveal.visible, "弃牌后在参与者前方公示弃牌")
+	if discard_reveal != null:
+		_expect(_node_text(discard_reveal).contains("弃牌"), "弃牌公示显示弃牌字样")
+		_expect(_texture_rect_count(discard_reveal) == 1, "弃牌公示显示真实牌面")
+	store.apply_public_snapshot({
+		"phase": "actor_play",
+		"actor_seat_index": 2,
+		"turn_number": 7,
+	})
+	await process_frame
+	await process_frame
 	_expect(_find_visible_label_containing(screen, "行动者：机器人丙") != null, "下一回合显示权威行动者")
 	_expect(_find_visible_label_containing(screen, "甲 弃置") != null, "公开历史显示领取者弃掉的牌")
 
@@ -1194,6 +1241,8 @@ func _test_discard_rejection_and_non_recipient_waiting(
 			"discarded_cards": [],
 		}],
 	})
+	store._acquired_card_ids = [str(awarded_card["id"])]
+	store._acquired_card_source = "claim"
 	store.apply_private_snapshot({"hand": hand})
 	await process_frame
 	await process_frame
@@ -1206,14 +1255,14 @@ func _test_discard_rejection_and_non_recipient_waiting(
 	original_two.button_pressed = true
 	discard_button.pressed.emit()
 	var discard_rect := discard_button.get_global_rect()
-	store.reject_action("protected_card", "本轮获得的牌不能弃置，请重新选择")
+	store.reject_action("invalid_card", "牌状态已变化，请重新选择")
 	await process_frame
 	await process_frame
 	var retry_two := _hand_card_by_id(screen, "retry-original-clubs-2")
-	var protected_card := _find_visible_button_with_content(screen, "本轮获得")
+	var awarded_button := _hand_card_by_id(screen, str(awarded_card["id"]))
 	_expect(retry_two != null and not retry_two.disabled, "弃牌失败后恢复原手牌选择")
 	_expect(retry_two != null and not retry_two.button_pressed, "弃牌失败后清空旧选择")
-	_expect(protected_card != null and protected_card.disabled, "弃牌失败后获奖牌仍受保护")
+	_expect(awarded_button != null and not awarded_button.disabled, "弃牌失败后抢牌获得的牌仍可重新选择")
 	_expect(discard_button.disabled, "弃牌失败后等待重新选牌")
 	_expect(_find_visible_label_containing(screen, "请重新选择") != null, "弃牌失败原因保持可见")
 	_expect_equal(discard_button.get_global_rect(), discard_rect, "弃牌失败不移动提交按钮")
@@ -1951,6 +2000,13 @@ func _node_text(node: Node) -> String:
 	for child in node.get_children():
 		text += _node_text(child)
 	return text
+
+
+func _texture_rect_count(node: Node) -> int:
+	var count := 1 if node is TextureRect and (node as TextureRect).texture != null else 0
+	for child in node.get_children():
+		count += _texture_rect_count(child)
+	return count
 
 
 func _find_last_visible_label_containing(root_node: Node, fragment: String) -> Label:

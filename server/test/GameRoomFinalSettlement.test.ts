@@ -43,8 +43,12 @@ function advanceToLastClaimReveal(serverRoom: GameRoom): void {
     if (serverRoom.state.phase === "claim_reveal" && serverRoom.state.turnNumber === 10) {
       return;
     }
-    if (serverRoom.state.phase === "claim_reveal") {
-      tickClock(serverRoom, 900);
+    if (serverRoom.state.phase === "play_reveal") {
+      tickClock(serverRoom, 3_000);
+    } else if (serverRoom.state.phase === "claim_reveal") {
+      tickClock(serverRoom, 4_000);
+    } else if (serverRoom.state.phase === "discard_reveal") {
+      tickClock(serverRoom, 2_000);
     } else {
       tickClock(serverRoom, serverRoom.state.actionDeadlineSeconds * 1000);
     }
@@ -77,7 +81,7 @@ describe("game room final settlement", () => {
       waitForFinalPrivateState(participant)
     ));
 
-    tickClock(serverRoom, 900);
+    tickClock(serverRoom, 4_000);
     const revealed = serverRoom.state.toJSON();
     const privateStates = await Promise.all(finalPrivateMessages);
     assert.strictEqual(revealed.phase, "final_reveal");
@@ -116,7 +120,7 @@ describe("game room final settlement", () => {
   it("finishes after the reveal interval without adding final scores twice", async () => {
     const { participants, serverRoom } = await startActorPlay(colyseus);
     advanceToLastClaimReveal(serverRoom);
-    tickClock(serverRoom, 900);
+    tickClock(serverRoom, 4_000);
     const revealed = serverRoom.state.toJSON();
     const finishedMessages = participants.map((participant) => (
       participant.waitForMessage("match_private_state", 1000)
