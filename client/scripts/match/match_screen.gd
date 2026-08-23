@@ -27,10 +27,12 @@ const COLOR_BLACK_SUIT := Color("#d7dcdf")
 const SEAT_WIDTH := 176.0
 const SEAT_HEIGHT := 58.0
 const HAND_PANEL_HEIGHT := 138.0
-const CARD_WIDTH := 68.0
-const CARD_HEIGHT := 82.0
-const SEAT_ACTION_WIDTH := 146.0
-const SEAT_ACTION_HEIGHT := 88.0
+const CARD_WIDTH := 54.0
+const CARD_HEIGHT := 84.0
+const SEAT_ACTION_CARD_WIDTH := 54.0
+const SEAT_ACTION_CARD_HEIGHT := 84.0
+const DISCARD_STATUS_WIDTH := 120.0
+const DISCARD_STATUS_HEIGHT := 30.0
 
 var _store_override: Object
 var _store: Object
@@ -615,7 +617,7 @@ func _build_seat_card(seat_index: int) -> PanelContainer:
 func _build_seat_action_panel(seat_index: int) -> PanelContainer:
 	var panel := PanelContainer.new()
 	panel.name = "SeatAction%d" % seat_index
-	panel.custom_minimum_size = Vector2(SEAT_ACTION_WIDTH, SEAT_ACTION_HEIGHT)
+	panel.custom_minimum_size = Vector2(SEAT_ACTION_CARD_WIDTH, SEAT_ACTION_CARD_HEIGHT)
 	panel.visible = false
 	panel.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	panel.add_theme_stylebox_override("panel", _style_box(COLOR_SURFACE, COLOR_BORDER, 1, 5))
@@ -1041,6 +1043,8 @@ func _build_final_history_item(final_event: Dictionary) -> Control:
 
 
 func _refresh_latest_contest(round_data: Dictionary) -> void:
+	_contest_title_label.add_theme_font_size_override("font_size", 13)
+	_contest_detail_label.visible = true
 	for child in _contest_reveal_row.get_children():
 		child.free()
 	if round_data.is_empty():
@@ -1096,8 +1100,11 @@ func _refresh_played_combination(phase: String) -> void:
 	var show_played := phase == "claim_commit" and cards.size() == 3
 	var show_claim_reveal := phase == "claim_reveal" and not claim_event.is_empty()
 	var show_final_settlement := phase in ["final_reveal", "finished"] and not final_results.is_empty()
-	_played_panel.visible = show_played or show_claim_reveal or show_final_settlement
-	_contest_panel.visible = not _played_panel.visible
+	_played_panel.visible = show_played or show_final_settlement
+	_contest_panel.visible = (
+		not _played_panel.visible
+		and phase not in ["play_reveal", "claim_reveal"]
+	)
 	_played_cards_row.visible = show_played
 	_played_summary_label.visible = show_played or show_final_settlement
 	_claim_reveal_list.visible = show_claim_reveal or show_final_settlement
@@ -1132,7 +1139,7 @@ func _refresh_played_combination(phase: String) -> void:
 			choice.toggle_mode = true
 			choice.button_group = _claim_choice_group
 			choice.disabled = not can_choose_claim
-			choice.custom_minimum_size = Vector2(58, 82)
+			choice.custom_minimum_size = Vector2(65, 101)
 			choice.add_theme_font_size_override("font_size", 1)
 			for color_name in ["font_color", "font_hover_color", "font_pressed_color", "font_disabled_color"]:
 				choice.add_theme_color_override(color_name, Color.TRANSPARENT)
@@ -1148,27 +1155,28 @@ func _refresh_played_combination(phase: String) -> void:
 		else:
 			var read_only := PanelContainer.new()
 			read_only.name = "PlayedCard%d" % index
-			read_only.custom_minimum_size = Vector2(58, 82)
+			read_only.custom_minimum_size = Vector2(65, 101)
 			read_only.add_theme_stylebox_override("panel", _style_box(COLOR_SURFACE_RAISED, COLOR_BORDER, 1, 4))
-			var card_margin := MarginContainer.new()
-			card_margin.add_theme_constant_override("margin_left", 4)
-			card_margin.add_theme_constant_override("margin_top", 4)
-			card_margin.add_theme_constant_override("margin_right", 4)
-			card_margin.add_theme_constant_override("margin_bottom", 4)
-			read_only.add_child(card_margin)
-			card_margin.add_child(_build_card_face(cards[index], Vector2(46, 72)))
+			var face := _build_card_face(cards[index], Vector2.ZERO)
+			face.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
+			face.offset_left = 2
+			face.offset_top = 2
+			face.offset_right = -2
+			face.offset_bottom = -2
+			read_only.add_child(face)
 			chip = read_only
 		_played_cards_row.add_child(chip)
 	call_deferred("_on_resized")
 
 
 func _add_card_face_to_button(button: Button, card: Dictionary) -> void:
-	var face := _build_card_face(card, Vector2(46, 72))
+	button.clip_contents = true
+	var face := _build_card_face(card, Vector2.ZERO)
 	face.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
-	face.offset_left = 5
-	face.offset_top = 5
-	face.offset_right = -5
-	face.offset_bottom = -5
+	face.offset_left = 2
+	face.offset_top = 2
+	face.offset_right = -2
+	face.offset_bottom = -2
 	button.add_child(face)
 	var accessible_name := _label(_format_card(card), 1, Color.TRANSPARENT)
 	accessible_name.name = "AccessibleCardName"
@@ -1213,7 +1221,13 @@ func _refresh_seat_actions(phase: String) -> void:
 			var award: Dictionary = awards_by_seat[raw_seat_index]
 			var card: Variant = award.get("card", {})
 			if card is Dictionary:
-				_set_seat_action(seat_index, "抢牌获得", [card], COLOR_ACQUIRED)
+				_set_seat_action(
+					seat_index,
+					"抢牌获得",
+					[card],
+					COLOR_ACQUIRED,
+					str(award.get("source", "")) == "collision"
+				)
 		return
 	if phase not in ["award_discard", "discard_reveal"]:
 		return
@@ -1241,56 +1255,108 @@ func _refresh_seat_actions(phase: String) -> void:
 		if discarded_card is Dictionary:
 			_set_seat_action(seat_index, "弃牌", [discarded_card], COLOR_GOLD)
 	if phase == "discard_reveal":
-		_set_contest_status("弃牌完成", "即将进入下一回合")
+		_set_contest_status("弃牌完成", "")
 	elif _is_local_discard_pending():
-		_set_contest_status("你需要弃置一张牌", "可选择任意一张手牌")
+		_set_contest_status("你需要弃置一张牌", "")
 	else:
-		_set_contest_status("等待其他玩家弃牌", "已完成的弃牌会在玩家前方公示")
+		_set_contest_status("等待其他玩家弃牌", "")
 
 
 func _set_contest_status(title: String, detail: String) -> void:
 	for child in _contest_reveal_row.get_children():
 		child.free()
 	_contest_title_label.text = title
+	_contest_title_label.add_theme_font_size_override("font_size", 11)
 	_contest_detail_label.text = detail
+	_contest_detail_label.visible = not detail.is_empty()
 
 
 func _set_seat_action(
 	seat_index: int,
 	title: String,
 	cards: Array,
-	border_color: Color
+	border_color: Color,
+	is_collision := false
 ) -> void:
 	if seat_index < 0 or seat_index >= _seat_action_panels.size() or cards.is_empty():
 		return
 	var panel := _seat_action_panels[seat_index]
-	panel.add_theme_stylebox_override("panel", _style_box(Color("#19211f"), border_color, 2, 5))
-	var margin := MarginContainer.new()
-	margin.mouse_filter = Control.MOUSE_FILTER_IGNORE
-	margin.add_theme_constant_override("margin_left", 5)
-	margin.add_theme_constant_override("margin_top", 4)
-	margin.add_theme_constant_override("margin_right", 5)
-	margin.add_theme_constant_override("margin_bottom", 4)
-	panel.add_child(margin)
-	var column := VBoxContainer.new()
-	column.mouse_filter = Control.MOUSE_FILTER_IGNORE
-	column.add_theme_constant_override("separation", 2)
-	margin.add_child(column)
-	var title_label := _label(title, 10, border_color)
-	title_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
-	title_label.clip_text = true
-	title_label.text_overrun_behavior = TextServer.OVERRUN_TRIM_ELLIPSIS
-	column.add_child(title_label)
+	panel.custom_minimum_size = Vector2(
+		SEAT_ACTION_CARD_WIDTH * cards.size(),
+		SEAT_ACTION_CARD_HEIGHT
+	)
+	var panel_style := _style_box(Color.TRANSPARENT, border_color, 2, 4)
+	panel_style.content_margin_left = 0
+	panel_style.content_margin_top = 0
+	panel_style.content_margin_right = 0
+	panel_style.content_margin_bottom = 0
+	panel.add_theme_stylebox_override("panel", panel_style)
+	var content := Control.new()
+	content.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	panel.add_child(content)
 	var row := HBoxContainer.new()
 	row.mouse_filter = Control.MOUSE_FILTER_IGNORE
-	row.alignment = BoxContainer.ALIGNMENT_CENTER
-	row.add_theme_constant_override("separation", 3)
-	column.add_child(row)
-	var face_size := Vector2(30, 47) if cards.size() > 1 else Vector2(38, 59)
+	row.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
+	row.add_theme_constant_override("separation", 0)
+	content.add_child(row)
 	for raw_card: Variant in cards:
 		if raw_card is Dictionary:
-			row.add_child(_build_card_face(raw_card, face_size))
+			var face := _build_card_face(
+				raw_card,
+				Vector2(SEAT_ACTION_CARD_WIDTH, SEAT_ACTION_CARD_HEIGHT)
+			)
+			face.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+			face.size_flags_vertical = Control.SIZE_EXPAND_FILL
+			row.add_child(face)
+	var title_label := _label(title, 9, border_color)
+	title_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	title_label.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
+	title_label.clip_text = true
+	title_label.text_overrun_behavior = TextServer.OVERRUN_TRIM_ELLIPSIS
+	title_label.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	title_label.add_theme_stylebox_override(
+		"normal",
+		_style_box(Color(0.05, 0.06, 0.07, 0.9), Color.TRANSPARENT, 0, 0)
+	)
+	title_label.set_anchors_preset(Control.PRESET_TOP_WIDE)
+	title_label.offset_left = 2
+	title_label.offset_top = 2
+	title_label.offset_right = -2
+	title_label.offset_bottom = 18
+	content.add_child(title_label)
+	var outline := Panel.new()
+	outline.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	outline.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
+	outline.add_theme_stylebox_override(
+		"panel",
+		_style_box(Color.TRANSPARENT, border_color, 2, 4)
+	)
+	content.add_child(outline)
 	panel.visible = true
+	_animate_seat_action(panel, seat_index, title, is_collision)
+
+
+func _animate_seat_action(
+	panel: PanelContainer,
+	seat_index: int,
+	title: String,
+	is_collision: bool
+) -> void:
+	var key := "seat|%s|%d|%d|%s" % [str(_store.phase), int(_store.turn_number), seat_index, title]
+	if _reduced_motion or _animated_reveal_keys.has(key):
+		panel.modulate = Color.WHITE
+		panel.scale = Vector2.ONE
+		return
+	_animated_reveal_keys[key] = true
+	panel.modulate = Color(1.0, 1.0, 1.0, 0.72)
+	panel.scale = Vector2(0.96, 1.0) if is_collision else Vector2.ONE
+	var tween := create_tween()
+	tween.set_parallel(true)
+	tween.set_trans(Tween.TRANS_QUAD)
+	tween.set_ease(Tween.EASE_OUT)
+	tween.tween_property(panel, "modulate", Color.WHITE, 0.22)
+	if is_collision:
+		tween.tween_property(panel, "scale", Vector2.ONE, 0.18)
 
 
 func _current_play_event() -> Dictionary:
@@ -1705,41 +1771,43 @@ func _build_hand_card(
 		tooltip_parts.append("%s 组" % ("A" if final_group_index == 0 else "B"))
 	panel.tooltip_text = " · ".join(tooltip_parts)
 	panel.toggled.connect(_on_hand_card_toggled.bind(str(card.get("id", "")), panel))
+	panel.clip_contents = true
+	var face := _build_card_face(card, Vector2.ZERO)
+	face.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
+	face.offset_left = 2
+	face.offset_top = 2
+	face.offset_right = -2
+	face.offset_bottom = -2
+	panel.add_child(face)
 	var accessible_name := _label(_format_card(card), 1, Color.TRANSPARENT)
 	accessible_name.name = "AccessibleCardName"
 	accessible_name.visible = false
 	panel.add_child(accessible_name)
-	var margin := MarginContainer.new()
-	margin.mouse_filter = Control.MOUSE_FILTER_IGNORE
-	margin.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
-	margin.add_theme_constant_override("margin_left", 4)
-	margin.add_theme_constant_override("margin_right", 4)
-	margin.add_theme_constant_override("margin_top", 4)
-	margin.add_theme_constant_override("margin_bottom", 4)
-	panel.add_child(margin)
-	var column := VBoxContainer.new()
-	column.mouse_filter = Control.MOUSE_FILTER_IGNORE
-	column.add_theme_constant_override("separation", 0)
-	margin.add_child(column)
-	var face := _build_card_face(card, Vector2(38, 49))
-	face.size_flags_horizontal = Control.SIZE_SHRINK_CENTER
-	face.size_flags_vertical = Control.SIZE_EXPAND_FILL
-	column.add_child(face)
+	var marker_parts: Array[String] = []
 	if _store != null and str(_store.deck_mode) == "two":
-		var copy_marker := _label("#%d" % (int(card.get("copy_index", 0)) + 1), 10, COLOR_MUTED)
-		copy_marker.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
-		copy_marker.custom_minimum_size.y = 11
-		column.add_child(copy_marker)
+		marker_parts.append("#%d" % (int(card.get("copy_index", 0)) + 1))
 	if is_acquired:
-		var acquired_marker := _label(_acquisition_text(acquired_card_source), 9, COLOR_ACQUIRED)
-		acquired_marker.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
-		acquired_marker.clip_text = true
-		column.add_child(acquired_marker)
+		marker_parts.append(_acquisition_text(acquired_card_source))
 	elif final_group_index >= 0:
-		var group_marker := _label("%s组" % ("A" if final_group_index == 0 else "B"), 10, COLOR_GOLD)
-		group_marker.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
-		group_marker.clip_text = true
-		column.add_child(group_marker)
+		marker_parts.append("%s组" % ("A" if final_group_index == 0 else "B"))
+	if not marker_parts.is_empty():
+		var marker_color := COLOR_ACQUIRED if is_acquired else (COLOR_GOLD if final_group_index >= 0 else COLOR_MUTED)
+		var marker := _label(" · ".join(marker_parts), 8, marker_color)
+		marker.name = "CardMarker"
+		marker.mouse_filter = Control.MOUSE_FILTER_IGNORE
+		marker.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+		marker.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
+		marker.clip_text = true
+		marker.add_theme_stylebox_override(
+			"normal",
+			_style_box(Color(0.05, 0.06, 0.07, 0.9), Color.TRANSPARENT, 0, 0)
+		)
+		marker.set_anchors_preset(Control.PRESET_BOTTOM_WIDE)
+		marker.offset_left = 2
+		marker.offset_top = -16
+		marker.offset_right = -2
+		marker.offset_bottom = -2
+		panel.add_child(marker)
 	return panel
 
 
@@ -2196,6 +2264,8 @@ func _on_resized() -> void:
 	)
 	var local_y := maxf(8.0, stage_height - seat_height - 8.0)
 	var local_index := _local_seat_index if _local_seat_index >= 0 else 0
+	var current_phase := str(_store.phase) if _store != null else ""
+	var show_compact_discard_status := current_phase in ["award_discard", "discard_reveal"]
 	var seat_positions := {
 		local_index: Vector2(north_x, local_y),
 		posmod(local_index + 1, 4): Vector2(east_x, side_y),
@@ -2206,22 +2276,59 @@ func _on_resized() -> void:
 		_seat_cards[seat_index].position = seat_positions.get(seat_index, Vector2.ZERO)
 		_seat_cards[seat_index].size = Vector2(seat_width, seat_height)
 		var seat_position: Vector2 = seat_positions.get(seat_index, Vector2.ZERO)
-		var action_size := Vector2(SEAT_ACTION_WIDTH, SEAT_ACTION_HEIGHT)
-		# Presentation cards temporarily occupy their owner's compact seat region.
-		# This keeps all four reveals distinct at the minimum supported viewport.
-		var action_position := Vector2(
-			seat_position.x + (seat_width - action_size.x) * 0.5,
-			seat_position.y + (seat_height - action_size.y) * 0.5
-		)
+		var action_panel := _seat_action_panels[seat_index]
+		var action_size := action_panel.custom_minimum_size
+		var relative_position := posmod(seat_index - local_index, 4)
+		var action_position := Vector2.ZERO
+		match relative_position:
+			0:
+				action_position = Vector2(
+					seat_position.x + (seat_width - action_size.x) * 0.5,
+					seat_position.y - action_size.y - 5.0
+				)
+			1:
+				action_position = Vector2(
+					seat_position.x - action_size.x - 5.0,
+					seat_position.y + (seat_height - action_size.y) * 0.5
+				)
+			2:
+				action_position = Vector2(
+					seat_position.x + (seat_width - action_size.x) * 0.5,
+					seat_position.y + seat_height + 5.0
+				)
+			3:
+				action_position = Vector2(
+					seat_position.x + seat_width + 5.0,
+					seat_position.y + (seat_height - action_size.y) * 0.5
+				)
+		if show_compact_discard_status and relative_position == 2:
+			action_position.x = (
+				width * 0.5 - DISCARD_STATUS_WIDTH * 0.5 - action_size.x - 6.0
+			)
+		elif show_compact_discard_status and relative_position == 0:
+			action_position.x = width * 0.5 + DISCARD_STATUS_WIDTH * 0.5 + 6.0
 		action_position.x = clampf(action_position.x, 4.0, maxf(4.0, width - action_size.x - 4.0))
 		action_position.y = clampf(action_position.y, 4.0, maxf(4.0, stage_height - action_size.y - 4.0))
-		_seat_action_panels[seat_index].position = action_position
-		_seat_action_panels[seat_index].size = action_size
+		action_panel.position = action_position
+		action_panel.size = action_size
 
 	# Four public reveals must fit in the center at the minimum supported width.
-	var contest_width := minf(280.0, maxf(220.0, width * 0.42))
-	var contest_height := maxf(76.0, _contest_panel.get_combined_minimum_size().y)
-	_contest_panel.position = Vector2((width - contest_width) * 0.5, maxf(78.0, (stage_height - contest_height) * 0.46))
+	var contest_width := (
+		DISCARD_STATUS_WIDTH
+		if show_compact_discard_status
+		else minf(280.0, maxf(220.0, width * 0.42))
+	)
+	var contest_height := (
+		DISCARD_STATUS_HEIGHT
+		if show_compact_discard_status
+		else maxf(76.0, _contest_panel.get_combined_minimum_size().y)
+	)
+	var contest_y := (
+		(stage_height - contest_height) * 0.5
+		if show_compact_discard_status
+		else maxf(78.0, (stage_height - contest_height) * 0.46)
+	)
+	_contest_panel.position = Vector2((width - contest_width) * 0.5, contest_y)
 	_contest_panel.size = Vector2(contest_width, contest_height)
 	var show_final_settlement := (
 		_store != null

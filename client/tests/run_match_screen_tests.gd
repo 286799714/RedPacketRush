@@ -379,6 +379,8 @@ func _test_local_hand_is_readable_and_private(screen: MatchScreen) -> void:
 		_expect(rect.end.x <= 960.0 and rect.end.y <= 540.0, "本地牌不越出视口")
 		var face := card.find_child("CardFace", true, false) as TextureRect
 		_expect(face != null and face.texture != null, "本地牌使用真实扑克牌面纹理")
+		if face != null:
+			_expect_equal(face.get_global_rect(), card.get_global_rect().grow(-2.0), "本地牌面只为选择外框保留边线")
 	_expect(screen._hand_title_label.text.contains("5"), "本地手牌数量显示")
 	_expect_equal(
 		screen._hand_cards.map(func(card: Button): return str(card.get_meta("card_id", ""))),
@@ -623,6 +625,8 @@ func _test_claim_commit_shows_played_combination(
 	if actor_reveal != null:
 		_expect(_node_text(actor_reveal).contains("出牌 · 同花顺 · +10 分"), "行动者前方显示牌型与加点")
 		_expect(_texture_rect_count(actor_reveal) == 3, "行动者前方显示三张真实牌面")
+		_assert_seat_action_is_forward_and_clear(screen, actor_reveal, 0, "出牌公示")
+		_assert_action_faces_fill_panel(actor_reveal, 3, "出牌公示牌面")
 	_expect(not played_panel.visible, "独立出牌公示不占用中央抢牌区域")
 
 	store.phase = "claim_commit"
@@ -846,6 +850,8 @@ func _test_claim_reveal_shows_simultaneous_outcomes_and_public_history(
 			_expect(style != null and style.border_color == Color("#4ea1ff"), "抢到的牌使用蓝框")
 			_expect(_node_text(award_panel).contains("抢牌获得"), "抢牌公示显示抢牌获得")
 			_expect(_texture_rect_count(award_panel) == 1, "抢牌公示显示真实牌面")
+			_assert_seat_action_is_forward_and_clear(screen, award_panel, seat_index, "抢牌公示")
+			_assert_action_faces_fill_panel(award_panel, 1, "抢牌公示牌面")
 
 
 func _test_reveal_motion_honors_reduced_motion(
@@ -864,10 +870,9 @@ func _test_reveal_motion_honors_reduced_motion(
 	})
 	await process_frame
 	await process_frame
-	var reveal_title := _find_visible_label_containing(screen, "抢牌同时揭晓")
-	var reveal_panel := _ancestor_panel(reveal_title, screen)
+	var reveal_panel := screen.find_child("SeatAction2", true, false) as PanelContainer
 	if reveal_panel == null:
-		_failures.append("抢牌揭晓应提供可见的公开结果面板")
+		_failures.append("抢牌揭晓应在玩家前方提供可见结果面板")
 		return
 	var animated_alpha := reveal_panel.modulate.a
 	_expect(animated_alpha < 1.0, "抢牌揭晓首次出现播放统一 reveal 动效")
@@ -888,7 +893,7 @@ func _test_reveal_motion_honors_reduced_motion(
 	await process_frame
 	await process_frame
 	_expect(is_equal_approx(reveal_panel.modulate.a, 1.0), "reduced-motion 下跳过 reveal 动效")
-	var reduced_collision := _find_last_visible_label_containing(screen, "机器人丙 · 抢 Q")
+	var reduced_collision := screen.find_child("SeatAction2", true, false) as PanelContainer
 	_expect(reduced_collision != null and is_equal_approx(reduced_collision.scale.x, 1.0), "reduced-motion 下跳过撞车动效")
 	screen.set_reduced_motion(false)
 
@@ -906,10 +911,10 @@ func _test_collision_outcome_moves_once_without_resizing(
 		],
 	})
 
-	var unique_row := _find_last_visible_label_containing(screen, "乙 · 抢 A")
-	var collision_row := _find_last_visible_label_containing(screen, "机器人丙 · 抢 Q")
+	var unique_row := screen.find_child("SeatAction1", true, false) as PanelContainer
+	var collision_row := screen.find_child("SeatAction2", true, false) as PanelContainer
 	if unique_row == null or collision_row == null:
-		_failures.append("抢牌揭晓应提供稳定的席位结果行")
+		_failures.append("抢牌揭晓应提供稳定的席位结果面板")
 		return
 	_expect(is_equal_approx(unique_row.scale.x, 1.0), "独得结果不播放撞车动效")
 	_expect(collision_row.scale.x >= 0.94 and collision_row.scale.x < 1.0, "撞车结果播放克制的一次性动效")
@@ -921,7 +926,7 @@ func _test_collision_outcome_moves_once_without_resizing(
 	store.apply_public_snapshot({})
 	await process_frame
 	await process_frame
-	var refreshed_collision := _find_last_visible_label_containing(screen, "机器人丙 · 抢 Q")
+	var refreshed_collision := screen.find_child("SeatAction2", true, false) as PanelContainer
 	_expect(refreshed_collision != null and is_equal_approx(refreshed_collision.scale.x, 1.0), "同回合状态更新不重播撞车动效")
 	_expect(refreshed_collision != null and refreshed_collision.size == layout_size, "重复刷新不改变撞车行布局")
 
@@ -931,7 +936,7 @@ func _test_new_room_replays_collision_motion(
 	store: FakeMatchStore
 ) -> void:
 	store.apply_public_snapshot({"room_id": "room-b"})
-	var collision_row := _find_last_visible_label_containing(screen, "机器人丙 · 抢 Q")
+	var collision_row := screen.find_child("SeatAction2", true, false) as PanelContainer
 	_expect(
 		collision_row != null and collision_row.scale.x >= 0.94 and collision_row.scale.x < 1.0,
 		"新房间的相同回合重新播放撞车动效"
@@ -1039,11 +1044,11 @@ func _test_two_deck_physical_cards_are_distinguishable_at_960(
 		"两副牌揭晓保留第二张实体牌编号"
 	)
 	_expect(
-		_count_visible_labels_containing(screen, "甲 · 抢 Q ♥ 红桃 #1") >= 2,
+		_count_visible_labels_containing(screen, "甲 · 抢 Q ♥ 红桃 #1") >= 1,
 		"两副牌历史保留第一张实体牌编号"
 	)
 	_expect(
-		_count_visible_labels_containing(screen, "机器人丙 · 抢 Q ♥ 红桃 #2") >= 2,
+		_count_visible_labels_containing(screen, "机器人丙 · 抢 Q ♥ 红桃 #2") >= 1,
 		"两副牌历史保留第二张实体牌编号"
 	)
 
@@ -1181,6 +1186,8 @@ func _test_award_recipient_discards_an_original_card(
 	if discard_reveal != null:
 		_expect(_node_text(discard_reveal).contains("弃牌"), "弃牌公示显示弃牌字样")
 		_expect(_texture_rect_count(discard_reveal) == 1, "弃牌公示显示真实牌面")
+		_assert_seat_action_is_forward_and_clear(screen, discard_reveal, 0, "弃牌公示")
+		_assert_action_faces_fill_panel(discard_reveal, 1, "弃牌公示牌面")
 	store.apply_public_snapshot({
 		"phase": "actor_play",
 		"actor_seat_index": 2,
@@ -2007,6 +2014,52 @@ func _texture_rect_count(node: Node) -> int:
 	for child in node.get_children():
 		count += _texture_rect_count(child)
 	return count
+
+
+func _assert_seat_action_is_forward_and_clear(
+	screen: MatchScreen,
+	panel: PanelContainer,
+	seat_index: int,
+	context: String
+) -> void:
+	var panel_rect := panel.get_global_rect()
+	var seat_rect := screen._seat_cards[seat_index].get_global_rect()
+	_expect(not panel_rect.intersects(seat_rect), "%s不覆盖玩家信息框" % context)
+	var table_center := screen._contest_panel.get_global_rect().get_center()
+	_expect(
+		panel_rect.get_center().distance_to(table_center) < seat_rect.get_center().distance_to(table_center),
+		"%s位于玩家信息框朝牌桌中央的前方" % context
+	)
+	for central_panel in [screen._contest_panel, screen._played_panel]:
+		if central_panel != null and central_panel.visible:
+			_expect(
+				not panel_rect.intersects(central_panel.get_global_rect()),
+				"%s不覆盖牌桌中央区域" % context
+			)
+
+
+func _assert_action_faces_fill_panel(
+	panel: PanelContainer,
+	expected_count: int,
+	context: String
+) -> void:
+	var faces: Array[TextureRect] = []
+	_collect_card_faces(panel, faces)
+	_expect_equal(faces.size(), expected_count, "%s数量正确" % context)
+	if faces.is_empty():
+		return
+	var covered_rect := faces[0].get_global_rect()
+	for index in range(1, faces.size()):
+		covered_rect = covered_rect.merge(faces[index].get_global_rect())
+	_expect_equal(covered_rect, panel.get_global_rect(), "%s贴边填满公示外框" % context)
+	_expect(faces[0].get_global_rect().size.y >= 78.0, "%s保持可读高度" % context)
+
+
+func _collect_card_faces(node: Node, result: Array[TextureRect]) -> void:
+	if node is TextureRect:
+		result.append(node)
+	for child in node.get_children():
+		_collect_card_faces(child, result)
 
 
 func _find_last_visible_label_containing(root_node: Node, fragment: String) -> Label:
