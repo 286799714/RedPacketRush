@@ -55,6 +55,20 @@ $apk = Join-Path (Resolve-Path .\build\android).Path "RedPacketRush-debug.apk"
 
 预设只导出 `arm64-v8a`，使用本机 Godot 调试签名，产物位于 `build/android/RedPacketRush-debug.apk`。真机访问电脑上的服务端时，大厅地址不能使用 `127.0.0.1`；请填写电脑的局域网地址，例如 `ws://192.168.1.10:2567`，并确保 Windows 防火墙允许该端口。
 
+## Windows 发布包
+
+Windows 预设导出 x86_64 发布版，并将 PCK 嵌入可执行文件。在仓库根目录运行：
+
+```powershell
+$godot = "C:\path\to\Godot_v4.7.1-stable_win64_console.exe"
+New-Item -ItemType Directory -Force .\build\windows | Out-Null
+$exe = Join-Path (Resolve-Path .\build\windows).Path "RedPacketRush.exe"
+& $godot --headless --path .\client --export-release Windows $exe
+Compress-Archive -Force .\build\windows\* .\build\RedPacketRush-windows-x86_64.zip
+```
+
+分发时应使用 ZIP，确保 `RedPacketRush.exe` 与 Colyseus 原生 DLL 一起交付。
+
 ## 验证和 smoke
 
 完整检查：
