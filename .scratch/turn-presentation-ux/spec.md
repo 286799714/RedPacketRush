@@ -7,6 +7,7 @@ The transition from an actor's play through claims and required discards is too 
 ## Required behavior
 
 - After receiving a claimed card, a participant may discard any owned card, including that newly awarded card.
+- During actionable `actor_play`, the center shows only `请选择 3 张牌打出`; the latest point contest remains available in history instead of occupying the table center.
 - An actor play enters a three-second `play_reveal` presentation phase before claims open. The actor's seat region shows all three played cards, the combination label, and the score added.
 - Claim resolution remains public for four seconds. Each recipient's seat region shows the exact awarded card with a blue border and the label `抢牌获得`.
 - During `award_discard`, the center says `你需要弃置一张牌` for a pending local recipient and `等待其他玩家弃牌` otherwise; it does not show the latest point contest.

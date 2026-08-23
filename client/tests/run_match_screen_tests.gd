@@ -315,10 +315,10 @@ func _test_public_header_and_contest_history_are_visible(screen: MatchScreen) ->
 	_expect(screen._actor_label.text.contains("机器人丙"), "行动者显示昵称")
 	_expect(screen._deck_label.text.contains("20"), "牌堆数量显示")
 	_expect(screen._history_list.get_child_count() == 2, "拼点历史显示两轮")
-	_expect(screen._contest_title_label.text.contains("第 2 轮"), "中央显示最新拼点轮次")
-	_expect(screen._contest_reveal_row.get_child_count() == 4, "中央显示最新公开翻牌")
-	for reveal in screen._contest_reveal_row.get_children():
-		_expect(reveal.get_global_rect().end.x <= screen._contest_panel.get_global_rect().end.x, "中央公开翻牌不被裁出")
+	_expect(screen._contest_panel.visible, "出牌阶段中央提示可见")
+	_expect(screen._contest_title_label.text == "请选择 3 张牌打出", "出牌阶段中央提示选择三张牌")
+	_expect(not screen._contest_detail_label.visible, "出牌阶段中央不显示最新拼点详情")
+	_expect(screen._contest_reveal_row.get_child_count() == 0, "出牌阶段中央不显示最新拼点牌面")
 
 
 func _test_deadline_header_uses_absolute_server_time(

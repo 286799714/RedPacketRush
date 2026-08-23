@@ -1109,6 +1109,8 @@ func _refresh_played_combination(phase: String) -> void:
 	_played_summary_label.visible = show_played or show_final_settlement
 	_claim_reveal_list.visible = show_claim_reveal or show_final_settlement
 	_claim_discard_label.visible = show_claim_reveal
+	if phase == "actor_play":
+		_set_contest_status("请选择 3 张牌打出", "")
 	if not show_played and not show_claim_reveal and not show_final_settlement:
 		_played_title_label.text = "本回合公开出牌"
 		_played_summary_label.text = "牌型：-- · 本次 0 分"
