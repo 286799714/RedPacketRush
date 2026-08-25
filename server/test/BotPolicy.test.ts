@@ -97,6 +97,120 @@ describe("bot policy", () => {
     assert.deepStrictEqual(chooseBotCommand(view, "aggressive"), expectedCommand);
   });
 
+  it("always claims the strongest played card for the aggressive strategy", () => {
+    const playedCards = [
+      specifiedCard("middle", 10, "hearts"),
+      specifiedCard("strongest", 14, "clubs"),
+      specifiedCard("weakest", 3, "diamonds"),
+    ];
+    const view = matchView({
+      phase: "claim_commit",
+      actorSeatIndex: 0,
+      playedCards,
+    });
+
+    assert.deepStrictEqual(chooseBotCommand(view, "aggressive"), {
+      type: "claim",
+      cardId: "strongest",
+    });
+  });
+
+  it("passes when no played card improves a conservative hand", () => {
+    const view = matchView({
+      phase: "claim_commit",
+      actorSeatIndex: 0,
+      hand: [
+        specifiedCard("heart-2", 2, "hearts"),
+        specifiedCard("diamond-2", 2, "diamonds"),
+        specifiedCard("heart-7", 7, "hearts"),
+        specifiedCard("diamond-7", 7, "diamonds"),
+        specifiedCard("spade-j", 11, "spades"),
+      ],
+      playedCards: [
+        specifiedCard("club-4", 4, "clubs"),
+        specifiedCard("club-5", 5, "clubs"),
+        specifiedCard("club-9", 9, "clubs"),
+      ],
+    });
+
+    assert.deepStrictEqual(chooseBotCommand(view, "conservative"), {
+      type: "claim",
+      cardId: null,
+    });
+  });
+
+  it("prioritizes a rank improvement over suit and adjacency improvements", () => {
+    const view = matchView({
+      phase: "claim_commit",
+      actorSeatIndex: 0,
+      hand: [
+        specifiedCard("heart-5", 5, "hearts"),
+        specifiedCard("diamond-8", 8, "diamonds"),
+        specifiedCard("spade-10", 10, "spades"),
+        specifiedCard("heart-q", 12, "hearts"),
+        specifiedCard("diamond-2", 2, "diamonds"),
+      ],
+      playedCards: [
+        specifiedCard("rank-match", 5, "clubs"),
+        specifiedCard("suit-match", 14, "hearts"),
+        specifiedCard("adjacent-match", 13, "clubs"),
+      ],
+    });
+
+    assert.deepStrictEqual(chooseBotCommand(view, "conservative"), {
+      type: "claim",
+      cardId: "rank-match",
+    });
+  });
+
+  it("prioritizes a suit improvement over an adjacency improvement", () => {
+    const view = matchView({
+      phase: "claim_commit",
+      actorSeatIndex: 0,
+      hand: [
+        specifiedCard("heart-2", 2, "hearts"),
+        specifiedCard("heart-3", 3, "hearts"),
+        specifiedCard("diamond-7", 7, "diamonds"),
+        specifiedCard("diamond-8", 8, "diamonds"),
+        specifiedCard("spade-q", 12, "spades"),
+      ],
+      playedCards: [
+        specifiedCard("suit-match", 10, "hearts"),
+        specifiedCard("adjacent-match", 13, "clubs"),
+        specifiedCard("no-match", 5, "clubs"),
+      ],
+    });
+
+    assert.deepStrictEqual(chooseBotCommand(view, "conservative"), {
+      type: "claim",
+      cardId: "suit-match",
+    });
+  });
+
+  it("claims the strongest card when a conservative hand is above a pair", () => {
+    const view = matchView({
+      phase: "claim_commit",
+      actorSeatIndex: 0,
+      hand: [
+        specifiedCard("straight-4", 4, "hearts"),
+        specifiedCard("straight-5", 5, "diamonds"),
+        specifiedCard("straight-6", 6, "spades"),
+        specifiedCard("heart-9", 9, "hearts"),
+        specifiedCard("diamond-j", 11, "diamonds"),
+      ],
+      playedCards: [
+        specifiedCard("adjacent-7", 7, "clubs"),
+        specifiedCard("strongest-a", 14, "clubs"),
+        specifiedCard("adjacent-3", 3, "clubs"),
+      ],
+    });
+
+    assert.deepStrictEqual(chooseBotCommand(view, "conservative"), {
+      type: "claim",
+      cardId: "strongest-a",
+    });
+  });
+
   it("selects a seeded played card or pass for an uncommitted claimant", () => {
     const playedCards = [card(0), card(1), card(2)];
     const view = matchView({
@@ -138,6 +252,90 @@ describe("bot policy", () => {
       cardId: "card-5",
       turnNumber: 3,
     });
+  });
+
+  it("uses the same five-class discard priority for both strategies", () => {
+    const scenarios: readonly {
+      readonly name: string;
+      readonly hand: readonly PhysicalCard[];
+      readonly expectedCardId: string;
+    }[] = [
+      {
+        name: "isolated before every relation",
+        hand: [
+          specifiedCard("isolated", 2, "clubs"),
+          specifiedCard("heart-5", 5, "hearts"),
+          specifiedCard("diamond-6", 6, "diamonds"),
+          specifiedCard("heart-9", 9, "hearts"),
+          specifiedCard("heart-10", 10, "hearts"),
+          specifiedCard("diamond-k", 13, "diamonds"),
+        ],
+        expectedCardId: "isolated",
+      },
+      {
+        name: "adjacency only before suit",
+        hand: [
+          specifiedCard("adjacent-low", 2, "clubs"),
+          specifiedCard("adjacent-high", 3, "diamonds"),
+          specifiedCard("heart-5", 5, "hearts"),
+          specifiedCard("heart-9", 9, "hearts"),
+          specifiedCard("spade-q", 12, "spades"),
+          specifiedCard("spade-a", 14, "spades"),
+        ],
+        expectedCardId: "adjacent-low",
+      },
+      {
+        name: "suit before suit and adjacency",
+        hand: [
+          specifiedCard("suit-low", 2, "hearts"),
+          specifiedCard("suit-high", 5, "hearts"),
+          specifiedCard("diamond-7", 7, "diamonds"),
+          specifiedCard("diamond-8", 8, "diamonds"),
+          specifiedCard("spade-10", 10, "spades"),
+          specifiedCard("spade-j", 11, "spades"),
+        ],
+        expectedCardId: "suit-low",
+      },
+      {
+        name: "suit and adjacency before same rank",
+        hand: [
+          specifiedCard("suited-adjacent-low", 2, "hearts"),
+          specifiedCard("suited-adjacent-high", 3, "hearts"),
+          specifiedCard("rank-7-diamond", 7, "diamonds"),
+          specifiedCard("rank-7-spade", 7, "spades"),
+          specifiedCard("rank-10-club", 10, "clubs"),
+          specifiedCard("rank-10-heart", 10, "hearts"),
+        ],
+        expectedCardId: "suited-adjacent-low",
+      },
+      {
+        name: "weakest same-rank card as fallback",
+        hand: [
+          specifiedCard("pair-2-club", 2, "clubs"),
+          specifiedCard("pair-2-heart", 2, "hearts"),
+          specifiedCard("pair-7-club", 7, "clubs"),
+          specifiedCard("pair-7-diamond", 7, "diamonds"),
+          specifiedCard("pair-10-spade", 10, "spades"),
+          specifiedCard("pair-10-heart", 10, "hearts"),
+        ],
+        expectedCardId: "pair-2-club",
+      },
+    ];
+
+    for (const scenario of scenarios) {
+      const view = matchView({
+        phase: "award_discard",
+        hand: scenario.hand,
+        pendingDiscardSeatIndexes: [1],
+      });
+      for (const strategy of ["conservative", "aggressive"] as const) {
+        assert.deepStrictEqual(chooseBotCommand(view, strategy), {
+          type: "discard",
+          cardId: scenario.expectedCardId,
+          turnNumber: 3,
+        }, `${strategy}: ${scenario.name}`);
+      }
+    }
   });
 
   it("uses the first three cards for the deterministic actor deadline fallback", () => {

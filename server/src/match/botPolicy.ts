@@ -1,4 +1,5 @@
 import type { MatchView } from "./MatchEngine.js";
+import { compareCardPreference, type PhysicalCard } from "./cards.js";
 import { combinationsOfThree } from "./combinatorics.js";
 import { findBestFinalSelection } from "./finalSettlement.js";
 import { nextRandomIndex, type RandomSource } from "./random.js";
@@ -65,6 +66,42 @@ export function chooseBotCommand(
     };
   }
 
+  if (commandType === "claim" && strategyOrRandom === "aggressive") {
+    const strongestCard = publicState.playedCards.reduce((strongest, card) => (
+      compareCardPreference(card, strongest) > 0 ? card : strongest
+    ));
+    return { type: "claim", cardId: strongestCard.id };
+  }
+  if (commandType === "claim" && strategyOrRandom === "conservative") {
+    if (findBestFinalSelection(privateState.hand).totalScore > 2) {
+      const strongestCard = publicState.playedCards.reduce((strongest, card) => (
+        compareCardPreference(card, strongest) > 0 ? card : strongest
+      ));
+      return { type: "claim", cardId: strongestCard.id };
+    }
+    const improvingCards = publicState.playedCards
+      .map((card) => ({ card, improvement: improvementFrom(card, privateState.hand) }))
+      .filter(({ improvement }) => improvement.some((count) => count > 0));
+    if (improvingCards.length === 0) {
+      return { type: "claim", cardId: null };
+    }
+    const best = improvingCards.reduce((currentBest, candidate) => (
+      compareImprovements(candidate, currentBest) > 0 ? candidate : currentBest
+    ));
+    return { type: "claim", cardId: best.card.id };
+  }
+  if (commandType === "discard" && typeof strategyOrRandom === "string") {
+    const [cardToDiscard] = [...discardableBotCards(view)].sort((left, right) => (
+      discardPriority(left, privateState.hand) - discardPriority(right, privateState.hand)
+      || compareCardPreference(left, right)
+    ));
+    return {
+      type: "discard",
+      cardId: cardToDiscard.id,
+      turnNumber: publicState.turnNumber,
+    };
+  }
+
   if (typeof strategyOrRandom === "string") {
     throw new Error(`Bot ${commandType ?? "idle"} strategy is not implemented`);
   }
@@ -87,6 +124,57 @@ export function chooseBotCommand(
   }
 
   return null;
+}
+
+function improvementFrom(
+  card: PhysicalCard,
+  hand: readonly PhysicalCard[],
+): readonly [number, number, number] {
+  return [
+    hand.filter((heldCard) => heldCard.rank === card.rank).length,
+    hand.filter((heldCard) => heldCard.suit === card.suit).length,
+    hand.filter((heldCard) => ranksAreAdjacent(heldCard.rank, card.rank)).length,
+  ];
+}
+
+function compareImprovements(
+  left: { readonly card: PhysicalCard; readonly improvement: readonly number[] },
+  right: { readonly card: PhysicalCard; readonly improvement: readonly number[] },
+): number {
+  for (let index = 0; index < left.improvement.length; index += 1) {
+    const difference = left.improvement[index] - right.improvement[index];
+    if (difference !== 0) {
+      return difference;
+    }
+  }
+  return compareCardPreference(left.card, right.card);
+}
+
+function ranksAreAdjacent(left: PhysicalCard["rank"], right: PhysicalCard["rank"]): boolean {
+  return Math.abs(left - right) === 1 || (
+    (left === 2 && right === 14) || (left === 14 && right === 2)
+  );
+}
+
+function discardPriority(card: PhysicalCard, hand: readonly PhysicalCard[]): number {
+  const otherCards = hand.filter((otherCard) => otherCard.id !== card.id);
+  if (otherCards.some((otherCard) => otherCard.rank === card.rank)) {
+    return 4;
+  }
+  const hasSameSuit = otherCards.some((otherCard) => otherCard.suit === card.suit);
+  const hasAdjacentRank = otherCards.some((otherCard) => (
+    ranksAreAdjacent(otherCard.rank, card.rank)
+  ));
+  if (hasSameSuit && hasAdjacentRank) {
+    return 3;
+  }
+  if (hasSameSuit) {
+    return 2;
+  }
+  if (hasAdjacentRank) {
+    return 1;
+  }
+  return 0;
 }
 
 function discardableBotCards(view: MatchView) {

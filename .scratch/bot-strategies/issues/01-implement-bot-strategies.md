@@ -21,6 +21,9 @@ Replace random Bot play, Claim, and discard choices with the two strategies and 
 ## TDD slices
 
 - Actor play: calling the old random policy with a strategy failed at `random.nextInt`; adding the explicit strategies and canonical best-Combination selection made the focused Bot policy suite pass (5 tests).
+- Aggressive Claim: the new strategy initially reached the unimplemented Claim branch; selecting the strongest played card made the focused suite pass (6 tests).
+- Conservative Claim: a fixed Pass first satisfied the no-improvement example, then failed rank-over-suit-over-adjacency and above-pair examples; relation-count comparison plus the canonical best-Combination score made all Claim examples pass. The no-improvement example also caught and repaired an over-broad A-2 adjacency check that treated any ranks summing to 16 as adjacent.
+- Shared discard: both strategies initially reached the unimplemented discard branch; five exclusive relation classes and weakest-card tie-breaking made all five discard scenarios pass for both strategies (11 focused tests total).
 
 ## Review
 
