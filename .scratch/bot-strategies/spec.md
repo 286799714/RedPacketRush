@@ -1,6 +1,6 @@
 # Conservative and aggressive bot strategies
 
-**Status:** done
+**Status:** claimed
 
 ## Goal
 
@@ -37,6 +37,7 @@ Same-rank membership takes precedence over every other relation. Within one clas
 - Drive the public `MatchEngine` phase and command APIs directly with one deck and seeds 1 through 1,000.
 - Every Match contains two conservative and two aggressive Bots. Cycle through all six choices of conservative seats to reduce seat-position bias.
 - Split one win credit evenly across co-winners, aggregate credit by strategy, and print both win rates. The two rates must total 100% apart from floating-point tolerance.
+- Keep stable identities for conservative Bot A and Bot B while rotating their seats. Calculate each Bot's Claim participation probability independently, then report the arithmetic mean of those two probabilities rather than pooling their opportunities.
 - Assert completion and accounting invariants, not a minimum win-rate threshold.
 
 ## Testing seams
