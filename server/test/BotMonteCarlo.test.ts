@@ -27,6 +27,12 @@ const PARTICIPANTS: readonly MatchParticipant[] = SEAT_INDEXES.map((seatIndex) =
   bot: true,
 }));
 
+interface MatchReport {
+  readonly winnerSeatIndexes: readonly number[];
+  readonly conservativeClaimOpportunities: number;
+  readonly conservativeClaimParticipations: number;
+}
+
 function strategiesForMatch(matchIndex: number): readonly BotStrategy[] {
   const conservativeSeats = new Set(
     CONSERVATIVE_SEAT_PAIRS[matchIndex % CONSERVATIVE_SEAT_PAIRS.length],
@@ -48,13 +54,15 @@ function requireBotCommand(
   return command;
 }
 
-function playMatch(seed: number, strategies: readonly BotStrategy[]): readonly number[] {
+function playMatch(seed: number, strategies: readonly BotStrategy[]): MatchReport {
   const engine = new MatchEngine(new SeededRandomSource(seed));
   engine.start(PARTICIPANTS, {
     deckMode: "one",
     actionDeadlineSeconds: 15,
   });
   engine.completePointContest();
+  let conservativeClaimOpportunities = 0;
+  let conservativeClaimParticipations = 0;
 
   for (let step = 0; step < 250; step += 1) {
     const publicState = engine.view(0).publicState;
@@ -79,6 +87,12 @@ function playMatch(seed: number, strategies: readonly BotStrategy[]): readonly n
         const command = requireBotCommand(engine, seatIndex, strategies[seatIndex]);
         if (command.type !== "claim") {
           throw new Error(`Claimant seat ${seatIndex} selected ${command.type}`);
+        }
+        if (strategies[seatIndex] === "conservative") {
+          conservativeClaimOpportunities += 1;
+          if (command.cardId !== null) {
+            conservativeClaimParticipations += 1;
+          }
         }
         engine.commitClaim(seatIndex, command.cardId);
       }
@@ -109,7 +123,11 @@ function playMatch(seed: number, strategies: readonly BotStrategy[]): readonly n
       continue;
     }
     if (publicState.phase === "finished") {
-      return publicState.winnerSeatIndexes;
+      return {
+        winnerSeatIndexes: publicState.winnerSeatIndexes,
+        conservativeClaimOpportunities,
+        conservativeClaimParticipations,
+      };
     }
     throw new Error(`unexpected Monte Carlo Match phase: ${publicState.phase}`);
   }
@@ -118,19 +136,23 @@ function playMatch(seed: number, strategies: readonly BotStrategy[]): readonly n
 }
 
 describe("Bot strategy Monte Carlo", () => {
-  it("reports win rates for two conservative and two aggressive Bots over 1,000 Matches", () => {
+  it("reports win rates and conservative Claim participation over 1,000 Matches", () => {
     const winCredits: Record<BotStrategy, number> = {
       conservative: 0,
       aggressive: 0,
     };
+    let conservativeClaimOpportunities = 0;
+    let conservativeClaimParticipations = 0;
 
     for (let matchIndex = 0; matchIndex < MATCH_COUNT; matchIndex += 1) {
       const strategies = strategiesForMatch(matchIndex);
       assert.strictEqual(strategies.filter((strategy) => strategy === "conservative").length, 2);
       assert.strictEqual(strategies.filter((strategy) => strategy === "aggressive").length, 2);
-      const winnerSeatIndexes = playMatch(matchIndex + 1, strategies);
-      const sharedCredit = 1 / winnerSeatIndexes.length;
-      for (const winnerSeatIndex of winnerSeatIndexes) {
+      const report = playMatch(matchIndex + 1, strategies);
+      conservativeClaimOpportunities += report.conservativeClaimOpportunities;
+      conservativeClaimParticipations += report.conservativeClaimParticipations;
+      const sharedCredit = 1 / report.winnerSeatIndexes.length;
+      for (const winnerSeatIndex of report.winnerSeatIndexes) {
         winCredits[strategies[winnerSeatIndex]] += sharedCredit;
       }
     }
@@ -141,11 +163,22 @@ describe("Bot strategy Monte Carlo", () => {
     assert.ok(conservativeRate >= 0 && conservativeRate <= 1);
     assert.ok(aggressiveRate >= 0 && aggressiveRate <= 1);
     assert.ok(Math.abs(conservativeRate + aggressiveRate - 1) < 1e-12);
+    assert.ok(conservativeClaimOpportunities > 0);
+    assert.ok(conservativeClaimParticipations > 0);
+    assert.ok(conservativeClaimParticipations <= conservativeClaimOpportunities);
+    const conservativeClaimParticipationProbability = (
+      conservativeClaimParticipations / conservativeClaimOpportunities
+    );
 
     console.info(
       `Bot Monte Carlo (${MATCH_COUNT} Matches; co-winners split equally): `
       + `conservative ${(conservativeRate * 100).toFixed(2)}%, `
       + `aggressive ${(aggressiveRate * 100).toFixed(2)}%`,
+    );
+    console.info(
+      `Conservative Bot Claim participation probability: `
+      + `${(conservativeClaimParticipationProbability * 100).toFixed(2)}% `
+      + `(${conservativeClaimParticipations}/${conservativeClaimOpportunities} opportunities)`,
     );
   });
 });

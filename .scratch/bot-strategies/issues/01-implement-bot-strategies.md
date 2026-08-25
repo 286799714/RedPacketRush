@@ -26,6 +26,7 @@ Replace random Bot play, Claim, and discard choices with the two strategies and 
 - Shared discard: both strategies initially reached the unimplemented discard branch; five exclusive relation classes and weakest-card tie-breaking made all five discard scenarios pass for both strategies (11 focused tests total).
 - Room integration: Bot-fill initially exposed generic nicknames; one seat-to-strategy mapping now names and drives Room Bots, while the obsolete random-policy overload and Room random source were removed. Bot policy, fill, zero-delay actions, and a complete one-human/three-Bot Match pass together (14 focused tests), as does the TypeScript build.
 - Monte Carlo: the new public-engine driver completed all 1,000 seeded Matches on its first run, with two Bots per strategy in every Match and balanced seat exposure. Co-winner credit accounting produced conservative 48.42% and aggressive 51.58% in about 0.8 seconds; only completion and accounting invariants are asserted.
+- Conservative Claim participation: the first report shape returned zero opportunities and failed its positive-denominator assertion; counting conservative non-Actor Claim opportunities and non-Pass choices made the focused test pass and added the probability to its output.
 
 ## Review
 
@@ -36,7 +37,7 @@ Replace random Bot play, Claim, and discard choices with the two strategies and 
 ## Verification
 
 - `npm test`: 135 passing in 14 seconds, including all policy, Room, complete-Match, and Monte Carlo coverage.
-- Monte Carlo result (seeds 1 through 1,000; co-winners split): conservative 48.42%, aggressive 51.58%.
+- Monte Carlo result (seeds 1 through 1,000; co-winners split): conservative 48.42%, aggressive 51.58%; conservative Claim participation 99.88% (15,567 of 15,585 opportunities).
 - `npm run build`: production TypeScript build passed.
 - Isolated strict type-check of `test/BotMonteCarlo.test.ts` and its imported rules modules passed.
 - `git diff --check` and final worktree hygiene passed before ticket close-out.
@@ -54,3 +55,4 @@ Replace random Bot play, Claim, and discard choices with the two strategies and 
 
 - 2026-08-25: The requested singular conservative “largest card” play is specified as the strongest legal three-card Combination because every Actor command requires exactly three cards.
 - 2026-08-25: The overlapping discard descriptions are made exclusive by strongest-relation precedence; deterministic weakest-card tie-breaking fills the unspecified tie behavior.
+- 2026-08-25: Follow-up added a double-click Windows launcher and defined conservative Claim participation as selecting a played card instead of Pass across all conservative Claim opportunities.
