@@ -6,16 +6,6 @@ import {
   chooseAutomaticPlayCardIds,
   chooseBotCommand,
 } from "../src/match/botPolicy.js";
-import type { RandomSource } from "../src/match/random.js";
-
-class FixedRandomSource implements RandomSource {
-  public constructor(private readonly index: number) {}
-
-  public nextInt(maxExclusive: number): number {
-    assert.ok(this.index < maxExclusive);
-    return this.index;
-  }
-}
 
 function card(index: number): PhysicalCard {
   return {
@@ -211,35 +201,28 @@ describe("bot policy", () => {
     });
   });
 
-  it("selects a seeded played card or pass for an uncommitted claimant", () => {
+  it("does not act after its Claim is committed", () => {
     const playedCards = [card(0), card(1), card(2)];
     const view = matchView({
-      phase: "claim_commit",
-      actorSeatIndex: 0,
-      playedCards,
-    });
-
-    assert.deepStrictEqual(chooseBotCommand(view, new FixedRandomSource(1)), {
-      type: "claim",
-      cardId: playedCards[1].id,
-    });
-    assert.deepStrictEqual(chooseBotCommand(view, new FixedRandomSource(3)), {
-      type: "claim",
-      cardId: null,
-    });
-    assert.strictEqual(
-      chooseBotCommand(matchView({
         phase: "claim_commit",
         actorSeatIndex: 0,
         playedCards,
         claimCommitted: true,
-      }), new FixedRandomSource(0)),
-      null,
-    );
+    });
+
+    assert.strictEqual(chooseBotCommand(view, "conservative"), null);
+    assert.strictEqual(chooseBotCommand(view, "aggressive"), null);
   });
 
-  it("may select the awarded card itself as a discard", () => {
-    const hand = Array.from({ length: 6 }, (_, index) => card(index));
+  it("may discard the awarded card itself", () => {
+    const hand = [
+      specifiedCard("heart-5", 5, "hearts"),
+      specifiedCard("diamond-6", 6, "diamonds"),
+      specifiedCard("heart-9", 9, "hearts"),
+      specifiedCard("heart-10", 10, "hearts"),
+      specifiedCard("diamond-k", 13, "diamonds"),
+      specifiedCard("awarded-isolated", 2, "clubs"),
+    ];
     const view = matchView({
       phase: "award_discard",
       hand,
@@ -247,11 +230,13 @@ describe("bot policy", () => {
       claimAwards: [{ seatIndex: 1, card: hand[5], source: "unique" }],
     });
 
-    assert.deepStrictEqual(chooseBotCommand(view, new FixedRandomSource(5)), {
-      type: "discard",
-      cardId: "card-5",
-      turnNumber: 3,
-    });
+    for (const strategy of ["conservative", "aggressive"] as const) {
+      assert.deepStrictEqual(chooseBotCommand(view, strategy), {
+        type: "discard",
+        cardId: "awarded-isolated",
+        turnNumber: 3,
+      });
+    }
   });
 
   it("uses the same five-class discard priority for both strategies", () => {
@@ -349,11 +334,11 @@ describe("bot policy", () => {
   it("does nothing when the seat has no legal command in the current phase", () => {
     assert.strictEqual(chooseBotCommand(
       matchView({ phase: "claim_reveal" }),
-      new FixedRandomSource(0),
+      "conservative",
     ), null);
     assert.strictEqual(chooseBotCommand(
       matchView({ actorSeatIndex: 0 }),
-      new FixedRandomSource(0),
+      "aggressive",
     ), null);
   });
 });

@@ -24,6 +24,7 @@ Replace random Bot play, Claim, and discard choices with the two strategies and 
 - Aggressive Claim: the new strategy initially reached the unimplemented Claim branch; selecting the strongest played card made the focused suite pass (6 tests).
 - Conservative Claim: a fixed Pass first satisfied the no-improvement example, then failed rank-over-suit-over-adjacency and above-pair examples; relation-count comparison plus the canonical best-Combination score made all Claim examples pass. The no-improvement example also caught and repaired an over-broad A-2 adjacency check that treated any ranks summing to 16 as adjacent.
 - Shared discard: both strategies initially reached the unimplemented discard branch; five exclusive relation classes and weakest-card tie-breaking made all five discard scenarios pass for both strategies (11 focused tests total).
+- Room integration: Bot-fill initially exposed generic nicknames; one seat-to-strategy mapping now names and drives Room Bots, while the obsolete random-policy overload and Room random source were removed. Bot policy, fill, zero-delay actions, and a complete one-human/three-Bot Match pass together (14 focused tests), as does the TypeScript build.
 
 ## Review
 

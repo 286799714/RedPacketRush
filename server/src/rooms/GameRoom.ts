@@ -15,8 +15,9 @@ import {
   chooseBotCommand,
   eligibleBotCommandType,
   type BotCommand,
+  type BotStrategy,
 } from "../match/botPolicy.js";
-import { SeededRandomSource, type RandomSource } from "../match/random.js";
+import { SeededRandomSource } from "../match/random.js";
 import {
   CardDiscardedEventState,
   ClaimAwardState,
@@ -92,6 +93,15 @@ const DISCARD_REVEAL_DISPLAY_MILLISECONDS = 2_000;
 const FINAL_REVEAL_DISPLAY_MILLISECONDS = 900;
 const RECONNECTION_GRACE_MILLISECONDS = 30_000;
 const MAX_ACTION_ID = 0xffff_ffff;
+
+function botStrategyForSeat(seatIndex: number): BotStrategy {
+  return seatIndex % 2 === 0 ? "conservative" : "aggressive";
+}
+
+function botNicknameForSeat(seatIndex: number): string {
+  const strategyName = botStrategyForSeat(seatIndex) === "conservative" ? "保守型" : "激进型";
+  return `${strategyName}机器人 ${seatIndex + 1}`;
+}
 
 function isRecordLike(value: unknown): value is RecordLike {
   return typeof value === "object" && value !== null && !Array.isArray(value);
@@ -184,7 +194,6 @@ export class GameRoom extends Room<{
   public maxClients = 4;
   private matchmakingPrivate = false;
   private matchEngine: MatchEngine | null = null;
-  private botRandom: RandomSource | null = null;
   private botTimer: { clear(): void } | null = null;
   private pendingReconnections = new Map<string, PendingReconnection>();
   private phaseTimer: { clear(): void } | null = null;
@@ -437,7 +446,7 @@ export class GameRoom extends Room<{
       if (seat.participantId === "") {
         seat.occupy(
           `bot-${this.roomId}-${seat.seatIndex}`,
-          `机器人 ${seat.seatIndex + 1}`,
+          botNicknameForSeat(seat.seatIndex),
           true,
         );
       }
@@ -584,7 +593,6 @@ export class GameRoom extends Room<{
       const matchEngine = new MatchEngine(new SeededRandomSource(
         randomInt(1, 0x1_0000_0000),
       ));
-      const botRandom = new SeededRandomSource(randomInt(1, 0x1_0000_0000));
       matchEngine.start(
         startingSeats,
         {
@@ -626,7 +634,6 @@ export class GameRoom extends Room<{
 
         this.matchmakingPrivate = true;
         this.matchEngine = matchEngine;
-        this.botRandom = botRandom;
         this.state.status = "started";
         this.autoDispose = false;
         this.enterMatchPhase(matchEngine, publicMatchState);
@@ -858,7 +865,7 @@ export class GameRoom extends Room<{
   }
 
   private scheduleBotAction(matchEngine: MatchEngine): void {
-    if (this.botTimer !== null || this.botRandom === null) {
+    if (this.botTimer !== null) {
       return;
     }
     const seatIndex = this.nextBotSeatIndex(matchEngine);
@@ -880,7 +887,10 @@ export class GameRoom extends Room<{
       ) {
         return;
       }
-      const command = chooseBotCommand(matchEngine.view(seatIndex), this.botRandom!);
+      const command = chooseBotCommand(
+        matchEngine.view(seatIndex),
+        botStrategyForSeat(seatIndex),
+      );
       if (command === null) {
         return;
       }

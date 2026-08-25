@@ -368,11 +368,15 @@ describe("four-participant room readiness", () => {
     assert.strictEqual(seats.filter((seat) => seat.participantId !== "").length, 4);
     assert.strictEqual(new Set(seats.map((seat) => seat.participantId)).size, 4);
     assert.deepStrictEqual(
-      seats.slice(1).map((seat) => ({ bot: seat.bot, ready: seat.ready })),
+      seats.slice(1).map((seat) => ({
+        nickname: seat.nickname,
+        bot: seat.bot,
+        ready: seat.ready,
+      })),
       [
-        { bot: true, ready: true },
-        { bot: true, ready: true },
-        { bot: true, ready: true },
+        { nickname: "激进型机器人 2", bot: true, ready: true },
+        { nickname: "保守型机器人 3", bot: true, ready: true },
+        { nickname: "激进型机器人 4", bot: true, ready: true },
       ],
     );
     assert.strictEqual(serverRoom.metadata.participantCount, 4);
