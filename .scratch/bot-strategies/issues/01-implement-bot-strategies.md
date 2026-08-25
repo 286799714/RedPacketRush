@@ -29,7 +29,7 @@ Replace random Bot play, Claim, and discard choices with the two strategies and 
 
 ## Review
 
-- Standards (`668a6ef...977511e`): one hard process finding, no code-quality findings, and no actionable Fowler smells. The finding required closing this ticket with its checklist, review, verification, and commit evidence; this close-out repairs it.
+- Standards (`668a6ef...977511e`): one hard process finding, no code-quality findings, and no actionable Fowler smells. The finding required closing this ticket with its checklist, review, verification, and commit evidence; follow-up review after `3c39086` confirmed the repair with 0 remaining findings.
 - Spec (`668a6ef...977511e`): 0 findings. The review confirmed strongest-Combination play, both Claim profiles, all five discard classes, stable Room routing, and the 1,000-Match accounting against this feature spec and the originating request.
 - Residual risks: the human actor deadline fallback intentionally remains first-three, and takeover strategy routing is seat-based without a dedicated dispatch assertion; existing complete Bot/takeover Match tests cover legal progression.
 
@@ -48,6 +48,7 @@ Replace random Bot play, Claim, and discard choices with the two strategies and 
 - `9a2184d` - conservative/aggressive Claim behavior and shared discard policy.
 - `64780c7` - Room strategy routing, names, and removal of random Bot decisions.
 - `977511e` - 1,000-Match Monte Carlo test and operator documentation.
+- `3c39086` - completed ticket lifecycle, review, and verification evidence.
 
 ## Comments
 
