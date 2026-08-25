@@ -26,6 +26,14 @@ function card(index: number): PhysicalCard {
   };
 }
 
+function specifiedCard(
+  id: string,
+  rank: PhysicalCard["rank"],
+  suit: PhysicalCard["suit"],
+): PhysicalCard {
+  return { id, rank, suit, copyIndex: 0 };
+}
+
 function matchView(overrides: {
   phase?: MatchView["publicState"]["phase"];
   seatIndex?: number;
@@ -70,13 +78,23 @@ function matchView(overrides: {
 }
 
 describe("bot policy", () => {
-  it("selects one seeded legal three-card play for the actor", () => {
-    const view = matchView();
-
-    assert.deepStrictEqual(chooseBotCommand(view, new FixedRandomSource(9)), {
-      type: "play_cards",
-      cardIds: ["card-2", "card-3", "card-4"],
+  it("plays the strongest three-card combination for either strategy", () => {
+    const view = matchView({
+      hand: [
+        specifiedCard("pair-2-clubs", 2, "clubs"),
+        specifiedCard("pair-2-hearts", 2, "hearts"),
+        specifiedCard("straight-9", 9, "hearts"),
+        specifiedCard("straight-10", 10, "spades"),
+        specifiedCard("straight-j", 11, "diamonds"),
+      ],
     });
+    const expectedCommand = {
+      type: "play_cards",
+      cardIds: ["straight-j", "straight-10", "straight-9"],
+    };
+
+    assert.deepStrictEqual(chooseBotCommand(view, "conservative"), expectedCommand);
+    assert.deepStrictEqual(chooseBotCommand(view, "aggressive"), expectedCommand);
   });
 
   it("selects a seeded played card or pass for an uncommitted claimant", () => {
