@@ -25,6 +25,7 @@ Replace random Bot play, Claim, and discard choices with the two strategies and 
 - Conservative Claim: a fixed Pass first satisfied the no-improvement example, then failed rank-over-suit-over-adjacency and above-pair examples; relation-count comparison plus the canonical best-Combination score made all Claim examples pass. The no-improvement example also caught and repaired an over-broad A-2 adjacency check that treated any ranks summing to 16 as adjacent.
 - Shared discard: both strategies initially reached the unimplemented discard branch; five exclusive relation classes and weakest-card tie-breaking made all five discard scenarios pass for both strategies (11 focused tests total).
 - Room integration: Bot-fill initially exposed generic nicknames; one seat-to-strategy mapping now names and drives Room Bots, while the obsolete random-policy overload and Room random source were removed. Bot policy, fill, zero-delay actions, and a complete one-human/three-Bot Match pass together (14 focused tests), as does the TypeScript build.
+- Monte Carlo: the new public-engine driver completed all 1,000 seeded Matches on its first run, with two Bots per strategy in every Match and balanced seat exposure. Co-winner credit accounting produced conservative 48.42% and aggressive 51.58% in about 0.8 seconds; only completion and accounting invariants are asserted.
 
 ## Review
 
