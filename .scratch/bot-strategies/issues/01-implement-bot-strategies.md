@@ -1,6 +1,6 @@
 # 01 - Implement conservative and aggressive Bot strategies
 
-**Status:** claimed
+**Status:** done
 
 ## What to build
 
@@ -8,15 +8,15 @@ Replace random Bot play, Claim, and discard choices with the two strategies and 
 
 ## Checklist
 
-- [ ] Conservative and aggressive Bots play their strongest legal Combination.
-- [ ] Conservative Claim decisions follow improvement priority and the above-pair override.
-- [ ] Aggressive Bots always Claim the strongest played card.
-- [ ] Both profiles use the five-class deterministic discard policy.
-- [ ] Room-created and takeover Bots receive a stable strategy without changing the client protocol.
-- [ ] The Monte Carlo test runs exactly 1,000 Matches with two Bots of each strategy and reports both aggregate win rates.
-- [ ] Focused tests, full server tests, and the TypeScript build pass.
-- [ ] Standards and Spec reviews have no unresolved findings.
-- [ ] TDD slices, verification, review evidence, and implementation commits are recorded below.
+- [x] Conservative and aggressive Bots play their strongest legal Combination.
+- [x] Conservative Claim decisions follow improvement priority and the above-pair override.
+- [x] Aggressive Bots always Claim the strongest played card.
+- [x] Both profiles use the five-class deterministic discard policy.
+- [x] Room-created and takeover Bots receive a stable strategy without changing the client protocol.
+- [x] The Monte Carlo test runs exactly 1,000 Matches with two Bots of each strategy and reports both aggregate win rates.
+- [x] Focused tests, full server tests, and the TypeScript build pass.
+- [x] Standards and Spec reviews have no unresolved findings.
+- [x] TDD slices, verification, review evidence, and implementation commits are recorded below.
 
 ## TDD slices
 
@@ -29,15 +29,25 @@ Replace random Bot play, Claim, and discard choices with the two strategies and 
 
 ## Review
 
-Pending.
+- Standards (`668a6ef...977511e`): one hard process finding, no code-quality findings, and no actionable Fowler smells. The finding required closing this ticket with its checklist, review, verification, and commit evidence; this close-out repairs it.
+- Spec (`668a6ef...977511e`): 0 findings. The review confirmed strongest-Combination play, both Claim profiles, all five discard classes, stable Room routing, and the 1,000-Match accounting against this feature spec and the originating request.
+- Residual risks: the human actor deadline fallback intentionally remains first-three, and takeover strategy routing is seat-based without a dedicated dispatch assertion; existing complete Bot/takeover Match tests cover legal progression.
 
 ## Verification
 
-Pending.
+- `npm test`: 135 passing in 14 seconds, including all policy, Room, complete-Match, and Monte Carlo coverage.
+- Monte Carlo result (seeds 1 through 1,000; co-winners split): conservative 48.42%, aggressive 51.58%.
+- `npm run build`: production TypeScript build passed.
+- Isolated strict type-check of `test/BotMonteCarlo.test.ts` and its imported rules modules passed.
+- `git diff --check` and final worktree hygiene passed before ticket close-out.
+- The broader test-inclusive `tsconfig.json` type-check still reports pre-existing errors in unchanged `GameRoomContinuity.test.ts` and `GameRoomRaces.test.ts`; production build and the new test's isolated strict check are clean.
 
 ## Commits
 
-Pending.
+- `3f6f50d` - strongest Bot Actor play and feature specification.
+- `9a2184d` - conservative/aggressive Claim behavior and shared discard policy.
+- `64780c7` - Room strategy routing, names, and removal of random Bot decisions.
+- `977511e` - 1,000-Match Monte Carlo test and operator documentation.
 
 ## Comments
 
