@@ -1,6 +1,6 @@
 # Conservative and aggressive bot strategies
 
-**Status:** claimed
+**Status:** done
 
 ## Goal
 
