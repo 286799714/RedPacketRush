@@ -64,6 +64,20 @@ function emptyConservativeClaimCounts(): Record<ConservativeBotId, ClaimCounts> 
   };
 }
 
+function averageConservativeClaimProbability(
+  claims: Readonly<Record<ConservativeBotId, ClaimCounts>>,
+): number {
+  const individualProbabilities = CONSERVATIVE_BOT_IDS.map((botId) => {
+    const counts = claims[botId];
+    if (counts.opportunities <= 0) {
+      throw new Error(`${botId} requires at least one Claim opportunity`);
+    }
+    return counts.participations / counts.opportunities;
+  });
+  return individualProbabilities.reduce((sum, probability) => sum + probability, 0)
+    / individualProbabilities.length;
+}
+
 function botsForMatch(matchIndex: number): readonly BotDefinition[] {
   const conservativeSeats = CONSERVATIVE_SEAT_PAIRS[
     matchIndex % CONSERVATIVE_SEAT_PAIRS.length
@@ -88,7 +102,7 @@ function botsForMatch(matchIndex: number): readonly BotDefinition[] {
   aggressiveSeats.forEach((seatIndex, index) => {
     botsBySeat[seatIndex] = aggressiveBots[index];
   });
-  if (botsBySeat.some((bot) => bot === undefined)) {
+  if (SEAT_INDEXES.some((seatIndex) => botsBySeat[seatIndex] === undefined)) {
     throw new Error("every Monte Carlo seat requires one Bot identity");
   }
   return botsBySeat;
@@ -193,18 +207,37 @@ function playMatch(seed: number, botsBySeat: readonly BotDefinition[]): MatchRep
 }
 
 describe("Bot strategy Monte Carlo", () => {
+  it("averages each conservative Bot's Claim probability instead of pooling counts", () => {
+    const claims: Record<ConservativeBotId, ClaimCounts> = {
+      "conservative-a": { opportunities: 1, participations: 1 },
+      "conservative-b": { opportunities: 3, participations: 0 },
+    };
+
+    assert.strictEqual(averageConservativeClaimProbability(claims), 0.5);
+    assert.notStrictEqual(averageConservativeClaimProbability(claims), 0.25);
+  });
+
   it("reports win rates and conservative Claim participation over 1,000 Matches", () => {
     const winCredits: Record<BotStrategy, number> = {
       conservative: 0,
       aggressive: 0,
     };
     const conservativeClaims = emptyConservativeClaimCounts();
+    const conservativeSeatVisits: Record<ConservativeBotId, number[]> = {
+      "conservative-a": [0, 0, 0, 0],
+      "conservative-b": [0, 0, 0, 0],
+    };
 
     for (let matchIndex = 0; matchIndex < MATCH_COUNT; matchIndex += 1) {
       const botsBySeat = botsForMatch(matchIndex);
       assert.strictEqual(new Set(botsBySeat.map((bot) => bot.id)).size, 4);
       assert.strictEqual(botsBySeat.filter((bot) => bot.strategy === "conservative").length, 2);
       assert.strictEqual(botsBySeat.filter((bot) => bot.strategy === "aggressive").length, 2);
+      botsBySeat.forEach((bot, seatIndex) => {
+        if (bot.strategy === "conservative") {
+          conservativeSeatVisits[bot.id][seatIndex] += 1;
+        }
+      });
       const report = playMatch(matchIndex + 1, botsBySeat);
       for (const botId of CONSERVATIVE_BOT_IDS) {
         conservativeClaims[botId].opportunities += report.conservativeClaims[botId].opportunities;
@@ -228,6 +261,10 @@ describe("Bot strategy Monte Carlo", () => {
       assert.ok(
         conservativeClaims[botId].participations <= conservativeClaims[botId].opportunities,
       );
+      assert.deepStrictEqual(
+        conservativeSeatVisits[botId],
+        SEAT_INDEXES.map(() => MATCH_COUNT / SEAT_INDEXES.length),
+      );
     }
     const conservativeBotAProbability = (
       conservativeClaims["conservative-a"].participations
@@ -237,9 +274,7 @@ describe("Bot strategy Monte Carlo", () => {
       conservativeClaims["conservative-b"].participations
       / conservativeClaims["conservative-b"].opportunities
     );
-    const averageConservativeClaimProbability = (
-      conservativeBotAProbability + conservativeBotBProbability
-    ) / CONSERVATIVE_BOT_IDS.length;
+    const averageClaimProbability = averageConservativeClaimProbability(conservativeClaims);
 
     console.info(
       `Bot Monte Carlo (${MATCH_COUNT} Matches; co-winners split equally): `
@@ -260,7 +295,7 @@ describe("Bot strategy Monte Carlo", () => {
     );
     console.info(
       `Average conservative Bot Claim participation probability: `
-      + `${(averageConservativeClaimProbability * 100).toFixed(4)}%`,
+      + `${(averageClaimProbability * 100).toFixed(4)}%`,
     );
   });
 });
